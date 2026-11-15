@@ -1,0 +1,37 @@
+.gitignore
+  s_629b0f07452123::t_e0d34c1a29388b 1-7
+Cargo.lock
+  s_629b0f07452123::t_457cbe64fd40b9 1-2574
+Cargo.toml
+  s_629b0f07452123::t_e4d602b6d1ec62 1-27
+LICENSE-APACHE
+  s_629b0f07452123::t_71c92b3313ec92 1-202
+LICENSE-MIT
+  s_629b0f07452123::t_73fd609040fbea 1-21
+crates/proto/Cargo.toml
+  s_629b0f07452123::t_81984d6b3361f0 1-19
+crates/proto/src/jsonrpc.rs
+  s_629b0f07452123::t_87da94c0b8d9ae 1-220
+crates/proto/src/lib.rs
+  s_629b0f07452123::t_b9de0a0f0744fa 1-19
+crates/proto/src/methods.rs
+  s_629b0f07452123::t_d7c2f34355fae5 1-137
+crates/proto/src/types.rs
+  s_629b0f07452123::t_c185e33fc73cf0 1-674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf3c76da6747cc486ec759383adafe25d9e82a36",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
