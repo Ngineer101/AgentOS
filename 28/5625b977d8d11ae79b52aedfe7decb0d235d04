@@ -1,0 +1,25 @@
+crates/host/src/agents.rs
+  s_629b0f07452123::t_0c87973458e8ea 1-451
+crates/host/src/proxy.rs
+  s_629b0f07452123::t_58fa39874dc45f 1-548
+crates/host/src/sandbox.rs
+  s_629b0f07452123::t_8053a1da38242c 1-539
+crates/host/tests/m3_escape.rs
+  s_629b0f07452123::t_ac6f315aee47a7 1-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "285625b977d8d11ae79b52aedfe7decb0d235d04",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
