@@ -1,0 +1,19 @@
+[package]
+name = "agenthost-proto"
+description = "Client protocol types, JSON-RPC framing and (later) the encrypted tunnel for agenthost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+snow = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+url = "2"
