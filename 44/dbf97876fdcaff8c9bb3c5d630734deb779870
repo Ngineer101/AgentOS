@@ -1,0 +1,23 @@
+.github/workflows/ci.yml
+  s_629b0f07452123::t_35c57328f5db33 1-44
+README.md
+  s_629b0f07452123::t_9f45e15af0ede8 1-71
+docs/status.md
+  s_629b0f07452123::t_003595624cde0b 1-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44dbf97876fdcaff8c9bb3c5d630734deb779870",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
