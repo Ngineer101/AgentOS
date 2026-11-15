@@ -18,6 +18,7 @@ over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP).
 | `crates/host` | `agenthostd`: session manager, ACP client, sandbox launcher, egress proxy, MCP gateway, SQLite event log, relay connector, dev relay |
 | `crates/cli` | `agenthost`: the command-line client (everything the desktop can do), also usable as a paired remote device |
 | `crates/fake-agent` | A scripted ACP agent for tests |
+| `desktop/` | The desktop app (Rune), its own Cargo workspace |
 | `relay/` | The relay: a Cloudflare Worker with one Durable Object per host |
 | `docs/` | [Relay protocol](docs/relay-protocol.md), [status against the v1 spec](docs/status.md) |
 

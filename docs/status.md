@@ -21,7 +21,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | 5 | MCP gateway | 🟡 gateway checklist against a test server and a real public server (DeepWiki); OAuth sign-in written but not run against a real OAuth server |
 | 6 | Remote access | ✅ CLI pairs and runs sessions through the relay; tampering, replay and revocation tests pass; interop with the real Cloudflare Worker under `wrangler dev` (not deployed) |
 | 7 | iOS app | ⛔ |
-| 8 | Desktop app | ⛔ |
+| 8 | Desktop app | 🟡 seven screens in Rune (`desktop/`); every screen rendered headless and checked by eye; model and bridge tested against a real host; not run as an interactive window, not run on macOS |
 
 ## Milestone 0 answers (Linux)
 

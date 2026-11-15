@@ -42,3 +42,11 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
+
+  desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the desktop app (Rune)
+        working-directory: desktop
+        run: cargo test
