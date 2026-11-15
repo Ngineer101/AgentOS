@@ -1,0 +1,55 @@
+crates/cli/src/remote.rs
+  s_629b0f07452123::t_a486d542d726e2 1-269
+crates/host/src/relay_dev.rs
+  s_629b0f07452123::t_841979ff21617d 1-353
+crates/host/src/remote.rs
+  s_629b0f07452123::t_380234b846f11a 1-613
+crates/host/tests/m6_remote.rs
+  s_629b0f07452123::t_035fdf9e9ba93f 1-290
+crates/proto/src/tunnel.rs
+  s_629b0f07452123::t_928afe21f0be99 1-532
+docs/relay-protocol.md
+  s_629b0f07452123::t_168d6338a30663 1-157
+relay/.gitignore
+  s_629b0f07452123::t_572f01bc72a61e 1-2
+relay/README.md
+  s_629b0f07452123::t_2aa516038a2d98 1-124
+relay/package-lock.json
+  s_629b0f07452123::t_8c13b0865e834b 1-2904
+relay/package.json
+  s_629b0f07452123::t_430b8758e46f51 1-19
+relay/src/codec.ts
+  s_629b0f07452123::t_e4036bdcb375d8 1-73
+relay/src/index.ts
+  s_629b0f07452123::t_5b96365f764e23 1-26
+relay/src/relay.ts
+  s_629b0f07452123::t_d421b4c45ca559 1-536
+relay/test/env.d.ts
+  s_629b0f07452123::t_92dd62a154578d 1-10
+relay/test/helpers.ts
+  s_629b0f07452123::t_a0f61a828695b1 1-183
+relay/test/relay.test.ts
+  s_629b0f07452123::t_2e9b9fa0cb7216 1-552
+relay/tsconfig.json
+  s_629b0f07452123::t_15c4e1ea7db6bc 1-16
+relay/vitest.config.ts
+  s_629b0f07452123::t_6a53b0452e28c3 1-7
+relay/wrangler.toml
+  s_629b0f07452123::t_dad6c6929654d5 1-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a05dfdb6ace3ccedaf3ad3efb8abfd6ebf9b9d2e",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
