@@ -1,0 +1,28 @@
+[package]
+name = "agenthost-cli"
+description = "Command-line client for the agenthost daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "agenthost_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agenthost"
+path = "src/main.rs"
+
+[dependencies]
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+base64.workspace = true
+hex.workspace = true
+agenthost-proto.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+clap.workspace = true
+uuid.workspace = true
+qrcode = { version = "0.14", default-features = false }
