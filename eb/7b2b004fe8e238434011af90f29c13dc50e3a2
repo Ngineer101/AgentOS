@@ -1,0 +1,43 @@
+.github/workflows/ci.yml
+  s_629b0f07452123::t_a5b64e17745d40 45-52
+.gitignore
+  s_629b0f07452123::t_4bd36dfd6efb80 8
+README.md
+  s_629b0f07452123::t_fd4280cba70a3b 21
+desktop/Cargo.lock
+  s_629b0f07452123::t_4e7144e6b5471b 1-6044
+desktop/Cargo.toml
+  s_629b0f07452123::t_e50fc1d3352494 1-40
+desktop/README.md
+  s_629b0f07452123::t_119b73a92d5d44 1-26
+desktop/src/bridge.rs
+  s_629b0f07452123::t_39dd4011f688ed 1-177
+desktop/src/demo.rs
+  s_629b0f07452123::t_bcf771f7c0115f 1-198
+desktop/src/main.rs
+  s_629b0f07452123::t_c60e14079c2423 1-47
+desktop/src/model.rs
+  s_629b0f07452123::t_209dfa76f42f0f 1-327
+desktop/src/tests.rs
+  s_629b0f07452123::t_863236eda1976e 1-68
+desktop/src/view.rs
+  s_629b0f07452123::t_47025169cce902 1-912
+docs/status.md
+  s_629b0f07452123::t_ca21530fa79c93 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb7b2b004fe8e238434011af90f29c13dc50e3a2",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
