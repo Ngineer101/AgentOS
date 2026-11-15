@@ -20,7 +20,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | 4 | All agents | 🟡 all three complete sandboxed turns with tool calls on Linux; checklist partly covered (below) |
 | 5 | MCP gateway | 🟡 gateway checklist against a test server and a real public server (DeepWiki); OAuth sign-in written but not run against a real OAuth server |
 | 6 | Remote access | ✅ CLI pairs and runs sessions through the relay; tampering, replay and revocation tests pass; interop with the real Cloudflare Worker under `wrangler dev` (not deployed) |
-| 7 | iOS app | ⛔ |
+| 7 | iOS app | 🟡 Rust FFI (`crates/ffi`, UniFFI) ✅ tested end to end (pair, connect, stream, revoke, host offline) and through generated foreign bindings; SwiftUI app (`ios/`, six screens, Face ID gate, Secure Enclave–wrapped Keychain keys, switcher cover, offline cache) **never compiled** — needs a Mac |
 | 8 | Desktop app | 🟡 seven screens in Rune (`desktop/`); every screen rendered headless and checked by eye; model and bridge tested against a real host; not run as an interactive window, not run on macOS |
 
 ## Milestone 0 answers (Linux)
@@ -131,6 +131,10 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
   and resumed.
 
 ## Known issues
+
+- `agenthost-cli::remote::connect` reports why a tunnel closed only as text; the FFI parses the code out of it.
+- The iOS library pulls in the CLI's dependencies (clap, qrcode); splitting `Client`/`remote` into a lib-only crate would slim it.
+- Unpair on the phone is local only (a phone may not call `device.revoke`); revoke it on the desktop too.
 
 - Codex turns hung twice (no output from Codex at all, no denied hosts). Not
   reproducible on retry. Cancel or end recovers.

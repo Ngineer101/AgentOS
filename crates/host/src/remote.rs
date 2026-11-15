@@ -377,6 +377,10 @@ impl Remote {
             }
         }
         serve.abort();
+        // The connection handler stops when the device is revoked; say so with 4401.
+        if self.ctx.store.device_get(&device_id).ok().flatten().map(|d| d.device.revoked_at.is_some()).unwrap_or(false) {
+            bail!("device revoked");
+        }
         Ok(())
     }
 

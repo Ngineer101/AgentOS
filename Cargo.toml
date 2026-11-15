@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/proto", "crates/host", "crates/cli", "crates/fake-agent"]
+exclude = ["desktop"]
+members = ["crates/proto", "crates/host", "crates/cli", "crates/fake-agent", "crates/ffi"]
 
 [workspace.package]
 version = "0.1.0"

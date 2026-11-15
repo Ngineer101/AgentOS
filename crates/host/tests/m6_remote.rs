@@ -206,7 +206,8 @@ async fn revoked_device_is_disconnected_and_cannot_return() {
         t0.elapsed()
     );
     assert!(told, "phone was not told it was removed");
-    assert!(closed.borrow().is_some(), "tunnel still open");
+    let reason = closed.borrow().clone();
+    assert!(reason.as_deref().unwrap_or("").contains("4401"), "expected close code 4401, got {reason:?}");
     assert!(phone.request(m::SESSION_LIST, json!({})).await.is_err());
     // Reconnecting fails.
     let e = remote::connect(&state)
