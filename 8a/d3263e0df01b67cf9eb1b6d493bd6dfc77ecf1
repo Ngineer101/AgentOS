@@ -1,0 +1,23 @@
+crates/host/src/mcp.rs
+  s_629b0f07452123::t_3a5806b4c599c7 1-1326
+crates/host/tests/common/mcp_server.rs
+  s_629b0f07452123::t_ac9a1d1961d26d 1-129
+crates/host/tests/m5_gateway.rs
+  s_629b0f07452123::t_0831ee2cf99c4d 1-299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ad3263e0df01b67cf9eb1b6d493bd6dfc77ecf1",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
