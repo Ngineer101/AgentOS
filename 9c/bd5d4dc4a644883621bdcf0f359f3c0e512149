@@ -1,0 +1,59 @@
+crates/cli/Cargo.toml
+  s_629b0f07452123::t_ccee441d88a976 1-28
+crates/cli/src/lib.rs
+  s_629b0f07452123::t_36cc1b0897687f 1-194
+crates/cli/src/main.rs
+  s_629b0f07452123::t_2c2028b73a8601 1-1331
+crates/fake-agent/Cargo.toml
+  s_629b0f07452123::t_fe76dee84808fa 1-17
+crates/fake-agent/src/main.rs
+  s_629b0f07452123::t_0a1e3fce1ed6ff 1-586
+crates/host/Cargo.toml
+  s_629b0f07452123::t_554663e6d5b528 1-51
+crates/host/src/acp.rs
+  s_629b0f07452123::t_782d78e7496c01 1-326
+crates/host/src/api.rs
+  s_629b0f07452123::t_d762315fe52c2d 1-624
+crates/host/src/audit.rs
+  s_629b0f07452123::t_542465cd099a6a 1-41
+crates/host/src/bus.rs
+  s_629b0f07452123::t_cfa3523578d740 1-47
+crates/host/src/config.rs
+  s_629b0f07452123::t_05e9c2145714d1 1-154
+crates/host/src/ctx.rs
+  s_629b0f07452123::t_b56b078a5063d9 1-57
+crates/host/src/host.rs
+  s_629b0f07452123::t_dc1213163aa83f 1-157
+crates/host/src/lib.rs
+  s_629b0f07452123::t_11a1ed5e37f25f 1-42
+crates/host/src/main.rs
+  s_629b0f07452123::t_1b67746df0250d 1-166
+crates/host/src/secrets.rs
+  s_629b0f07452123::t_eeaa08d1b59343 1-325
+crates/host/src/session.rs
+  s_629b0f07452123::t_2c27b0c59916ff 1-1278
+crates/host/src/store.rs
+  s_629b0f07452123::t_a7c036dfa216e0 1-894
+crates/host/src/util.rs
+  s_629b0f07452123::t_1bc30479546997 1-35
+crates/host/tests/common/mod.rs
+  s_629b0f07452123::t_41812d42eca20b 1-170
+crates/host/tests/m1_host_core.rs
+  s_629b0f07452123::t_d54ef6c8b8b478 1-581
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9cbd5d4dc4a644883621bdcf0f359f3c0e512149",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
