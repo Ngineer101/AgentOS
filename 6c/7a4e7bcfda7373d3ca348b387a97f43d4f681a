@@ -1,0 +1,81 @@
+Cargo.lock
+  s_629b0f07452123::t_06c0f3ce92343e 69-83,113,214-266,284-289,308-316,359-391,710-718,866-882,1136-1137,1249-1254,1266-1275,1354-1359,1722-1741,1770-1773,1827-1835,1904-1909,1922-1927,1971-1976,2044-2053,2180-2181,2185-2199,2209-2217,2226-2227,2229-2238,2247-2252,2397-2523,2725-2733,2831-2839
+Cargo.toml
+  s_629b0f07452123::t_9024d9270c1319 3-4
+crates/ffi/Cargo.toml
+  s_629b0f07452123::t_4017f5a0abd8b6 1-39
+crates/ffi/src/bin/uniffi-bindgen-swift.rs
+  s_629b0f07452123::t_44bdb3520fa4f4 1-5
+crates/ffi/src/bin/uniffi-bindgen.rs
+  s_629b0f07452123::t_c1ce622396d1f8 1-4
+crates/ffi/src/lib.rs
+  s_629b0f07452123::t_2b83056ed88bfd 1-519
+crates/ffi/tests/ffi_remote.rs
+  s_629b0f07452123::t_641d33071d53fb 1-484
+crates/host/src/remote.rs
+  s_629b0f07452123::t_0a105f5ce4c3f8 380-383
+crates/host/tests/m6_remote.rs
+  s_629b0f07452123::t_0547d05d216362 209-210
+docs/status.md
+  s_629b0f07452123::t_ef20d25ec2a4b9 23,135-138
+ios/.gitignore
+  s_629b0f07452123::t_fe7fe11ded7127 1-7
+ios/AgentHost/App/AgentHostApp.swift
+  s_629b0f07452123::t_604dda1e1f5af6 1-137
+ios/AgentHost/App/AppModel.swift
+  s_629b0f07452123::t_8a1fb3a4411bd4 1-700
+ios/AgentHost/Core/CredentialStore.swift
+  s_629b0f07452123::t_3a2dc814fc9305 1-240
+ios/AgentHost/Core/JSONValue.swift
+  s_629b0f07452123::t_bf39b3d40b4239 1-104
+ios/AgentHost/Core/ProtocolModels.swift
+  s_629b0f07452123::t_c0b26313ad1427 1-298
+ios/AgentHost/Core/Transcript.swift
+  s_629b0f07452123::t_27d37c12905dbf 1-202
+ios/AgentHost/Core/TranscriptCache.swift
+  s_629b0f07452123::t_4e319b72269fc5 1-89
+ios/AgentHost/Views/ApprovalView.swift
+  s_629b0f07452123::t_b9ac0177a4cbc1 1-101
+ios/AgentHost/Views/Components.swift
+  s_629b0f07452123::t_cbdefe8c796685 1-156
+ios/AgentHost/Views/HostView.swift
+  s_629b0f07452123::t_79d9a1882983d3 1-96
+ios/AgentHost/Views/NewSessionView.swift
+  s_629b0f07452123::t_61b6fdc040d03c 1-132
+ios/AgentHost/Views/PairView.swift
+  s_629b0f07452123::t_5725af34a407bd 1-244
+ios/AgentHost/Views/QRScannerView.swift
+  s_629b0f07452123::t_4643fe34012343 1-111
+ios/AgentHost/Views/SessionView.swift
+  s_629b0f07452123::t_f1bbdbdb7954de 1-461
+ios/AgentHost/Views/SessionsView.swift
+  s_629b0f07452123::t_ccdbb37578e86a 1-198
+ios/Generated/agenthost_ffi.swift
+  s_629b0f07452123::t_9f99ccbf8cda57 1-1985
+ios/Generated/agenthost_ffiFFI.h
+  s_629b0f07452123::t_53673a164d619e 1-714
+ios/Generated/module.modulemap
+  s_629b0f07452123::t_201b8adf10b662 1-7
+ios/README.md
+  s_629b0f07452123::t_7927b6ff2fdf48 1-98
+ios/build-rust.sh
+  s_629b0f07452123::t_d08e36e33d6c21 1-79
+ios/project.yml
+  s_629b0f07452123::t_21168e2d64d3ba 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c7a4e7bcfda7373d3ca348b387a97f43d4f681a",
+  "prompts": {},
+  "sessions": {
+    "s_629b0f07452123": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68489bcd-600e-4e6c-86db-b9e1ca461e8e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
