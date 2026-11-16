@@ -19,7 +19,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | 3 | Sandbox | 🟡 13-check escape suite green on Linux (`tests/m3_escape.rs`); CI defined for Linux and macOS but not run; macOS ❌ |
 | 4 | All agents | 🟡 all three complete sandboxed turns with tool calls on Linux; checklist partly covered (below) |
 | 5 | MCP gateway | 🟡 gateway checklist against a test server and a real public server (DeepWiki); OAuth sign-in written but not run against a real OAuth server |
-| 6 | Remote access | ✅ CLI pairs and runs sessions through the relay; tampering, replay and revocation tests pass; interop with the real Cloudflare Worker under `wrangler dev` (not deployed) |
+| 6 | Remote access | ✅ CLI pairs and runs sessions through the relay; tampering, replay and revocation tests pass; checked by hand against the Worker deployed on Cloudflare (16 Nov 2026) |
 | 7 | iOS app | 🟡 Rust FFI (`crates/ffi`, UniFFI) ✅ tested end to end (pair, connect, stream, revoke, host offline) and through generated foreign bindings; SwiftUI app (`ios/`, six screens, Face ID gate, Secure Enclave–wrapped Keychain keys, switcher cover, offline cache) **never compiled** — needs a Mac |
 | 8 | Desktop app | 🟡 seven screens in Rune (`desktop/`); every screen rendered headless and checked by eye; model and bridge tested against a real host; not run as an interactive window, not run on macOS |
 
@@ -81,12 +81,21 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 
 | Outcome | State |
 | --- | --- |
-| Pairing in < 30 s | ✅ (about a second with the dev relay; a few seconds through `wrangler dev`) |
+| Pairing in < 30 s | ✅ (about a second with the dev relay; a few seconds through `wrangler dev` and the deployed Worker) |
 | QR after 2 minutes, or a second time, refused | 🟡 second use ✅ (relay 4403); expiry implemented on host and relay, ❌ not waited out in a test |
 | A logging relay yields no readable content | ✅ dev relay frame log checked for plaintext; Worker logs only role, relay id and close codes |
 | Replayed or altered frames close the connection, state intact | ✅ tests |
-| Revoked device disconnected in < 2 s and cannot reconnect | ✅ dev relay test; ✅ by hand through the Worker (4403 afterwards) |
+| Revoked device disconnected in < 2 s and cannot reconnect | ✅ dev relay test; ✅ by hand through the deployed Worker: a connected remote CLI was dropped 0.2 s after revoke, later connections refused (4403) |
 | No open network ports | ✅ `ss -ltnp` shows none for an idle `agenthostd`; see deviations for per-session loopback ports |
+
+## Deployed relay check (16 Nov 2026)
+
+Against the Worker deployed on Cloudflare, with a scratch host and the fake
+agent: the host connects; the CLI pairs as a device (codes matched on both
+sides); `status` and a sandboxed session run through the tunnel in about a
+second; the device is refused `device.revoke` (capability error); a revoke
+from the host drops its open connection in 0.2 s and every later connection
+is refused. The host listened on no TCP port throughout.
 
 ## Decisions made while building (worth reviewing)
 
