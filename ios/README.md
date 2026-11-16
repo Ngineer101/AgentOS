@@ -25,7 +25,7 @@ state and calls `RemoteClient.call(method:paramsJson:)`.
 | `Generated/` | UniFFI output: `agenthost_ffi.swift` (compiled into the app), `agenthost_ffiFFI.h` and `module.modulemap` (packed into the XCFramework). Committed; regenerate after changing `crates/ffi` |
 | `AgentHost/App` | App entry, lock / privacy cover, `AppModel` (connection, sync, cache, outbox) |
 | `AgentHost/Core` | Protocol models, Keychain + Secure Enclave store, transcript model and cache |
-| `AgentHost/Views` | The six screens: Pair, Sessions, Session, New session, Approval, Host |
+| `AgentHost/Views` | The six screens: Pair, Sessions, Session, New session, Approval, Host. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout; mockups in the project's nano.design file |
 
 ## Building on a Mac
 
@@ -70,7 +70,7 @@ must be reachable from the phone.
 | Host offline: says so, reconnects by itself | Close code 4404 → "Host offline"; reconnect with exponential backoff (1 s … 30 s, jittered) and immediately when `NWPathMonitor` sees the network return |
 | Revoked: "This device was removed", no readable content | `device.revoked` notification, close code 4401, or a 4403 refusal on connect → delete the Keychain item, the Enclave key and the cache, clear memory, show `RemovedView` with "Pair again" |
 | Safe prompt retry | Each prompt gets a client-generated `prompt_id` (UUID) kept in an outbox until the host answers; resent with the same id after a reconnect (the host records it once) |
-| Approval reaches the host within 2 s | `approval.respond` straight from `ApprovalView`; banners on the Sessions and Session screens while anything is `waiting_approval` |
+| Approval reaches the host within 2 s | `approval.respond` straight from `ApprovalView`; a status row on the Sessions list and a status card on the Session screen while anything is `waiting_approval` |
 | Capability errors and "update required" | Typed `AgentHostError.Rpc(code:…)` from Rust; `-32001` and `-32002` get specific messages. `hello` rejection stops reconnecting and shows "Update required" |
 
 Unpair (Host screen) deletes this phone's keys and cache. A phone may not

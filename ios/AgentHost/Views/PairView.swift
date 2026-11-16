@@ -105,6 +105,13 @@ struct PairView: View {
             }
             .navigationTitle("Pair with your host")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if isInProgress {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { flow.cancel() }
+                    }
+                }
+            }
         }
         .task {
             if deviceName.isEmpty { deviceName = UIDevice.current.name }
@@ -112,13 +119,16 @@ struct PairView: View {
         }
     }
 
-    private var scanStep: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("On the computer running AgentHost, open Devices → Pair a device (or run `agenthost device pair`), then scan the QR code.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+    private var isInProgress: Bool {
+        switch flow.step {
+        case .pairing, .confirm: return true
+        default: return false
+        }
+    }
 
+    private var scanStep: some View {
+        Form {
+            Section {
                 ZStack {
                     if cameraAllowed == true {
                         QRScannerView { code in
@@ -126,109 +136,95 @@ struct PairView: View {
                         }
                     } else {
                         Color.black
-                        Text(cameraAllowed == false
-                             ? "Camera access is off. Allow it in Settings, or paste the code below."
-                             : "Starting camera…")
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding()
+                        if cameraAllowed == false {
+                            ContentUnavailableView(
+                                "Camera Access Is Off",
+                                systemImage: "camera.fill",
+                                description: Text("Allow it in Settings, or paste the code below.")
+                            )
+                        } else {
+                            ProgressView("Starting camera…")
+                        }
                     }
                 }
-                .frame(height: 300)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .frame(height: 280)
+                .listRowInsets(EdgeInsets())
+            } footer: {
+                Text("On the computer running AgentHost, open Devices and pair a device (or run `agenthost device pair`), then scan the QR code.")
+            }
 
-                if let err = flow.scanError {
-                    Label(err, systemImage: "exclamationmark.triangle")
+            if let err = flow.scanError {
+                Section {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                        .font(.footnote)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("This iPhone's name").font(.subheadline.bold())
-                    TextField("Device name", text: $deviceName)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.words)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Or paste the pairing code").font(.subheadline.bold())
-                    TextField("agenthost://pair?…", text: $pasted, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.footnote.monospaced())
-                        .lineLimit(1...4)
-                    HStack {
-                        Button {
-                            if let s = UIPasteboard.general.string { pasted = s }
-                        } label: {
-                            Label("Paste", systemImage: "doc.on.clipboard")
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer()
-                        Button("Pair") {
-                            flow.begin(qr: pasted, deviceName: deviceName, model: model)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
                 }
             }
-            .padding()
+
+            Section("This iPhone's name") {
+                TextField("Device name", text: $deviceName)
+                    .textInputAutocapitalization(.words)
+            }
+
+            Section("Or paste the pairing code") {
+                TextField("agenthost://pair?…", text: $pasted, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote.monospaced())
+                    .lineLimit(1...4)
+                HStack {
+                    // The system paste control: no clipboard permission prompt.
+                    PasteButton(payloadType: String.self) { strings in
+                        Task { @MainActor in pasted = strings.first ?? "" }
+                    }
+                    .buttonBorderShape(.capsule)
+                    .labelStyle(.titleAndIcon)
+                    Spacer()
+                    Button("Pair") {
+                        flow.begin(qr: pasted, deviceName: deviceName, model: model)
+                    }
+                    .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 
     private func progressStep(host: String) -> some View {
-        VStack(spacing: 16) {
-            Spacer()
-            ProgressView()
-            Text("Connecting to \(host)…")
-                .foregroundStyle(.secondary)
-            Button("Cancel", role: .cancel) { flow.cancel() }
-            Spacer()
-        }
-        .padding()
+        ProgressView("Connecting to \(host)…")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func confirmStep(host: String, code: String) -> some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Spacer()
             Text("Confirm on \(host)")
-                .font(.title3.bold())
+                .font(.footnote)
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
             Text(code)
-                .font(.system(size: 44, weight: .semibold, design: .monospaced))
+                .font(.system(.largeTitle, design: .monospaced, weight: .semibold))
                 .accessibilityLabel(code.map { String($0) }.joined(separator: " "))
             Text("Check that the desktop shows the same code, then confirm there. If the codes differ, refuse on the desktop.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal)
             ProgressView("Waiting for confirmation…")
-            Button("Cancel", role: .cancel) { flow.cancel() }
+                .padding(.top, 8)
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, 32)
     }
 
     private func failedStep(_ message: String) -> some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "xmark.octagon")
-                .font(.system(size: 44))
-                .foregroundStyle(.red)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            Text("Show a new QR code on the desktop and try again.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Button("Try again") {
+        ContentUnavailableView {
+            Label("Pairing Failed", systemImage: "xmark.octagon")
+        } description: {
+            Text(message + "\n\nShow a new QR code on the desktop and try again.")
+        } actions: {
+            Button("Try Again") {
                 pasted = ""
                 flow.reset()
             }
             .buttonStyle(.borderedProminent)
-            Spacer()
         }
-        .padding()
     }
 
     private func checkCamera() async {

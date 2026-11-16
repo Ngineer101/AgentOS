@@ -16,27 +16,48 @@ struct SessionView: View {
     private var pending: [OutgoingPrompt] { model.outbox.filter { $0.sessionId == sessionId } }
     private var isTerminal: Bool { SessionStateName.isTerminal(session?.state ?? "") }
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
+    private var approvalWaiting: Bool {
+        model.approvals.contains { $0.sessionId == sessionId }
+            || session?.state == SessionStateName.waitingApproval
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 6) {
-                ConnectionBanner()
-                ApprovalBanner(sessionId: sessionId) { first in
-                    if let a = first { approvalShown = a } else {
-                        Task { await model.refreshApprovals() }
+            if !model.link.isOnline || approvalWaiting {
+                VStack(spacing: 8) {
+                    if !model.link.isOnline {
+                        ConnectionStatusRow().statusCard()
+                    }
+                    if approvalWaiting {
+                        ApprovalStatusRow(sessionId: sessionId) { first in
+                            if let a = first { approvalShown = a } else {
+                                Task { await model.refreshApprovals() }
+                            }
+                        }
+                        .statusCard()
                     }
                 }
+                .padding(.horizontal)
+                .padding(.top, 8)
             }
-            .padding(.top, 4)
 
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         if rows.isEmpty && pending.isEmpty {
-                            Text(model.link.isOnline ? "Loading…" : "No cached transcript for this session.")
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 40)
+                            Group {
+                                if model.link.isOnline {
+                                    ProgressView()
+                                } else {
+                                    ContentUnavailableView(
+                                        "No Cached Transcript",
+                                        systemImage: "text.bubble",
+                                        description: Text("It will load when the host is reachable.")
+                                    )
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
                         }
                         ForEach(rows) { row in
                             TranscriptRowView(row: row) { a in approvalShown = a }
@@ -119,11 +140,19 @@ struct SessionView: View {
 
     private var promptBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            // Messages-style field: a rounded capsule on the bar.
             TextField(placeholder, text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($promptFocused)
-                .textFieldStyle(.roundedBorder)
                 .disabled(!canPrompt)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(uiColor: .secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
+                )
             if SessionStateName.isBusy(session?.state ?? "") && draft.isEmpty {
                 Button {
                     Task { await run { try await model.cancel(sessionId) } }
@@ -179,8 +208,10 @@ struct TranscriptRowView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(text)
                     .textSelection(.enabled)
-                    .padding(10)
-                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 HStack(spacing: 4) {
                     if let d = device { Text(d) }
                     Text(dateFromMillis(ts), style: .time)
@@ -188,6 +219,7 @@ struct TranscriptRowView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
+            .padding(.leading, 48)
             .frame(maxWidth: .infinity, alignment: .trailing)
 
         case let .agentMessage(_, text):
@@ -227,9 +259,7 @@ struct TranscriptRowView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .transcriptCard()
 
         case let .state(_, state, reason, fix):
             if state == SessionStateName.failed {
@@ -353,8 +383,7 @@ struct ToolCallRow: View {
                 }
             }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .transcriptCard()
     }
 
     @ViewBuilder
@@ -384,7 +413,20 @@ struct CodeBlock: View {
                 .padding(8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        .background(Color(uiColor: .tertiarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+extension View {
+    /// The grouped background used for tool calls, blocked hosts and
+    /// approval requests in a transcript.
+    func transcriptCard() -> some View {
+        padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -401,21 +443,24 @@ struct ApprovalRequestRow: View {
     }
 
     var body: some View {
-        HStack {
-            Image(systemName: "hand.raised")
+        HStack(spacing: 10) {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Approval requested").font(.caption.bold())
-                Text("\(connector): \(tool)").font(.caption.monospaced())
+                Text("Approval requested").font(.footnote.weight(.semibold))
+                Text("\(connector): \(tool)")
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
             }
-            Spacer()
+            Spacer(minLength: 0)
             if let a = stillPending {
                 Button("Review") { onOpen(a) }
                     .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
             }
         }
-        .padding(8)
-        .background(Color.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        .transcriptCard()
     }
 }
 
@@ -441,9 +486,12 @@ struct PendingPromptRow: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
+            // Not yet accepted by the host: the same bubble, dimmed.
             Text(prompt.text)
-                .padding(10)
-                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(Color.accentColor.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             if let f = prompt.failure {
                 HStack {
                     Text(f).font(.caption2).foregroundStyle(.red)
@@ -456,6 +504,7 @@ struct PendingPromptRow: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }

@@ -1,30 +1,34 @@
 import SwiftUI
 
-/// Connection state strip, shown whenever the app is not online.
-struct ConnectionBanner: View {
+/// Connection state, shown whenever the app is not online. Plain row
+/// content: inside a `List` it is a normal row; elsewhere wrap it in
+/// `.statusCard()`.
+struct ConnectionStatusRow: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         if !model.link.isOnline {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 Image(systemName: icon)
+                    .foregroundStyle(color)
+                    .imageScale(.large)
+                    .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.subheadline.bold())
-                    Text(detail).font(.caption)
+                    Text(title)
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if model.link == .connecting {
                     ProgressView()
                 } else if canRetry {
                     Button("Retry") { model.retryNow() }
-                        .font(.caption.bold())
                         .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
                 }
             }
-            .padding(10)
-            .foregroundStyle(.primary)
-            .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal)
             .accessibilityElement(children: .combine)
         }
     }
@@ -71,7 +75,7 @@ struct ConnectionBanner: View {
         }
         switch model.link {
         case .hostOffline:
-            return cached + "The computer running AgentHost is not reachable. Reconnecting automatically; prompts are disabled."
+            return cached + "Reconnecting automatically; prompts are disabled."
         case let .updateRequired(msg):
             return "Install the latest version of this app. (\(msg))"
         case .connecting:
@@ -84,8 +88,8 @@ struct ConnectionBanner: View {
     }
 }
 
-/// "An approval is waiting" banner.
-struct ApprovalBanner: View {
+/// "An approval is waiting" row; tapping it opens the approval.
+struct ApprovalStatusRow: View {
     @EnvironmentObject private var model: AppModel
     var sessionId: String?
     var onTap: (PendingApprovalModel?) -> Void
@@ -95,7 +99,7 @@ struct ApprovalBanner: View {
         return model.approvals.filter { $0.sessionId == sid }
     }
 
-    private var waiting: Bool {
+    private var isWaiting: Bool {
         if !relevant.isEmpty { return true }
         if let sid = sessionId {
             return model.session(sid)?.state == SessionStateName.waitingApproval
@@ -104,51 +108,68 @@ struct ApprovalBanner: View {
     }
 
     var body: some View {
-        if waiting {
+        if isWaiting {
             Button {
                 onTap(relevant.first)
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Image(systemName: "hand.raised.fill")
+                        .foregroundStyle(.orange)
+                        .imageScale(.large)
+                        .frame(width: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(relevant.count > 1 ? "\(relevant.count) approvals waiting" : "Approval waiting")
-                            .font(.subheadline.bold())
-                        if let a = relevant.first {
-                            Text("\(a.connectorName): \(a.tool)").font(.caption)
-                        } else {
-                            Text("A session is waiting for a tool-call decision.").font(.caption)
+                            .foregroundStyle(.primary)
+                        Group {
+                            if let a = relevant.first {
+                                Text("\(a.connectorName): \(a.tool)")
+                            } else {
+                                Text("A session is waiting for a tool-call decision.")
+                            }
                         }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                .padding(10)
-                .foregroundStyle(.primary)
-                .background(Color.yellow.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal)
         }
     }
 }
 
-struct StateBadge: View {
+extension View {
+    /// A grouped-style card for status rows shown outside a `List`.
+    func statusCard() -> some View {
+        padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// A session's state as trailing detail text, coloured only when it needs
+/// attention or is active (the standard list "value" style).
+struct StateText: View {
     var state: String
 
     var body: some View {
         Text(SessionStateName.label(state))
-            .font(.caption2.bold())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.2), in: Capsule())
+            .font(.subheadline)
             .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private var color: Color {
         switch state {
         case SessionStateName.running, SessionStateName.starting: return .blue
         case SessionStateName.waitingApproval: return .orange
-        case SessionStateName.idle: return .green
         case SessionStateName.failed: return .red
         default: return .secondary
         }

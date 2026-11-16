@@ -78,7 +78,7 @@ struct HostView: View {
             }
 
             Section {
-                Button("Unpair this iPhone", role: .destructive) {
+                Button("Unpair This iPhone", role: .destructive) {
                     confirmUnpair = true
                 }
             } footer: {

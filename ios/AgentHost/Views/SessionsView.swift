@@ -16,20 +16,16 @@ struct SessionsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if model.sessions.isEmpty {
+                if !model.link.isOnline {
                     Section {
-                        VStack(spacing: 8) {
-                            Image(systemName: "rectangle.stack")
-                                .font(.largeTitle)
-                                .foregroundStyle(.secondary)
-                            Text("No sessions yet")
-                                .font(.headline)
-                            Text("Start one in an existing workspace.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        ConnectionStatusRow()
+                    }
+                }
+                if model.anyWaitingApproval || !model.approvals.isEmpty {
+                    Section {
+                        ApprovalStatusRow(sessionId: nil) { first in
+                            openApprovals(first)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
                     }
                 }
 
@@ -44,16 +40,13 @@ struct SessionsView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .safeAreaInset(edge: .top) {
-                if !model.link.isOnline || model.anyWaitingApproval {
-                    VStack(spacing: 6) {
-                        ConnectionBanner()
-                        ApprovalBanner(sessionId: nil) { first in
-                            openApprovals(first)
-                        }
+            .overlay {
+                if model.sessions.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Sessions", systemImage: "rectangle.stack")
+                    } description: {
+                        Text("Start one in an existing workspace with the + button.")
                     }
-                    .padding(.vertical, 6)
-                    .background(.bar)
                 }
             }
             .refreshable {
@@ -124,25 +117,20 @@ struct SessionRow: View {
     var session: SessionInfo
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(session.title ?? agentDisplayName(session.agent))
-                    .font(.body.weight(.medium))
                     .lineLimit(1)
-                Spacer()
-                StateBadge(state: session.state)
+                Spacer(minLength: 8)
+                StateText(state: session.state)
             }
-            HStack(spacing: 6) {
-                Text(agentDisplayName(session.agent))
-                Text("·")
-                Text(dateFromMillis(session.updatedAt), style: .relative)
-                Text("ago")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text("\(agentDisplayName(session.agent)) · \(dateFromMillis(session.updatedAt).formatted(.relative(presentation: .named)))")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             if let reason = session.stateReason, session.state == SessionStateName.failed {
                 Text(reason)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.red)
                     .lineLimit(2)
             }
@@ -160,10 +148,6 @@ struct ApprovalListView: View {
     var body: some View {
         NavigationStack {
             List {
-                if model.approvals.isEmpty {
-                    Text("Nothing is waiting for approval.")
-                        .foregroundStyle(.secondary)
-                }
                 ForEach(model.approvals) { a in
                     Button {
                         selected = a
@@ -175,6 +159,15 @@ struct ApprovalListView: View {
                             Text(agentLabel(a)).font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                }
+            }
+            .overlay {
+                if model.approvals.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing Waiting",
+                        systemImage: "checkmark.circle",
+                        description: Text("No tool calls are waiting for approval.")
+                    )
                 }
             }
             .sheet(item: $selected) { a in

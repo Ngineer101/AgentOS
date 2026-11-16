@@ -8,6 +8,9 @@ struct AgentHostApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                // Dark only (also set by UIUserInterfaceStyle in Info.plist,
+                // which covers the launch screen and system UI).
+                .preferredColorScheme(.dark)
         }
     }
 }
@@ -67,7 +70,8 @@ struct PrivacyCover: View {
             Color(uiColor: .systemBackground).ignoresSafeArea()
             VStack(spacing: 12) {
                 Image(systemName: "lock.shield")
-                    .font(.system(size: 48))
+                    .font(.largeTitle)
+                    .imageScale(.large)
                     .foregroundStyle(.secondary)
                 Text("AgentHost")
                     .font(.headline)
@@ -82,33 +86,22 @@ struct LockView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "lock.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(.tint)
-            Text("AgentHost is locked")
-                .font(.title2.bold())
+        ContentUnavailableView {
+            Label("AgentHost Is Locked", systemImage: "lock.fill")
+        } description: {
             Text("Use Face ID or your passcode to continue.")
-                .foregroundStyle(.secondary)
             if let err = model.lockError {
-                Text(err)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                Text(err).foregroundStyle(.red)
             }
+        } actions: {
             Button {
                 Task { await model.unlock() }
             } label: {
                 Label("Unlock", systemImage: "faceid")
-                    .frame(maxWidth: 240)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            Spacer()
         }
-        .padding()
     }
 }
 
@@ -116,22 +109,14 @@ struct RemovedView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "iphone.slash")
-                .font(.system(size: 52))
-                .foregroundStyle(.red)
-            Text("This device was removed")
-                .font(.title2.bold())
+        ContentUnavailableView {
+            Label("This Device Was Removed", systemImage: "iphone.slash")
+        } description: {
             Text("The host no longer accepts this iPhone. Its keys and cached transcripts have been deleted.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-            Button("Pair again") { model.pairAgain() }
+        } actions: {
+            Button("Pair Again") { model.pairAgain() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-            Spacer()
         }
-        .padding()
     }
 }

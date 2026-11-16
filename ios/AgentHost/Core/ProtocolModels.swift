@@ -54,7 +54,7 @@ enum SessionStateName {
 
     static func label(_ s: String) -> String {
         switch s {
-        case waitingApproval: return "Waiting for approval"
+        case waitingApproval: return "Needs approval"
         default: return s.prefix(1).uppercased() + s.dropFirst()
         }
     }
