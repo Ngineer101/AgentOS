@@ -1,0 +1,19 @@
+docs/status.md
+  s_9752bcb9cff8ac::t_1eb6cc65bafee6 22,84,88,91-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6efeb835739e215ed3e748d1593e3c6d6a4c28f6",
+  "prompts": {},
+  "sessions": {
+    "s_9752bcb9cff8ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "069b400e-cfb6-4d8c-953a-036499a12d79",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
