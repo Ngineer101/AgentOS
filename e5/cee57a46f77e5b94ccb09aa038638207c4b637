@@ -1,0 +1,35 @@
+ios/AgentHost/App/AgentHostApp.swift
+  s_9752bcb9cff8ac::t_c7060aeea11f45 11-13,73-74,89-91,94,96,112-114,116-117
+ios/AgentHost/Core/ProtocolModels.swift
+  s_9752bcb9cff8ac::t_e1ea17be9bca79 57
+ios/AgentHost/Views/Components.swift
+  s_9752bcb9cff8ac::t_d526243c96c7d4 3-6,11,13-15,17-20,22,28-29,78,91-92,102,111,115,117-119,122-128,130-131,133,135-136,138,145-158,163,165-166
+ios/AgentHost/Views/HostView.swift
+  s_9752bcb9cff8ac::t_703534e7815e4a 81
+ios/AgentHost/Views/PairView.swift
+  s_9752bcb9cff8ac::t_9c92668c63f75a 108-114,122-127,129-131,139-147,150-154,156-158,161,163-166,168-177,179-185,192-193,197,200-202,204,210,213,217-222
+ios/AgentHost/Views/SessionView.swift
+  s_9752bcb9cff8ac::t_32261558f8a3b6 19-22,26-37,40-41,48-60,143,148-155,211-214,222,262,386,416-429,446-448,450-453,455,459,463,489,491-494,507
+ios/AgentHost/Views/SessionsView.swift
+  s_9752bcb9cff8ac::t_2926c6025ae314 19-24,26-27,43-48,120-121,124-125,127-130,133,164-172
+ios/README.md
+  s_9752bcb9cff8ac::t_fcdb3de4e6753e 28,73
+ios/project.yml
+  s_9752bcb9cff8ac::t_6bd6ea489eb3cd 43-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5cee57a46f77e5b94ccb09aa038638207c4b637",
+  "prompts": {},
+  "sessions": {
+    "s_9752bcb9cff8ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "069b400e-cfb6-4d8c-953a-036499a12d79",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
