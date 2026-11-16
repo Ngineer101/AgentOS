@@ -15,6 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# tokio-tungstenite enables no rustls crypto backend; pick ring explicitly
+# (it cross-compiles for iOS without cmake, unlike aws-lc-rs).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"
 base64.workspace = true
 hex.workspace = true

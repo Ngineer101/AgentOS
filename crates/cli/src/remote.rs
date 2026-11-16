@@ -120,7 +120,15 @@ async fn next_binary(ws: &mut Ws, timeout: Duration) -> Result<Vec<u8>> {
     }
 }
 
+/// Install ring as the process-wide rustls crypto provider. Without it, a
+/// wss:// connect panics when no single provider is enabled by features
+/// (as in the iOS library). A no-op if a provider is already installed.
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 async fn open(url: &str) -> Result<(Ws, String)> {
+    ensure_crypto_provider();
     let (mut ws, _) = tokio_tungstenite::connect_async(url)
         .await
         .with_context(|| format!("connect to relay {url}"))?;
