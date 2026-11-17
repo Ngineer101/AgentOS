@@ -7,7 +7,7 @@ use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use rune::{col, el, row, text, Color, Cx, El, Icon, ScrollSpec, Tx};
 use rune_kit::shell::{RowStatus, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Kit, Switch, TextInput};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Kit, Markdown, Switch, TextInput};
 use serde_json::{json, Value};
 
 static PLUS: Icon = Icon {
@@ -51,6 +51,26 @@ fn heading(t: impl Into<String>, k: &Kit) -> El {
 }
 fn mono(t: impl Into<String>, k: &Kit) -> El {
     text(t.into()).font(k.ty.mono).color(k.c.text_base).wrap().selectable(true)
+}
+/// An agent's reply rendered as Markdown. `streaming` is for the reply still
+/// arriving: an open emphasis or code span draws styled rather than as markers.
+/// Links open in the browser, but only web and mail links: the text comes from
+/// the agent, so `file:` and custom schemes are left as styled text.
+fn reply(src: &str, streaming: bool, k: &Kit) -> El {
+    Markdown::new(src)
+        .selectable(true)
+        .streaming(streaming)
+        .scroll_wide(true)
+        .on_link(|s: &mut App, url: &str| {
+            if is_web_link(url) {
+                s.open_queue.push(url.to_string());
+            }
+        })
+        .build(k)
+}
+pub(crate) fn is_web_link(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    ["https://", "http://", "mailto:"].iter().any(|p| lower.starts_with(p))
 }
 fn card(k: &Kit) -> El {
     col().w_full().gap(8.0).padding(14.0).radius(k.radius.md).fill(k.c.layer_01).border(1.0, k.c.border_weak)
@@ -243,7 +263,7 @@ fn session_screen(s: &App, id: &str, k: &Kit) -> El {
         }
     }
     if let Some(live) = t.map(|t| t.live.as_str()).filter(|l| !l.is_empty()) {
-        lines = lines.child(text(live.to_string()).font(k.ty.body).color(k.c.text_base).wrap().key("live"));
+        lines = lines.child(reply(live, true, k).key("live"));
     }
     if events.is_empty() {
         lines = lines.child(muted("No messages yet.", k));
@@ -305,7 +325,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, results: &std::collections::Has
                 .fill(k.c.layer_02)
                 .child(text(str_of(&p["text"])).font(k.ty.body).color(k.c.text_strong).wrap().selectable(true)),
         ),
-        EventType::AgentMessage => text(str_of(&p["text"])).font(k.ty.body).color(k.c.text_base).wrap().selectable(true),
+        EventType::AgentMessage => reply(p["text"].as_str().unwrap_or(""), false, k),
         EventType::AgentThought => text(clip(&str_of(&p["text"]), 600)).font(k.ty.small).color(k.c.text_faint).wrap(),
         EventType::ToolCall => {
             let cid = str_of(&p["tool_call_id"]);

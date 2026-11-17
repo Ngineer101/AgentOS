@@ -66,3 +66,15 @@ fn desktop_model_runs_a_session_against_a_real_host() {
     assert!(app.prompt.text.is_empty());
     assert!(app.error.is_none(), "{:?}", app.error);
 }
+
+#[test]
+fn reply_links_open_only_for_web_and_mail() {
+    use crate::view::is_web_link;
+    assert!(is_web_link("https://example.com"));
+    assert!(is_web_link("HTTP://example.com"));
+    assert!(is_web_link("mailto:a@example.com"));
+    assert!(!is_web_link("file:///etc/passwd"));
+    assert!(!is_web_link("javascript:alert(1)"));
+    assert!(!is_web_link("vscode://open?x"));
+    assert!(!is_web_link("relative/path.md"));
+}

@@ -20,7 +20,7 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
     for url in std::mem::take(&mut s.open_queue) {
         if tx.open_url(&url).is_err() {
-            s.notice = Some(format!("Open this link in your browser to sign in: {url}"));
+            s.notice = Some(format!("Could not open the browser. Open this link yourself: {url}"));
         }
     }
     // Keep "3m ago" labels fresh.
