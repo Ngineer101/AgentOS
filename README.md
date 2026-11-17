@@ -62,6 +62,7 @@ before write tools by default. The host listens on no network port. See
 ## Development
 
 ```sh
+scripts/dev.sh                                           # build + run host and desktop together (--fresh, --fake)
 cargo test --workspace                                   # unit + integration tests
 AGENTHOST_TEST_TOOLS=<data-dir>/tools cargo test -p agenthost-host --test m3_escape   # sandbox escape suite
 cd relay && npm test                                     # relay tests
