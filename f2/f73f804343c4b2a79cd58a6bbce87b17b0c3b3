@@ -1,0 +1,41 @@
+crates/cli/src/main.rs
+  s_399f9c8a50bf77::t_b5b67d48dfe44d 778,819,836-874
+crates/host/src/api.rs
+  s_399f9c8a50bf77::t_4385f4ee0d81cb 176-178
+crates/host/src/bus.rs
+  s_399f9c8a50bf77::t_ca70963b326f7f 23-24
+crates/host/src/mcp.rs
+  s_399f9c8a50bf77::t_417da0fa1c0938 13,86,731-733,941,1150-1164,1167,1195-1199,1269,1276-1279
+crates/proto/src/methods.rs
+  s_399f9c8a50bf77::t_87e476806c6693 57-59
+crates/proto/src/types.rs
+  s_399f9c8a50bf77::t_73020f0d4611be 437-477,687-702
+desktop/Cargo.lock
+  s_399f9c8a50bf77::t_f86d55cb401654 134
+desktop/src/bridge.rs
+  s_399f9c8a50bf77::t_45d8a3448dce4e 26-29
+desktop/src/demo.rs
+  s_399f9c8a50bf77::t_40db595af3d106 75-97
+desktop/src/main.rs
+  s_399f9c8a50bf77::t_3db74d48ca20f3 21-25
+desktop/src/model.rs
+  s_399f9c8a50bf77::t_a6b1f3188055c6 66-71,101-102,229-262,292-334,384
+desktop/src/view.rs
+  s_399f9c8a50bf77::t_66da0c09b91530 667,670,672-681,683-684,686-688,690,697-699,711-720,722-788,791-807,825
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f2f73f804343c4b2a79cd58a6bbce87b17b0c3b3",
+  "prompts": {},
+  "sessions": {
+    "s_399f9c8a50bf77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_399f9c8a50bf77",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
