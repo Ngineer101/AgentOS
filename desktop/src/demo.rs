@@ -40,6 +40,7 @@ fn base(s: &mut App) {
         session_id: id.into(),
         workspace_id: ws.into(),
         agent,
+        profile_id: None,
         state,
         state_reason: None,
         acp_session_id: Some("x".into()),
@@ -109,8 +110,8 @@ fn base(s: &mut App) {
         os: "linux".into(),
         protocol_version: 2,
         agents: vec![
-            AgentStatus { agent: AgentKind::Codex, display_name: "Codex".into(), installed: true, version: Some("2.6.0".into()), logged_in: true, available: true, problem: None, fix: None },
-            AgentStatus { agent: AgentKind::Claude, display_name: "Claude Code".into(), installed: true, version: Some("0.107.0".into()), logged_in: true, available: true, problem: None, fix: None },
+            AgentStatus { agent: AgentKind::Codex, display_name: "Codex".into(), installed: true, version: Some("2.6.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("codex".into()), profile_name: None, config_dir: None },
+            AgentStatus { agent: AgentKind::Claude, display_name: "Claude Code".into(), installed: true, version: Some("0.107.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("claude".into()), profile_name: None, config_dir: None },
             AgentStatus {
                 agent: AgentKind::Opencode,
                 display_name: "OpenCode".into(),
@@ -120,6 +121,9 @@ fn base(s: &mut App) {
                 available: false,
                 problem: Some("not logged in".into()),
                 fix: Some("opencode auth login".into()),
+                profile_id: Some("opencode".into()),
+                profile_name: None,
+                config_dir: None,
             },
         ],
         sandbox: SandboxHealth {

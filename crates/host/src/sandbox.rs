@@ -106,10 +106,17 @@ pub fn policy_for(
     write.extend(agent.state_paths.iter().cloned());
 
     let mut deny_read: Vec<PathBuf> = SECRET_DIRS.iter().map(|d| home.join(d)).collect();
-    // Other agents' credentials and state.
+    // Every other login's credentials and state: other agents', this agent's
+    // default login when the session runs as a profile, and other profiles'.
     for (kind, p) in all_credential_paths(home) {
-        if kind != agent.kind && !agent.state_paths.iter().any(|s| s == &p) {
+        let own = agent.state_paths.iter().any(|s| s == &p);
+        if !own && (kind != agent.kind || agent.profile.is_some()) {
             deny_read.push(p);
+        }
+    }
+    for p in &agent.other_logins {
+        if !agent.state_paths.iter().any(|s| s == p) {
+            deny_read.push(p.clone());
         }
     }
     deny_read.extend(agent.deny_read.iter().cloned());
@@ -547,6 +554,93 @@ mod tests {
             .deny_read
             .contains(&PathBuf::from("/home/u/.config/cursor")));
         assert!(p.deny_read.contains(&PathBuf::from("/home/u/.gemini")));
+    }
+
+    fn profile(kind: AgentKind, id: &str, dir: &str) -> agenthost_proto::AgentProfile {
+        agenthost_proto::AgentProfile {
+            profile_id: id.into(),
+            agent: kind,
+            name: id.into(),
+            config_dir: dir.into(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn profiles_see_only_their_own_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let work = profile(AgentKind::Claude, "prof_w", "/home/u/.claude-work");
+        let personal = profile(AgentKind::Claude, "prof_p", "/home/u/.claude-personal");
+        let codex = profile(AgentKind::Codex, "prof_c", "/home/u/.codex-work");
+        let policy = |spec: &AgentSpec| {
+            policy_for(
+                &cfg,
+                spec,
+                Path::new("/work/repo"),
+                Path::new("/tmp/ah/s1"),
+                &NetworkProfile::default(),
+            )
+        };
+
+        // Claude as "work": its folder is writable and named by CLAUDE_CONFIG_DIR;
+        // the default login and the other profiles are hidden.
+        let mut spec = crate::agents::spec_for(AgentKind::Claude, Some(&work), &cfg);
+        spec.other_logins = vec![personal.config_dir.clone().into(), codex.config_dir.clone().into()];
+        assert!(spec
+            .env
+            .contains(&("CLAUDE_CONFIG_DIR".into(), "/home/u/.claude-work".into())));
+        assert!(spec.login_fix.starts_with("CLAUDE_CONFIG_DIR=/home/u/.claude-work "));
+        let p = policy(&spec);
+        assert_eq!(
+            p.write,
+            vec![
+                PathBuf::from("/work/repo"),
+                PathBuf::from("/tmp/ah/s1"),
+                PathBuf::from("/home/u/.claude-work")
+            ]
+        );
+        for hidden in [
+            "/home/u/.claude",
+            "/home/u/.claude.json",
+            "/home/u/.claude-personal",
+            "/home/u/.codex-work",
+            "/home/u/.codex",
+        ] {
+            assert!(p.deny_read.contains(&PathBuf::from(hidden)), "{hidden}");
+        }
+
+        // The default login: profiles' folders are hidden, its own isn't.
+        let mut spec = crate::agents::spec(AgentKind::Claude, &cfg);
+        spec.other_logins = vec![work.config_dir.clone().into()];
+        let p = policy(&spec);
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.claude-work")));
+        assert!(!p.deny_read.contains(&PathBuf::from("/home/u/.claude")));
+        assert!(p.write.contains(&PathBuf::from("/home/u/.claude")));
+
+        // Codex reads MCP server names from the profile's config.toml.
+        let spec = crate::agents::spec_for(AgentKind::Codex, Some(&codex), &cfg);
+        assert_eq!(spec.codex_home(&cfg), PathBuf::from("/home/u/.codex-work"));
+        assert!(spec.env.contains(&("CODEX_HOME".into(), "/home/u/.codex-work".into())));
+        assert_eq!(spec.credential_paths, vec![PathBuf::from("/home/u/.codex-work/auth.json")]);
+
+        // OpenCode and Gemini: the folder replaces their data or home folder.
+        let oc = profile(AgentKind::Opencode, "prof_o", "/home/u/oc-work");
+        let spec = crate::agents::spec_for(AgentKind::Opencode, Some(&oc), &cfg);
+        assert!(spec.env.contains(&("XDG_DATA_HOME".into(), "/home/u/oc-work".into())));
+        assert!(!spec.state_paths.contains(&PathBuf::from("/home/u/.local/share/opencode")));
+        assert!(policy(&spec)
+            .deny_read
+            .contains(&PathBuf::from("/home/u/.local/share/opencode")));
+        let gm = profile(AgentKind::Gemini, "prof_g", "/home/u/gemini-work");
+        let spec = crate::agents::spec_for(AgentKind::Gemini, Some(&gm), &cfg);
+        assert!(spec.env.contains(&("GEMINI_CLI_HOME".into(), "/home/u/gemini-work".into())));
+        assert_eq!(
+            spec.credential_paths,
+            vec![PathBuf::from("/home/u/gemini-work/.gemini/oauth_creds.json")]
+        );
+        assert!(policy(&spec).deny_read.contains(&PathBuf::from("/home/u/.gemini")));
     }
 
     #[test]

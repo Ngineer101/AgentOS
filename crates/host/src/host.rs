@@ -90,17 +90,26 @@ impl Host {
         v
     }
 
+    /// One entry per login: each agent's default login, then its profiles.
+    pub fn agent_statuses(&self) -> Vec<AgentStatus> {
+        let profiles = self.ctx.store.profile_list().unwrap_or_default();
+        let mut out = vec![];
+        for kind in self.agent_kinds() {
+            out.push(crate::agents::status(kind, &self.ctx.cfg));
+            for p in profiles.iter().filter(|p| p.agent == kind) {
+                out.push(crate::agents::status_for(kind, Some(p), &self.ctx.cfg));
+            }
+        }
+        out
+    }
+
     pub fn info(&self) -> HostInfo {
         HostInfo {
             host_id: self.ctx.host_id.clone(),
             version: env!("CARGO_PKG_VERSION").into(),
             os: os_name().into(),
             protocol_version: PROTOCOL_VERSION,
-            agents: self
-                .agent_kinds()
-                .into_iter()
-                .map(|k| crate::agents::status(k, &self.ctx.cfg))
-                .collect(),
+            agents: self.agent_statuses(),
             sandbox: crate::sandbox::health(&self.ctx.cfg),
             relay: self
                 .devices

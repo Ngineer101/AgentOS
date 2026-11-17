@@ -41,6 +41,9 @@ enum Cmd {
     /// Manage workspaces.
     #[command(subcommand, alias = "ws")]
     Workspace(WsCmd),
+    /// Agent logins: add a profile per subscription (its own config folder).
+    #[command(subcommand)]
+    Agent(AgentCmd),
     /// Manage sessions.
     #[command(subcommand, alias = "s")]
     Session(SessionCmd),
@@ -48,7 +51,8 @@ enum Cmd {
     Run {
         /// Workspace id or folder path.
         workspace: String,
-        /// codex, claude, opencode, cursor, gemini (or fake, if enabled).
+        /// codex, claude, opencode, cursor, gemini (or fake, if enabled);
+        /// add :name for a profile, e.g. claude:work.
         agent: String,
         prompt: String,
         /// End the session afterwards.
@@ -62,6 +66,7 @@ enum Cmd {
     Chat {
         /// Workspace id or folder path (for a new session).
         workspace: Option<String>,
+        /// Agent, or agent:profile (default codex).
         agent: Option<String>,
         /// Continue this session instead.
         #[arg(long)]
@@ -90,6 +95,26 @@ enum Cmd {
     /// Pair this CLI as a remote device (like a phone).
     #[command(subcommand)]
     Remote(RemoteCmd),
+}
+
+#[derive(Subcommand)]
+enum AgentCmd {
+    /// Every agent login: the default ones and the profiles.
+    List,
+    /// Add a profile: another login of an agent, kept in its own config
+    /// folder (what CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CLI_HOME or
+    /// XDG_DATA_HOME for OpenCode point at). Use it as agent:name.
+    Add {
+        /// codex, claude, opencode, cursor or gemini.
+        agent: String,
+        /// A short name, e.g. work.
+        name: String,
+        /// The agent's config folder, e.g. ~/.claude-work.
+        #[arg(long)]
+        config_dir: String,
+    },
+    /// Remove a profile (agent:name or its id). Its folder is left as it is.
+    Rm { profile: String },
 }
 
 #[derive(Subcommand)]
@@ -170,6 +195,7 @@ enum SessionCmd {
     /// Start a session.
     New {
         workspace: String,
+        /// Agent, or agent:profile.
         agent: String,
     },
     /// Print a session's transcript.
@@ -335,6 +361,46 @@ fn parse_agent(s: &str) -> Result<AgentKind> {
     })
 }
 
+/// `claude` (the default login), `claude:work` (a profile by name) or a
+/// profile id, as the agent and the profile id to start a session with.
+async fn resolve_agent(c: &Client, s: &str) -> Result<(AgentKind, Option<String>)> {
+    let (kind, name) = match s.split_once(':') {
+        Some((k, n)) => (Some(parse_agent(k)?), Some(n.trim())),
+        None if s.starts_with("prof_") => (None, None),
+        None => return Ok((parse_agent(s)?, None)),
+    };
+    let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
+    let found = info.agents.iter().find(|a| match (kind, name) {
+        (Some(k), Some(n)) => {
+            a.agent == k
+                && a.profile_name
+                    .as_deref()
+                    .map(|p| p.eq_ignore_ascii_case(n))
+                    .unwrap_or(n.eq_ignore_ascii_case("default"))
+        }
+        _ => a.profile_id.as_deref() == Some(s),
+    });
+    match found {
+        Some(a) => Ok((a.agent, a.profile_id.clone())),
+        None => {
+            let names: Vec<String> = info
+                .agents
+                .iter()
+                .filter(|a| kind.map(|k| a.agent == k).unwrap_or(true))
+                .filter_map(|a| a.profile_name.as_ref().map(|n| format!("{}:{n}", a.agent)))
+                .collect();
+            bail!(
+                "no agent profile {s:?}{}",
+                if names.is_empty() {
+                    "; add one with: agenthost agent add <agent> <name> --config-dir <folder>".to_string()
+                } else {
+                    format!("; profiles: {}", names.join(", "))
+                }
+            )
+        }
+    }
+}
+
 fn parse_presets(v: &[String]) -> Result<Vec<NetworkPreset>> {
     let mut out = vec![];
     for p in v {
@@ -391,6 +457,50 @@ async fn run(cli: Cli) -> Result<()> {
                 print_status(&info);
             }
         }
+        Cmd::Agent(a) => match a {
+            AgentCmd::List => {
+                let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
+                if json_out {
+                    print_json(&serde_json::to_value(&info.agents)?);
+                } else {
+                    print_agents(&info.agents);
+                }
+            }
+            AgentCmd::Add {
+                agent,
+                name,
+                config_dir,
+            } => {
+                let p = c.add_profile(parse_agent(&agent)?, &name, &config_dir).await?;
+                if json_out {
+                    print_json(&serde_json::to_value(&p)?);
+                } else {
+                    println!(
+                        "Added {} profile {} ({}, {}). Start it as {}:{}",
+                        p.agent.display_name(),
+                        p.name,
+                        p.config_dir,
+                        p.profile_id,
+                        p.agent,
+                        p.name.to_lowercase()
+                    );
+                }
+            }
+            AgentCmd::Rm { profile } => {
+                let id = if profile.starts_with("prof_") {
+                    profile.clone()
+                } else {
+                    match resolve_agent(&c, &profile).await? {
+                        (_, Some(id)) if id.starts_with("prof_") => id,
+                        _ => bail!("{profile:?} is a default login, not a profile"),
+                    }
+                };
+                c.remove_profile(&id).await?;
+                if !json_out {
+                    println!("Removed {profile}");
+                }
+            }
+        },
         Cmd::Workspace(w) => match w {
             WsCmd::List => {
                 let list: Vec<Workspace> = c.call(m::WORKSPACE_LIST, json!({})).await?;
@@ -530,8 +640,9 @@ async fn run(cli: Cli) -> Result<()> {
             }
             SessionCmd::New { workspace, agent } => {
                 let w = resolve_workspace(&c, &workspace).await?;
+                let (kind, profile) = resolve_agent(&c, &agent).await?;
                 let s = c
-                    .create_session(&w.workspace_id, parse_agent(&agent)?)
+                    .create_session_as(&w.workspace_id, kind, profile.as_deref())
                     .await?;
                 let s = wait_ready(&c, &mut notes, &s.session_id, json_out).await?;
                 if json_out {
@@ -605,8 +716,9 @@ async fn run(cli: Cli) -> Result<()> {
                 ids.push(c.upload_file(f).await?.attachment_id);
             }
             let w = resolve_workspace(&c, &workspace).await?;
+            let (kind, profile) = resolve_agent(&c, &agent).await?;
             let s = c
-                .create_session(&w.workspace_id, parse_agent(&agent)?)
+                .create_session_as(&w.workspace_id, kind, profile.as_deref())
                 .await?;
             let s = wait_ready(&c, &mut notes, &s.session_id, json_out).await?;
             if !json_out {
@@ -684,8 +796,11 @@ async fn run(cli: Cli) -> Result<()> {
                             .ok_or_else(|| anyhow!("give a workspace and agent, or --session"))?,
                     )
                     .await?;
-                    let a = parse_agent(agent.as_deref().unwrap_or("codex"))?;
-                    let s = c.create_session(&w.workspace_id, a).await?;
+                    let (kind, profile) =
+                        resolve_agent(&c, agent.as_deref().unwrap_or("codex")).await?;
+                    let s = c
+                        .create_session_as(&w.workspace_id, kind, profile.as_deref())
+                        .await?;
                     wait_ready(&c, &mut notes, &s.session_id, false)
                         .await?
                         .session_id
@@ -1069,6 +1184,30 @@ fn ago(ts: i64) -> String {
     }
 }
 
+/// One line per login; profiles show their name (use it as agent:name) and folder.
+fn print_agents(agents: &[AgentStatus]) {
+    for a in agents {
+        let v = a.version.clone().unwrap_or_default();
+        let name = match &a.profile_name {
+            Some(n) => format!("{}:{n}", a.agent),
+            None => a.agent.to_string(),
+        };
+        let state = if a.available {
+            "ready".to_string()
+        } else {
+            format!(
+                "{} — fix: {}",
+                a.problem.clone().unwrap_or_default(),
+                a.fix.clone().unwrap_or_default()
+            )
+        };
+        println!("  {name:<18} {v:<10} {state}");
+        if let Some(dir) = &a.config_dir {
+            println!("  {:<18} {:<10} {dir}", "", "");
+        }
+    }
+}
+
 fn print_status(info: &HostInfo) {
     println!("host {}  v{}  {}", info.host_id, info.version, info.os);
     let sb = &info.sandbox;
@@ -1087,20 +1226,7 @@ fn print_status(info: &HostInfo) {
         }
     }
     println!("\nagents:");
-    for a in &info.agents {
-        let v = a.version.clone().unwrap_or_default();
-        if a.available {
-            println!("  {:<12} {:<10} ready", a.display_name, v);
-        } else {
-            println!(
-                "  {:<12} {:<10} {} — fix: {}",
-                a.display_name,
-                v,
-                a.problem.clone().unwrap_or_default(),
-                a.fix.clone().unwrap_or_default()
-            );
-        }
-    }
+    print_agents(&info.agents);
     let r = &info.relay;
     println!(
         "\nrelay: {}",

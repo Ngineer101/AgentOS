@@ -3,7 +3,7 @@
 //! write and reach, how to tell it is logged in, and how to fix it.
 
 use crate::config::HostConfig;
-use agenthost_proto::{AgentKind, AgentStatus};
+use agenthost_proto::{AgentKind, AgentProfile, AgentStatus};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -52,6 +52,23 @@ pub struct AgentSpec {
     /// ACP `authenticate` method to call after `initialize`, when the agent
     /// offers it (agents that refuse `session/new` until told which login to use).
     pub auth_method: Option<&'static str>,
+    /// The profile this spec runs as (`None`: the agent's default login).
+    pub profile: Option<AgentProfile>,
+    /// Why this profile can't run here (set by [`spec_for`]).
+    pub profile_problem: Option<String>,
+    /// Other logins' folders (other profiles, of any agent), hidden from this
+    /// session's sandbox. Filled in by the session from the host's profiles.
+    pub other_logins: Vec<PathBuf>,
+}
+
+impl AgentSpec {
+    /// Codex's config folder: the profile's, else `~/.codex`.
+    pub fn codex_home(&self, cfg: &HostConfig) -> PathBuf {
+        match &self.profile {
+            Some(p) if self.kind == AgentKind::Codex => PathBuf::from(&p.config_dir),
+            _ => cfg.home_dir.join(".codex"),
+        }
+    }
 }
 
 /// Gemini system settings: they override your own `~/.gemini/settings.json`.
@@ -236,9 +253,9 @@ fn codex_mcp_names(path: &Path) -> Vec<String> {
 /// Codex merges `-c` overrides into your config rather than replacing it, so
 /// every MCP server you configured (globally or in the workspace) is turned
 /// off by name. Only the names are read; nothing else from the file is used.
-pub fn codex_overrides(cfg: &HostConfig, workspace: &Path) -> Vec<String> {
+pub fn codex_overrides(codex_home: &Path, workspace: &Path) -> Vec<String> {
     let mut out: Vec<String> = CODEX_OVERRIDES.iter().map(|s| s.to_string()).collect();
-    let mut names = codex_mcp_names(&cfg.home_dir.join(".codex/config.toml"));
+    let mut names = codex_mcp_names(&codex_home.join("config.toml"));
     names.extend(codex_mcp_names(&workspace.join(".codex/config.toml")));
     names.sort();
     names.dedup();
@@ -260,9 +277,9 @@ pub fn codex_overrides(cfg: &HostConfig, workspace: &Path) -> Vec<String> {
 }
 
 /// The same overrides as a codex-acp thread config map (dotted keys, TOML values parsed).
-pub fn codex_thread_config(cfg: &HostConfig, workspace: &Path) -> serde_json::Value {
+pub fn codex_thread_config(codex_home: &Path, workspace: &Path) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    for o in codex_overrides(cfg, workspace) {
+    for o in codex_overrides(codex_home, workspace) {
         let Some((k, v)) = o.split_once('=') else {
             continue;
         };
@@ -281,7 +298,12 @@ pub fn codex_thread_config(cfg: &HostConfig, workspace: &Path) -> serde_json::Va
 /// Write the per-session wrapper codex-acp runs as its Codex binary. It
 /// lives next to the session's temp folder, where the sandbox can read but
 /// not write it.
-pub fn write_codex_wrapper(cfg: &HostConfig, path: &Path, workspace: &Path) -> anyhow::Result<()> {
+pub fn write_codex_wrapper(
+    cfg: &HostConfig,
+    codex_home: &Path,
+    path: &Path,
+    workspace: &Path,
+) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let codex_js = cfg
         .tools_dir
@@ -291,7 +313,7 @@ pub fn write_codex_wrapper(cfg: &HostConfig, path: &Path, workspace: &Path) -> a
         .next()
         .unwrap_or_else(|| PathBuf::from("node"));
     let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-    let overrides: Vec<String> = codex_overrides(cfg, workspace)
+    let overrides: Vec<String> = codex_overrides(codex_home, workspace)
         .iter()
         .map(|o| format!("-c {}", q(o)))
         .collect();
@@ -333,6 +355,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
             host_config_file: None,
             auth_method: None,
             direct_gateway: false,
+            profile: None,
+            profile_problem: None,
+            other_logins: vec![],
         },
         AgentKind::Claude => AgentSpec {
             kind,
@@ -381,6 +406,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
             host_config_file: None,
             auth_method: None,
             direct_gateway: false,
+            profile: None,
+            profile_problem: None,
+            other_logins: vec![],
         },
         AgentKind::Opencode => {
             let (program, _) = find_opencode();
@@ -415,6 +443,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 host_config_file: None,
                 auth_method: None,
                 direct_gateway: false,
+                profile: None,
+                profile_problem: None,
+                other_logins: vec![],
             }
         }
         AgentKind::Fake => {
@@ -443,6 +474,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 host_config_file: None,
                 auth_method: None,
                 direct_gateway: false,
+                profile: None,
+                profile_problem: None,
+                other_logins: vec![],
             }
         }
         AgentKind::Cursor => {
@@ -488,6 +522,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 host_config_file: None,
                 auth_method: Some("cursor_login"),
                 direct_gateway: true,
+                profile: None,
+                profile_problem: None,
+                other_logins: vec![],
             }
         }
         AgentKind::Gemini => {
@@ -538,14 +575,92 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 )),
                 auth_method: Some("oauth-personal"),
                 direct_gateway: true,
+                profile: None,
+                profile_problem: None,
+                other_logins: vec![],
             }
         }
     }
 }
 
-/// Whether the agent is installed and logged in, with the fix if not.
+fn shell_quote(p: &Path) -> String {
+    let s = p.display().to_string();
+    if s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c)) {
+        s
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// The spec for one login of an agent: its default login, or a profile whose
+/// config folder replaces the agent's own (see [`AgentKind::profile_env`]).
+pub fn spec_for(kind: AgentKind, profile: Option<&AgentProfile>, cfg: &HostConfig) -> AgentSpec {
+    let mut s = spec(kind, cfg);
+    let Some(p) = profile else { return s };
+    s.profile = Some(p.clone());
+    let Some(var) = kind.profile_env() else {
+        s.profile_problem = Some(format!(
+            "{} can't use a separate config folder on this system",
+            kind.display_name()
+        ));
+        return s;
+    };
+    let dir = PathBuf::from(&p.config_dir);
+    let home = &cfg.home_dir;
+    s.env.retain(|(k, _)| k != var);
+    s.env.push((var.into(), dir.display().to_string()));
+    let with_env = |cmd: &str| format!("{var}={} {cmd}", shell_quote(&dir));
+    match kind {
+        AgentKind::Claude => {
+            s.state_paths = vec![dir.clone()];
+            s.credential_paths = if cfg!(target_os = "macos") {
+                // The login is in the Keychain, under a name derived from the folder.
+                vec![dir.join(".claude.json")]
+            } else {
+                vec![dir.join(".credentials.json")]
+            };
+            s.login_fix = with_env("claude auth login");
+        }
+        AgentKind::Codex => {
+            s.state_paths = vec![dir.clone()];
+            s.credential_paths = vec![dir.join("auth.json")];
+            s.login_fix = with_env("codex login");
+        }
+        AgentKind::Gemini => {
+            s.state_paths = vec![dir.clone()];
+            s.credential_paths = vec![dir.join(".gemini/oauth_creds.json")];
+            s.login_fix = with_env(&s.login_fix);
+        }
+        AgentKind::Opencode => {
+            let default = home.join(".local/share/opencode");
+            s.state_paths.retain(|x| x != &default);
+            s.state_paths.insert(0, dir.clone());
+            s.credential_paths = vec![dir.join("opencode/auth.json")];
+            s.login_fix = with_env("opencode auth login");
+        }
+        AgentKind::Cursor => {
+            let default = home.join(".config/cursor");
+            s.state_paths.retain(|x| x != &default);
+            s.state_paths.insert(0, dir.clone());
+            s.credential_paths = vec![dir.join("cursor/auth.json")];
+            s.login_fix = with_env("cursor-agent login");
+        }
+        AgentKind::Fake => {
+            s.state_paths = vec![dir.clone()];
+            s.login_fix = with_env("fake-agent login");
+        }
+    }
+    s
+}
+
+/// Whether the agent's default login is installed and logged in, with the fix if not.
 pub fn status(kind: AgentKind, cfg: &HostConfig) -> AgentStatus {
-    let s = spec(kind, cfg);
+    status_for(kind, None, cfg)
+}
+
+/// [`status`] for one login (the default one, or a profile).
+pub fn status_for(kind: AgentKind, profile: Option<&AgentProfile>, cfg: &HostConfig) -> AgentStatus {
+    let s = spec_for(kind, profile, cfg);
     let installed = s.program.is_file();
     let version = match kind {
         AgentKind::Opencode | AgentKind::Cursor | AgentKind::Gemini | AgentKind::Fake
@@ -582,6 +697,14 @@ pub fn status(kind: AgentKind, cfg: &HostConfig) -> AgentStatus {
             }
         }
     }
+    if let (None, Some(p)) = (&problem, &s.profile_problem) {
+        problem = Some(p.clone());
+    }
+    if let (None, Some(p)) = (&problem, &s.profile) {
+        if !Path::new(&p.config_dir).is_dir() {
+            problem = Some(format!("the config folder {} is missing", p.config_dir));
+        }
+    }
     let logged_in = s.credential_paths.iter().all(|p| p.exists());
     if problem.is_none() && !logged_in {
         problem = Some("not logged in".into());
@@ -596,6 +719,14 @@ pub fn status(kind: AgentKind, cfg: &HostConfig) -> AgentStatus {
         available: problem.is_none(),
         problem,
         fix,
+        profile_id: Some(
+            s.profile
+                .as_ref()
+                .map(|p| p.profile_id.clone())
+                .unwrap_or_else(|| kind.as_str().to_string()),
+        ),
+        profile_name: s.profile.as_ref().map(|p| p.name.clone()),
+        config_dir: s.profile.as_ref().map(|p| p.config_dir.clone()),
     }
 }
 

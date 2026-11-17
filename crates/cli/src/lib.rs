@@ -150,6 +150,41 @@ impl Client {
         .await
     }
 
+    /// Start a session as one login of the agent: `profile_id` from
+    /// `host.info`'s agent entries (`None` or the agent's name: the default login).
+    pub async fn create_session_as(
+        &self,
+        workspace_id: &str,
+        agent: AgentKind,
+        profile_id: Option<&str>,
+    ) -> Result<Session> {
+        self.call(
+            methods::SESSION_CREATE,
+            json!({"workspace_id": workspace_id, "agent": agent, "profile_id": profile_id}),
+        )
+        .await
+    }
+
+    pub async fn add_profile(
+        &self,
+        agent: AgentKind,
+        name: &str,
+        config_dir: &str,
+    ) -> Result<AgentProfile> {
+        self.call(
+            methods::AGENT_PROFILE_ADD,
+            json!({"agent": agent, "name": name, "config_dir": config_dir}),
+        )
+        .await
+    }
+
+    pub async fn remove_profile(&self, profile_id: &str) -> Result<()> {
+        self.request(methods::AGENT_PROFILE_REMOVE, json!({"profile_id": profile_id}))
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Ok(())
+    }
+
     pub async fn get_session(&self, session_id: &str) -> Result<Session> {
         self.call(methods::SESSION_GET, json!({"session_id": session_id}))
             .await

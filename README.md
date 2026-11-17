@@ -39,6 +39,21 @@ agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
 agenthost voice download                      # local speech model for voice input (once)
 ```
 
+Several subscriptions of one agent (a work and a personal Claude account,
+say)? Give each its own config folder, as you would with `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`, `GEMINI_CLI_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux
+only, `XDG_CONFIG_HOME`), and add it as a profile. New sessions then pick it,
+here as `agent:name`, on the desktop and the phone from the agent list:
+
+```sh
+agenthost agent add claude work --config-dir ~/.claude-work
+agenthost agent list                          # shows the login command if needed
+agenthost run ~/code/myproject claude:work "Summarise this repo"
+```
+
+A profile's folder is writable only to sessions that use it and hidden from
+every other session, like the other agents' logins.
+
 To install the host as a login service plus the CLI and desktop app (macOS or
 Linux), run `scripts/install.sh --relay wss://<your-relay>`; run it again after
 pulling or changing code to rebuild and restart everything. `--uninstall` removes

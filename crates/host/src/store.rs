@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS connectors (
     oauth_meta TEXT,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_profiles (
+    profile_id TEXT PRIMARY KEY,
+    agent TEXT NOT NULL,
+    name TEXT NOT NULL,
+    config_dir TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_profiles_name ON agent_profiles(agent, name COLLATE NOCASE);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_profiles_dir ON agent_profiles(config_dir);
 CREATE TABLE IF NOT EXISTS connector_tool_policy (
     connector_id TEXT NOT NULL REFERENCES connectors(connector_id) ON DELETE CASCADE,
     tool TEXT NOT NULL,
@@ -152,9 +161,24 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
         last_seq: r.get(9)?,
+        profile_id: r.get(10)?,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id";
+
+fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
+    Ok(AgentProfile {
+        profile_id: r.get(0)?,
+        agent: enum_parse(&r.get::<_, String>(1)?)?,
+        name: r.get(2)?,
+        config_dir: r.get(3)?,
+        created_at: r.get(4)?,
+    })
+}
+const PROFILE_COLS: &str = "profile_id, agent, name, config_dir, created_at";
+
+/// Columns added after the first release, for databases created before them.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[("sessions", "profile_id", "TEXT")];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
@@ -271,6 +295,16 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
+        for (table, column, ty) in ADDED_COLUMNS {
+            let has: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
+                params![table, column],
+                |r| r.get(0),
+            )?;
+            if !has {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))?;
+            }
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -408,7 +442,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -419,7 +453,8 @@ impl Store {
                 s.title,
                 s.created_at,
                 s.updated_at,
-                s.last_seq
+                s.last_seq,
+                s.profile_id
             ],
         )?;
         Ok(())
@@ -566,6 +601,46 @@ impl Store {
             .query_map(params![session_id, after_seq, limit as i64], row_event)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    // ---- agent profiles ----
+
+    pub fn profile_insert(&self, p: &AgentProfile) -> Result<()> {
+        self.db().execute(
+            &format!("INSERT INTO agent_profiles ({PROFILE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5)"),
+            params![p.profile_id, enum_str(&p.agent), p.name, p.config_dir, p.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn profile_get(&self, id: &str) -> Result<Option<AgentProfile>> {
+        Ok(self
+            .db()
+            .query_row(
+                &format!("SELECT {PROFILE_COLS} FROM agent_profiles WHERE profile_id = ?1"),
+                params![id],
+                row_profile,
+            )
+            .optional()?)
+    }
+
+    /// Every profile, by agent then name.
+    pub fn profile_list(&self) -> Result<Vec<AgentProfile>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT {PROFILE_COLS} FROM agent_profiles ORDER BY agent, name COLLATE NOCASE"
+        ))?;
+        let rows = st
+            .query_map([], row_profile)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn profile_remove(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .db()
+            .execute("DELETE FROM agent_profiles WHERE profile_id = ?1", params![id])?
+            > 0)
     }
 
     // ---- devices ----
@@ -845,6 +920,7 @@ mod tests {
             session_id: "ses_1".into(),
             workspace_id: "ws_1".into(),
             agent: AgentKind::Fake,
+            profile_id: None,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -855,6 +931,27 @@ mod tests {
         };
         st.session_insert(&s).unwrap();
         (st, "ses_1".into())
+    }
+
+    #[test]
+    fn old_databases_gain_the_profile_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            // A sessions table from before agent profiles.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE sessions (session_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, agent TEXT NOT NULL, state TEXT NOT NULL, state_reason TEXT, acp_session_id TEXT, title TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO sessions VALUES ('ses_old', 'ws_1', 'claude', 'ended', NULL, NULL, NULL, 1, 2, 0);",
+            )
+            .unwrap();
+        }
+        let st = Store::open(&path).unwrap();
+        let s = st.session_get("ses_old").unwrap().unwrap();
+        assert_eq!((s.agent, s.profile_id), (AgentKind::Claude, None));
+        // And opening again is a no-op.
+        drop(st);
+        Store::open(&path).unwrap();
     }
 
     #[test]

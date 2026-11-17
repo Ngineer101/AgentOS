@@ -52,6 +52,25 @@ impl AgentKind {
         })
     }
 
+    /// The setting that points the agent at a profile's config folder, and
+    /// what the folder becomes. `None`: profiles are not possible for this
+    /// agent on this system.
+    pub fn profile_env(&self) -> Option<&'static str> {
+        Some(match self {
+            AgentKind::Claude => "CLAUDE_CONFIG_DIR",
+            AgentKind::Codex => "CODEX_HOME",
+            // The folder is Gemini's home: its state goes in `<folder>/.gemini`.
+            AgentKind::Gemini => "GEMINI_CLI_HOME",
+            // Login and history in `<folder>/opencode`.
+            AgentKind::Opencode => "XDG_DATA_HOME",
+            // Linux: login in `<folder>/cursor/auth.json`. On macOS Cursor
+            // keeps its login under the home folder, which no setting moves.
+            AgentKind::Cursor if cfg!(target_os = "macos") => return None,
+            AgentKind::Cursor => "XDG_CONFIG_HOME",
+            AgentKind::Fake => "FAKE_AGENT_HOME",
+        })
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             AgentKind::Codex => "Codex",
@@ -86,6 +105,49 @@ pub struct AgentStatus {
     /// The command that fixes `problem`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
+    /// Which account of this agent the entry is about: the agent's name
+    /// (`"claude"`) for its default login, or an [`AgentProfile`] id. Hosts
+    /// before profiles leave it out (one entry per agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// The profile's name ("Work"); `None` for the default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_name: Option<String>,
+    /// The profile's config folder; `None` for the default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
+}
+
+impl AgentStatus {
+    /// "Claude Code" for the default login, "Claude Code · Work" for a profile.
+    pub fn label(&self) -> String {
+        match &self.profile_name {
+            Some(n) => format!("{} · {n}", self.display_name),
+            None => self.display_name.clone(),
+        }
+    }
+}
+
+/// A second (third, …) login of an agent: its own config folder, so each
+/// subscription keeps its own credentials and history. The folder is what the
+/// agent's own setting points at (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …; see
+/// [`AgentKind::profile_env`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentProfile {
+    pub profile_id: String,
+    pub agent: AgentKind,
+    pub name: String,
+    /// Absolute, symlinks resolved.
+    pub config_dir: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentProfileAddParams {
+    pub agent: AgentKind,
+    pub name: String,
+    /// The agent's config folder; `~/` is expanded. Must exist.
+    pub config_dir: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +354,9 @@ pub struct Session {
     pub session_id: String,
     pub workspace_id: String,
     pub agent: AgentKind,
+    /// The [`AgentProfile`] the session runs as; `None` for the agent's default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     pub state: SessionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_reason: Option<String>,
@@ -546,7 +611,8 @@ pub struct IdParams {
         alias = "workspace_id",
         alias = "session_id",
         alias = "connector_id",
-        alias = "device_id"
+        alias = "device_id",
+        alias = "profile_id"
     )]
     pub id: String,
 }
@@ -564,6 +630,10 @@ pub struct SessionListParams {
 pub struct SessionCreateParams {
     pub workspace_id: String,
     pub agent: AgentKind,
+    /// Run as this [`AgentProfile`] of `agent` (from `host.info`'s
+    /// `agents[].profile_id`). Omitted, or the agent's own name: the default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
 }

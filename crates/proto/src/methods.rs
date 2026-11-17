@@ -35,6 +35,12 @@ pub const CONNECTOR_REMOVE: &str = "connector.remove";
 pub const CONNECTOR_SIGN_IN: &str = "connector.sign_in";
 pub const CONNECTOR_REFRESH: &str = "connector.refresh";
 
+/// Agent profiles: extra logins of an agent, each with its own config folder.
+/// `host.info` lists them too (one `agents` entry per login).
+pub const AGENT_PROFILE_LIST: &str = "agent.profile_list";
+pub const AGENT_PROFILE_ADD: &str = "agent.profile_add";
+pub const AGENT_PROFILE_REMOVE: &str = "agent.profile_remove";
+
 pub const DEVICE_LIST: &str = "device.list";
 pub const DEVICE_PAIR_START: &str = "device.pair_start";
 pub const DEVICE_PAIR_CONFIRM: &str = "device.pair_confirm";
@@ -114,14 +120,16 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     use Capability::*;
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
-        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS => Read,
+        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
-        | DEVICE_PAIR_START | DEVICE_PAIR_CONFIRM | DEVICE_RENAME | DEVICE_REVOKE => Admin,
+        | DEVICE_PAIR_START | DEVICE_PAIR_CONFIRM | DEVICE_RENAME | DEVICE_REVOKE
+        // A profile's folder becomes writable inside every session that uses it.
+        | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE => Admin,
         _ => return None,
     })
 }
@@ -142,6 +150,8 @@ mod tests {
             CONNECTOR_REMOVE,
             DEVICE_PAIR_START,
             DEVICE_REVOKE,
+            AGENT_PROFILE_ADD,
+            AGENT_PROFILE_REMOVE,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }
@@ -157,6 +167,7 @@ mod tests {
             VOICE_STATUS,
             VOICE_DOWNLOAD,
             VOICE_TRANSCRIBE,
+            AGENT_PROFILE_LIST,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

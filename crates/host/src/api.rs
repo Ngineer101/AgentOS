@@ -271,6 +271,14 @@ impl Conn {
             }
             m::HOST_INFO | m::HOST_CHECK => to_value(h.info()),
 
+            m::AGENT_PROFILE_LIST => to_value(h.ctx.store.profile_list().map_err(internal)?),
+            m::AGENT_PROFILE_ADD => to_value(crate::profiles::add(&h, params(p)?)?),
+            m::AGENT_PROFILE_REMOVE => {
+                let id: IdParams = params(p)?;
+                crate::profiles::remove(&h, &id.id)?;
+                Ok(json!({"removed": true}))
+            }
+
             m::WORKSPACE_LIST => to_value(h.ctx.store.workspace_list().map_err(internal)?),
             m::WORKSPACE_ADD => to_value(workspace_add(&h, params(p)?)?),
             m::WORKSPACE_UPDATE => to_value(workspace_update(&h, params(p)?)?),
@@ -575,6 +583,14 @@ fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcError>
         if path.starts_with(home.join(secret)) {
             return Err(RpcError::invalid_params(format!(
                 "refusing to use a secrets folder (~/{secret}) as a workspace"
+            )));
+        }
+    }
+    for dir in crate::profiles::folders(h) {
+        if crate::profiles::overlaps(&path, &dir) {
+            return Err(RpcError::invalid_params(format!(
+                "a workspace may not contain or be inside an agent profile's config folder ({})",
+                dir.display()
             )));
         }
     }

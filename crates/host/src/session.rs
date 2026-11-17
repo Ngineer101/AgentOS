@@ -130,11 +130,34 @@ impl SessionManager {
                 "the fake agent is not enabled on this host",
             ));
         }
+        // The agent's own name stands for its default login.
+        let profile_id = match p.profile_id.as_deref() {
+            None => None,
+            Some(id) if id == p.agent.as_str() => None,
+            Some(id) => {
+                let prof = self
+                    .ctx
+                    .store
+                    .profile_get(id)
+                    .map_err(|e| RpcError::internal(e.to_string()))?
+                    .ok_or_else(|| RpcError::not_found(format!("no agent profile {id}")))?;
+                if prof.agent != p.agent {
+                    return Err(RpcError::invalid_params(format!(
+                        "profile {} ({}) is not a {} profile",
+                        prof.name,
+                        prof.agent.display_name(),
+                        p.agent.display_name()
+                    )));
+                }
+                Some(prof.profile_id)
+            }
+        };
         let now = now_ms();
         let s = Session {
             session_id: crate::util::new_id("ses"),
             workspace_id: ws.workspace_id.clone(),
             agent: p.agent,
+            profile_id: profile_id.clone(),
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -149,7 +172,7 @@ impl SessionManager {
             .map_err(|e| RpcError::internal(e.to_string()))?;
         // Creation is the first `session.state` event.
         self.ctx
-            .append(&s.session_id, EventType::SessionState, json!({"state": "created", "agent": p.agent, "workspace_id": ws.workspace_id, "by": origin}))
+            .append(&s.session_id, EventType::SessionState, json!({"state": "created", "agent": p.agent, "profile_id": profile_id, "workspace_id": ws.workspace_id, "by": origin}))
             .map_err(|e| RpcError::internal(e.to_string()))?;
         let s = self
             .ctx
@@ -480,6 +503,23 @@ enum Exit {
     Shutdown,
 }
 
+/// The session's agent spec: its profile's login (if it has one and the
+/// profile still exists), with every other profile's folder to hide.
+fn session_spec(ctx: &Ctx, session: &Session) -> AgentSpec {
+    let profiles = ctx.store.profile_list().unwrap_or_default();
+    let own = session
+        .profile_id
+        .as_deref()
+        .and_then(|id| profiles.iter().find(|p| p.profile_id == id));
+    let mut spec = agents::spec_for(session.agent, own, &ctx.cfg);
+    spec.other_logins = profiles
+        .iter()
+        .filter(|p| Some(p.profile_id.as_str()) != session.profile_id.as_deref())
+        .map(|p| PathBuf::from(&p.config_dir))
+        .collect();
+    spec
+}
+
 impl Actor {
     fn new(
         ctx: Arc<Ctx>,
@@ -487,7 +527,7 @@ impl Actor {
         workspace: Workspace,
         rx: mpsc::UnboundedReceiver<Cmd>,
     ) -> Self {
-        let spec = agents::spec(session.agent, &ctx.cfg);
+        let spec = session_spec(&ctx, &session);
         let short = session
             .session_id
             .trim_start_matches("ses_")
@@ -584,7 +624,22 @@ impl Actor {
             None,
         );
 
-        let status = agents::status(self.session.agent, &self.ctx.cfg);
+        if let Some(id) = &self.session.profile_id {
+            if self.spec.profile.is_none() {
+                return Err(StartFailure::new(
+                    format!("the agent profile {id} was removed"),
+                    Value::Null,
+                ));
+            }
+        }
+        if let Some(problem) = &self.spec.profile_problem {
+            return Err(StartFailure::new(problem.clone(), Value::Null));
+        }
+        let status = agents::status_for(
+            self.session.agent,
+            self.spec.profile.as_ref(),
+            &self.ctx.cfg,
+        );
         if !status.installed || (status.problem.is_some() && status.logged_in) {
             return Err(StartFailure::new(
                 status
@@ -622,6 +677,7 @@ impl Actor {
             let wrapper = self.temp_dir.with_extension("codex");
             agents::write_codex_wrapper(
                 &self.ctx.cfg,
+                &self.spec.codex_home(&self.ctx.cfg),
                 &wrapper,
                 std::path::Path::new(&self.workspace.path),
             )?;
@@ -634,7 +690,7 @@ impl Actor {
             // codex-acp starts each thread with this config map; Codex reloads
             // your config.toml for a thread, so the same overrides go here too.
             let thread_cfg = agents::codex_thread_config(
-                &self.ctx.cfg,
+                &self.spec.codex_home(&self.ctx.cfg),
                 std::path::Path::new(&self.workspace.path),
             );
             self.spec
