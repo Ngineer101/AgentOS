@@ -1,5 +1,6 @@
 import AVFoundation
 import PhotosUI
+import Speech
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -223,60 +224,130 @@ enum ComposerFiles {
     }
 }
 
-// MARK: - Voice recording
+// MARK: - Voice input
 
-/// Records 16 kHz mono 16-bit WAV for the host's speech model, with a level
-/// meter. Stops by itself after five minutes or when the recording is
-/// interrupted (`onAutoStop`).
+/// The audio thread's latest input level, read by the main thread's meter.
+private final class LevelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Float = 0
+    func set(_ v: Float) { lock.lock(); value = v; lock.unlock() }
+    func get() -> Float { lock.lock(); defer { lock.unlock() }; return value }
+}
+
+/// iOS's own dictation (the Speech framework), with a level meter and the
+/// text so far while you talk. Recognition stays on the phone where the
+/// device supports it; the host's speech model is not used here. Stops by
+/// itself after five minutes or when the audio is interrupted (`onAutoStop`).
 @MainActor
-final class VoiceRecorder: ObservableObject {
+final class SpeechDictation: ObservableObject {
     nonisolated static let maxDuration: TimeInterval = 5 * 60
     nonisolated static let meterBars = 28
 
-    @Published private(set) var isRecording = false
+    enum Access {
+        case granted
+        /// Why not, for an alert that offers Settings.
+        case denied(String)
+        case unavailable(String)
+    }
+
+    @Published private(set) var isListening = false
+    /// Waiting for the final text after Stop.
+    @Published private(set) var isFinishing = false
     @Published private(set) var elapsed: TimeInterval = 0
     /// Recent levels, 0…1, oldest first.
-    @Published private(set) var levels: [Float] = Array(repeating: 0, count: VoiceRecorder.meterBars)
+    @Published private(set) var levels: [Float] = Array(repeating: 0, count: SpeechDictation.meterBars)
+    /// The recognized text so far.
+    @Published private(set) var text = ""
 
-    /// Called when the time limit is reached or the system stopped the
-    /// recording (a phone call, for example). The view then stops normally.
+    /// Called when the time limit is reached or the system stopped the audio
+    /// (a phone call, for example). The view then stops normally.
     var onAutoStop: (@MainActor () -> Void)?
 
-    private var recorder: AVAudioRecorder?
-    private var fileURL: URL?
+    private let engine = AVAudioEngine()
+    private let level = LevelBox()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var startedAt = Date()
     private var meterTask: Task<Void, Never>?
+    private var finished: CheckedContinuation<Void, Never>?
+    /// Recognition delivered its final result or ended with an error.
+    private var recognitionDone = false
+    /// Counts dictations, so a timeout left from an earlier one is ignored.
+    private var generation = 0
+
+    /// Ask for speech recognition and microphone access (each once).
+    static func requestAccess() async -> Access {
+        var speech = SFSpeechRecognizer.authorizationStatus()
+        if speech == .notDetermined {
+            speech = await withCheckedContinuation { c in
+                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+            }
+        }
+        switch speech {
+        case .authorized: break
+        case .restricted:
+            return .unavailable("Speech recognition is restricted on this iPhone.")
+        default:
+            return .denied("To use voice input, allow Speech Recognition for AgentHost in Settings → AgentHost.")
+        }
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            return .granted
+        case .undetermined:
+            if await AVAudioApplication.requestRecordPermission() { return .granted }
+            fallthrough
+        default:
+            return .denied("To use voice input, allow AgentHost to use the microphone in Settings → AgentHost.")
+        }
+    }
 
     func start() throws {
-        guard !isRecording else { return }
+        guard !isListening, !isFinishing else { return }
+        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
+            throw ComposerError(message: "Dictation is not available right now.")
+        }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .default, options: [])
-        try session.setActive(true)
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-\(UUID().uuidString).wav")
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16_000.0,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
+        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.taskHint = .dictation
+        req.addsPunctuation = true
+        // Keep the audio on the phone when the device can recognize it there.
+        if recognizer.supportsOnDeviceRecognition {
+            req.requiresOnDeviceRecognition = true
+        }
+
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        let box = level
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            req.append(buffer)
+            box.set(Self.level(of: buffer))
+        }
+        engine.prepare()
         do {
-            let r = try AVAudioRecorder(url: url, settings: settings)
-            r.isMeteringEnabled = true
-            guard r.prepareToRecord(), r.record() else {
-                throw ComposerError(message: "Recording could not start.")
-            }
-            recorder = r
+            try engine.start()
         } catch {
-            try? FileManager.default.removeItem(at: url)
+            input.removeTap(onBus: 0)
             deactivateSession()
             throw error
         }
-        fileURL = url
+
+        request = req
+        text = ""
+        recognitionDone = false
+        generation += 1
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            let partial = result?.bestTranscription.formattedString
+            let done = (result?.isFinal ?? false) || error != nil
+            Task { @MainActor in self?.handle(partial, done: done) }
+        }
+        startedAt = Date()
         elapsed = 0
         levels = Array(repeating: 0, count: Self.meterBars)
-        isRecording = true
+        isListening = true
         meterTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -286,30 +357,69 @@ final class VoiceRecorder: ObservableObject {
         }
     }
 
-    /// Stop and hand over the WAV file (the caller deletes it).
-    func stop() -> URL? {
-        guard isRecording else { return nil }
-        recorder?.stop()
-        let url = fileURL
-        reset()
-        return url
+    /// Stop listening and return the final text (empty if nothing was heard).
+    func stop() async -> String {
+        guard isListening else { return "" }
+        stopAudio()
+        isFinishing = true
+        request?.endAudio()
+        if !recognitionDone {
+            // The final result normally follows within a moment; don't wait forever.
+            let current = generation
+            await withCheckedContinuation { c in
+                finished = c
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if self?.generation == current { self?.finish() }
+                }
+            }
+        }
+        let result = text
+        cleanUp()
+        return result
     }
 
-    /// Stop and throw the recording away.
+    /// Stop and throw the text away.
     func cancel() {
-        guard isRecording else { return }
-        recorder?.stop()
-        if let url = fileURL { try? FileManager.default.removeItem(at: url) }
-        reset()
+        guard isListening || isFinishing else { return }
+        stopAudio()
+        task?.cancel()
+        finish()
+        cleanUp()
+        text = ""
     }
 
-    private func reset() {
+    private func handle(_ partial: String?, done: Bool) {
+        if let partial, isListening || isFinishing { text = partial }
+        guard done else { return }
+        recognitionDone = true
+        if isFinishing {
+            finish()
+        } else if isListening {
+            // Recognition ended on its own (an error, or a long silence):
+            // keep what was heard.
+            onAutoStop?()
+        }
+    }
+
+    private func finish() {
+        finished?.resume()
+        finished = nil
+    }
+
+    private func stopAudio() {
         meterTask?.cancel()
         meterTask = nil
-        recorder = nil
-        fileURL = nil
-        isRecording = false
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+        isListening = false
         deactivateSession()
+    }
+
+    private func cleanUp() {
+        task = nil
+        request = nil
+        isFinishing = false
     }
 
     private func deactivateSession() {
@@ -317,22 +427,29 @@ final class VoiceRecorder: ObservableObject {
     }
 
     private func tick() {
-        guard isRecording, let r = recorder else { return }
-        guard r.isRecording else {
-            // Interrupted by the system: keep what was recorded.
+        guard isListening else { return }
+        guard engine.isRunning else {
+            // Interrupted by the system: keep what was heard.
             onAutoStop?()
             return
         }
-        r.updateMeters()
-        let db = r.averagePower(forChannel: 0)
-        // -50 dB (quiet room) … 0 dB (loud) mapped to 0…1.
-        let level = max(0, min(1, (db + 50) / 50))
         levels.removeFirst()
-        levels.append(level)
-        elapsed = r.currentTime
+        levels.append(level.get())
+        elapsed = Date().timeIntervalSince(startedAt)
         if elapsed >= Self.maxDuration {
             onAutoStop?()
         }
+    }
+
+    /// RMS of the first channel, -50 dB (quiet room) … 0 dB (loud) mapped to 0…1.
+    nonisolated private static func level(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+        let n = Int(buffer.frameLength)
+        var sum: Float = 0
+        for i in 0..<n { sum += samples[i] * samples[i] }
+        let rms = (sum / Float(n)).squareRoot()
+        let db = 20 * log10(max(rms, 1e-7))
+        return max(0, min(1, (db + 50) / 50))
     }
 }
 
@@ -419,10 +536,10 @@ struct AttachmentChip: View {
     }
 }
 
-/// Replaces the prompt row while recording or transcribing.
-struct RecordingStrip: View {
-    @ObservedObject var recorder: VoiceRecorder
-    let transcribing: Bool
+/// Replaces the prompt row while dictating: the text so far, a level meter
+/// until there is text, and the time.
+struct DictationStrip: View {
+    @ObservedObject var dictation: SpeechDictation
     var onCancel: @MainActor () -> Void
     var onStop: @MainActor () -> Void
 
@@ -434,22 +551,32 @@ struct RecordingStrip: View {
                 Image(systemName: "trash")
                     .font(.title3)
             }
-            .disabled(transcribing)
-            .accessibilityLabel("Discard recording")
+            .disabled(dictation.isFinishing)
+            .accessibilityLabel("Discard dictation")
 
             HStack(spacing: 8) {
-                if transcribing {
+                if dictation.isFinishing {
                     ProgressView().controlSize(.small)
-                    Text("Transcribing…")
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
                 } else {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 8, height: 8)
                     Text(timeText)
                         .font(.body.monospacedDigit())
-                    LevelMeter(levels: recorder.levels)
+                }
+                if dictation.text.isEmpty {
+                    if dictation.isFinishing {
+                        Text("Finishing…").foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    } else {
+                        LevelMeter(levels: dictation.levels)
+                    }
+                } else {
+                    // The newest words, cut at the start.
+                    Text(dictation.text)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             .padding(.horizontal, 14)
@@ -461,20 +588,20 @@ struct RecordingStrip: View {
                     .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
             )
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(transcribing ? "Transcribing" : "Recording, \(timeText)")
+            .accessibilityLabel(dictation.isFinishing ? "Finishing dictation" : "Dictating, \(timeText)")
 
             Button {
                 onStop()
             } label: {
                 Image(systemName: "checkmark.circle.fill").font(.title)
             }
-            .disabled(transcribing)
-            .accessibilityLabel("Stop recording and transcribe")
+            .disabled(dictation.isFinishing)
+            .accessibilityLabel("Stop dictation")
         }
     }
 
     private var timeText: String {
-        let s = Int(recorder.elapsed)
+        let s = Int(dictation.elapsed)
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 }

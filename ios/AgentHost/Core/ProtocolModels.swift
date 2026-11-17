@@ -17,15 +17,12 @@ enum RPC {
     static let approvalList = "approval.list"
     static let approvalRespond = "approval.respond"
     static let deviceList = "device.list"
-    static let voiceStatus = "voice.status"
-    static let voiceDownload = "voice.download"
 
     // Notifications (host -> client)
     static let nEvent = "event"
     static let nSessionDelta = "session.delta"
     static let nSessionChanged = "session.changed"
     static let nDeviceRevoked = "device.revoked"
-    static let nVoiceChanged = "voice.changed"
 
     /// Hosts on this protocol version or newer take attachments
     /// (`upload.*`, `session.prompt` `attachments`) and voice input (`voice.*`).
@@ -293,36 +290,7 @@ struct AttachmentInfo: Codable, Hashable, Identifiable {
     }
 }
 
-/// The host's speech-to-text model (`voice.status`, `voice.download`, and
-/// the `voice.changed` notification).
-struct VoiceStatusModel: Codable, Equatable {
-    struct Progress: Codable, Equatable {
-        var received: Int64
-        var total: Int64
-
-        var fraction: Double {
-            total > 0 ? min(1, Double(received) / Double(total)) : 0
-        }
-    }
-
-    var model: String
-    var downloadBytes: Int64
-    var ready: Bool
-    /// Present while downloading.
-    var progress: Progress?
-    /// Why the last download or load failed.
-    var error: String?
-
-    var isDownloading: Bool { !ready && progress != nil }
-
-    enum CodingKeys: String, CodingKey {
-        case model
-        case downloadBytes = "download_bytes"
-        case ready, progress, error
-    }
-}
-
-/// "1.2 MB", for attachment sizes and the speech model download.
+/// "1.2 MB", for attachment sizes.
 func formatBytes(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
 }
@@ -369,18 +337,6 @@ extension AgentHostError {
             return "Not connected."
         }
     }
-}
-
-/// `voice.transcribe` failed because the host has no speech model yet
-/// (`-32006` with `{"needs_download": true}`).
-func isVoiceModelMissing(_ error: Error) -> Bool {
-    guard let e = error as? AgentHostError,
-          case let .Rpc(code, _, dataJson) = e,
-          code == protocolConstants().errorUnavailable,
-          let text = dataJson,
-          let data = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
-    else { return false }
-    return data["needs_download"].bool == true
 }
 
 func userMessage(for error: Error) -> String {

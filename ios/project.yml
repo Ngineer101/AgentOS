@@ -32,6 +32,7 @@ targets:
       - sdk: Security.framework
       - sdk: LocalAuthentication.framework
       - sdk: AVFoundation.framework
+      - sdk: Speech.framework
       - sdk: Network.framework
     info:
       path: AgentHost/Info.plist
@@ -46,7 +47,8 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSCameraUsageDescription: AgentHost uses the camera to scan the pairing QR code shown on your computer.
-        NSMicrophoneUsageDescription: AgentHost records your voice to turn it into text on your computer.
+        NSMicrophoneUsageDescription: AgentHost listens to your voice to turn it into text for your prompts.
+        NSSpeechRecognitionUsageDescription: AgentHost uses iOS dictation to turn your voice into text, on this iPhone where it can.
         NSFaceIDUsageDescription: AgentHost asks for Face ID before showing your sessions and releasing this device's key.
         ITSAppUsesNonExemptEncryption: false
     settings:

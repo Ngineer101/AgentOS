@@ -16,19 +16,14 @@ struct SessionView: View {
     @FocusState private var promptFocused: Bool
     @Environment(\.openURL) private var openURL
 
-    // Attachments and voice input (protocol 2 hosts).
+    // Attachments (protocol 2 hosts) and voice input (iOS dictation).
     @StateObject private var composer = ComposerModel()
-    @StateObject private var recorder = VoiceRecorder()
+    @StateObject private var dictation = SpeechDictation()
     @State private var showPhotoPicker = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
-    @State private var transcribing = false
-    @State private var confirmVoiceDownload = false
-    @State private var micDenied = false
-    /// The user asked for the speech model in this screen: show its progress
-    /// and errors, and a short notice when it is ready.
-    @State private var voiceDownloadRequested = false
-    @State private var voiceNotice: String?
+    /// Why voice input can't start, for an alert that offers Settings.
+    @State private var voiceAccessProblem: String?
 
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
@@ -155,29 +150,17 @@ struct SessionView: View {
                 .environmentObject(model)
         }
         .onAppear { model.open(sessionId) }
-        .onDisappear { recorder.cancel() }
-        .alert("Download the speech model?", isPresented: $confirmVoiceDownload) {
-            Button("Download") { startVoiceDownload() }
-            Button("Not now", role: .cancel) {}
-        } message: {
-            Text(voiceDownloadMessage)
-        }
-        .alert("Microphone Access Is Off", isPresented: $micDenied) {
+        .onDisappear { dictation.cancel() }
+        .alert("Voice Input Is Off", isPresented: Binding(
+            get: { voiceAccessProblem != nil },
+            set: { if !$0 { voiceAccessProblem = nil } }
+        )) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("To use voice input, allow AgentHost to use the microphone in Settings → AgentHost.")
-        }
-        .onChange(of: model.voice?.ready) { old, new in
-            guard voiceDownloadRequested, new == true, old != true else { return }
-            voiceDownloadRequested = false
-            voiceNotice = "Speech model ready. Tap the microphone to talk."
-            Task {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                voiceNotice = nil
-            }
+            Text(voiceAccessProblem ?? "")
         }
     }
 
@@ -185,16 +168,14 @@ struct SessionView: View {
 
     private var promptBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            voiceStatusLine
             if !composer.attachments.isEmpty {
                 AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
             }
-            if recorder.isRecording || transcribing {
-                RecordingStrip(
-                    recorder: recorder,
-                    transcribing: transcribing,
-                    onCancel: { cancelRecording() },
-                    onStop: { stopRecording() }
+            if dictation.isListening || dictation.isFinishing {
+                DictationStrip(
+                    dictation: dictation,
+                    onCancel: { cancelDictation() },
+                    onStop: { stopDictation() }
                 )
             } else {
                 promptRow
@@ -264,17 +245,16 @@ struct SessionView: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
                 )
-            if model.hostSupportsMedia {
-                Button {
-                    micTapped()
-                } label: {
-                    Image(systemName: "mic")
-                        .font(.title3)
-                        .frame(width: 28, height: 36)
-                }
-                .disabled(!canPrompt || model.voice?.isDownloading == true)
-                .accessibilityLabel("Dictate")
+            // iOS dictation on the phone: works with any host.
+            Button {
+                micTapped()
+            } label: {
+                Image(systemName: "mic")
+                    .font(.title3)
+                    .frame(width: 28, height: 36)
             }
+            .disabled(!canPrompt)
+            .accessibilityLabel("Dictate")
             if SessionStateName.isBusy(session?.state ?? "") && draft.isEmpty && composer.attachments.isEmpty {
                 Button {
                     Task { await run { try await model.cancel(sessionId) } }
@@ -302,45 +282,6 @@ struct SessionView: View {
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.ready.isEmpty
     }
 
-    /// Speech model download progress, its failure, or "ready".
-    @ViewBuilder
-    private var voiceStatusLine: some View {
-        if let v = model.voice, v.isDownloading {
-            let fraction = v.progress?.fraction ?? 0
-            HStack(spacing: 8) {
-                ProgressView(value: fraction)
-                    .frame(width: 60)
-                Text("Downloading speech model… \(Int(fraction * 100))%")
-                    .monospacedDigit()
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        } else if let notice = voiceNotice {
-            Label(notice, systemImage: "checkmark.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else if voiceDownloadRequested, let v = model.voice, !v.ready {
-            if let err = v.error {
-                Text("Speech model download failed: \(err)")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.mini)
-                    Text("Downloading speech model…")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var voiceDownloadMessage: String {
-        let name = model.voice?.model ?? "NVIDIA Nemotron 3.5 ASR"
-        let size = formatBytes(model.voice?.downloadBytes ?? 475_271_763)
-        return "Voice input turns speech into text on your computer with \(name) (\(size), downloaded once to the computer, not this phone)."
-    }
-
     @MainActor
     private func reportSkipped(_ count: Int) {
         if count > 0 {
@@ -349,84 +290,45 @@ struct SessionView: View {
     }
 
     @MainActor
-    private func startVoiceDownload() {
-        voiceDownloadRequested = true
-        Task {
-            do {
-                try await model.downloadVoiceModel()
-            } catch {
-                voiceDownloadRequested = false
-                actionError = userMessage(for: error)
-            }
-        }
-    }
-
-    @MainActor
     private func micTapped() {
-        if let v = model.voice, !v.ready {
-            if !v.isDownloading { confirmVoiceDownload = true }
-            return
-        }
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            startRecording()
-        case .undetermined:
-            Task {
-                if await AVAudioApplication.requestRecordPermission() {
-                    startRecording()
-                } else {
-                    micDenied = true
-                }
+        Task {
+            switch await SpeechDictation.requestAccess() {
+            case .granted:
+                startDictation()
+            case let .denied(why):
+                voiceAccessProblem = why
+            case let .unavailable(why):
+                actionError = why
             }
-        default:
-            micDenied = true
         }
     }
 
     @MainActor
-    private func startRecording() {
-        guard canPrompt, !recorder.isRecording, !transcribing else { return }
-        recorder.onAutoStop = { stopRecording() }
+    private func startDictation() {
+        guard canPrompt, !dictation.isListening, !dictation.isFinishing else { return }
+        dictation.onAutoStop = { stopDictation() }
         do {
-            try recorder.start()
+            try dictation.start()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             actionError = nil
         } catch {
-            actionError = "Recording failed: \(userMessage(for: error))"
+            actionError = "Dictation failed: \(userMessage(for: error))"
         }
     }
 
     @MainActor
-    private func cancelRecording() {
-        recorder.cancel()
+    private func cancelDictation() {
+        dictation.cancel()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
-    /// Stop, transcribe on the host, and add the text to the draft.
+    /// Stop, and add the recognized text to the draft.
     @MainActor
-    private func stopRecording() {
-        guard let url = recorder.stop() else { return }
+    private func stopDictation() {
+        guard dictation.isListening else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        transcribing = true
         Task {
-            var text = ""
-            var failure: Error?
-            do {
-                text = try await model.transcribe(wavAt: url)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                failure = error
-            }
-            try? FileManager.default.removeItem(at: url)
-            transcribing = false
-            if let failure {
-                if isVoiceModelMissing(failure) {
-                    confirmVoiceDownload = true
-                } else {
-                    actionError = "Transcription failed: \(userMessage(for: failure))"
-                }
-                return
-            }
+            let text = await dictation.stop().trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty {
                 actionError = "No speech was recognized."
             } else {

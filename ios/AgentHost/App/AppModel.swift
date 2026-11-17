@@ -117,8 +117,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var cachedAt: Date?
     /// The host's protocol version from `hello` on the last connection.
     @Published private(set) var hostProtocolVersion: UInt32?
-    /// The host's speech model (protocol 2 hosts), kept current by `voice.changed`.
-    @Published private(set) var voice: VoiceStatusModel?
 
     // MARK: Private state
 
@@ -281,7 +279,6 @@ final class AppModel: ObservableObject {
         streaming = [:]
         outbox = []
         hostProtocolVersion = nil
-        voice = nil
         watched = []
         subscribed = []
         subscriptionIds = [:]
@@ -410,7 +407,6 @@ final class AppModel: ObservableObject {
     /// Snapshot everything, re-subscribe, and resend unacknowledged prompts.
     private func didConnect() async {
         await refreshAll()
-        await refreshVoice()
         let live = sessions.filter { !SessionStateName.isTerminal($0.state) }.map(\.sessionId)
         for sid in watched.union(live) {
             await subscribe(sid)
@@ -445,21 +441,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: Attachments and voice
-
-    func refreshVoice() async {
-        guard link.isOnline, hostSupportsMedia else { return }
-        if let v: VoiceStatusModel = try? await call(RPC.voiceStatus, [:]) {
-            voice = v
-        }
-    }
-
-    /// Start the one-time speech model download on the host; progress
-    /// arrives as `voice.changed`.
-    func downloadVoiceModel() async throws {
-        let v: VoiceStatusModel = try await call(RPC.voiceDownload, [:])
-        voice = v
-    }
+    // MARK: Attachments
 
     /// Send a local file to the host for the next prompt. The file is read
     /// during the call, so a temporary copy can be deleted afterwards.
@@ -467,13 +449,6 @@ final class AppModel: ObservableObject {
         guard let c = client else { throw AgentHostError.NotConnected }
         let text = try await c.uploadFile(path: url.path(percentEncoded: false), name: name, mime: mime)
         return try JSONDecoder().decode(AttachmentInfo.self, from: Data(text.utf8))
-    }
-
-    /// Turn a WAV recording into text with the host's speech model (on the
-    /// user's computer, not this phone).
-    func transcribe(wavAt url: URL) async throws -> String {
-        guard let c = client else { throw AgentHostError.NotConnected }
-        return try await c.transcribeWavFile(path: url.path(percentEncoded: false), language: nil)
     }
 
     // MARK: Calls
@@ -623,9 +598,6 @@ final class AppModel: ObservableObject {
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
         case RPC.nDeviceRevoked:
             deviceRemoved()
-        case RPC.nVoiceChanged:
-            guard let v = try? JSONDecoder().decode(VoiceStatusModel.self, from: data) else { return }
-            voice = v
         default:
             break
         }
