@@ -1,0 +1,25 @@
+crates/host/src/api.rs
+  s_65a57b5daee9b2::t_056259d6012e60 589-597
+crates/host/src/mcp.rs
+  s_65a57b5daee9b2::t_223a83cd7369e4 1188-1200
+crates/host/tests/m5_gateway.rs
+  s_65a57b5daee9b2::t_3581ea6dcb1c4c 40-43
+desktop/src/view.rs
+  s_65a57b5daee9b2::t_158904197752d1 683
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74bd7f65b0348a8e1dc7f58847032877b4386dbb",
+  "prompts": {},
+  "sessions": {
+    "s_65a57b5daee9b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_65a57b5daee9b2",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
