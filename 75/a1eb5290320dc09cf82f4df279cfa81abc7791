@@ -1,0 +1,35 @@
+ios/AgentHost/App/AppModel.swift
+  s_72bf7af772c11c::t_7e33a655c9f459 50-51,118-121,148-153,281-282,362,364,399,434-464,522,524-530,550-553,555,611-613
+ios/AgentHost/Core/MarkdownBlocks.swift
+  s_72bf7af772c11c::t_90cf2d4955839e 1-585
+ios/AgentHost/Core/ProtocolModels.swift
+  s_72bf7af772c11c::t_70d18b195e548e 20-21,28-36,264-329,374-385
+ios/AgentHost/Core/Transcript.swift
+  s_72bf7af772c11c::t_40f56113f61486 68,80,118-124
+ios/AgentHost/Views/Composer.swift
+  s_72bf7af772c11c::t_8dfe1995330cce 1-520
+ios/AgentHost/Views/MarkdownView.swift
+  s_72bf7af772c11c::t_857e51fa664b8d 1-229
+ios/AgentHost/Views/SessionView.swift
+  s_72bf7af772c11c::t_87f2e078d0b1b3 1-2,4-5,17-31,158-181,184-185,187-232,234-253,267-278,288,290,294,298-441,471,473-484,496-497,659-660,663-664,667-680,743-744,757-767
+ios/README.md
+  s_72bf7af772c11c::t_3da43f76083f3a 10-12,76-77,101-102
+ios/project.yml
+  s_72bf7af772c11c::t_c6c8cb36880c05 49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75a1eb5290320dc09cf82f4df279cfa81abc7791",
+  "prompts": {},
+  "sessions": {
+    "s_72bf7af772c11c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b454351b-38cb-4d80-b377-3af8be941536",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
