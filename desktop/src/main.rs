@@ -1,6 +1,7 @@
 //! agenthost desktop app: the full control surface, over the host's Unix socket.
 
 mod audio;
+mod brand;
 mod bridge;
 mod demo;
 mod model;
@@ -64,5 +65,8 @@ pub(crate) fn app() -> rune::App<App> {
 }
 
 fn main() {
+    if let Err(e) = rune::set_app_icon(brand::APP_ICON_PNG) {
+        eprintln!("app icon: {e}");
+    }
     app().run();
 }

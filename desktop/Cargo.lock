@@ -159,6 +159,7 @@ dependencies = [
  "agenthost-host",
  "agenthost-proto",
  "cpal",
+ "png 0.17.16",
  "qrcode",
  "rune",
  "rune-kit",

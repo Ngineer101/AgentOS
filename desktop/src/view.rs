@@ -1168,7 +1168,18 @@ fn host_screen(s: &App, k: &Kit) -> El {
     let rerun = row().child(button("Re-run checks", k, ButtonVariant::Contrast, |s: &mut App| s.call(Tag::HostInfo, m::HOST_CHECK, json!({}))));
     scroll_page(
         page(k, "host")
-            .child(muted(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version), k))
+            .child(
+                row()
+                    .gap(12.0)
+                    .center_y()
+                    .child(el().w(44.0).h(44.0).pixels(crate::brand::logo()))
+                    .child(
+                        col()
+                            .gap(2.0)
+                            .child(heading("AgentHost", k))
+                            .child(muted(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version), k)),
+                    ),
+            )
             .child(rerun)
             .child(sandbox)
             .child(agents)

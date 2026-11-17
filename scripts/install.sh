@@ -12,7 +12,7 @@
 # Installs:
 #   ~/.local/bin/agenthostd, ~/.local/bin/agenthost
 #   macOS: ~/Applications/AgentHost.app, launch agent ~/Library/LaunchAgents/dev.agenthost.host.plist
-#   Linux: ~/.local/bin/agenthost-desktop, ~/.local/share/applications/agenthost.desktop,
+#   Linux: ~/.local/bin/agenthost-desktop, ~/.local/share/applications/agenthost.desktop (+ icon),
 #          systemd user service ~/.config/systemd/user/agenthost.service
 # The host starts at login and restarts if it crashes. Log: <data dir>/logs/host.log
 # The relay comes from --relay, else AGENTHOST_RELAY_URL, else the last install, else
@@ -48,6 +48,7 @@ elif [[ "$os" == Linux ]]; then
   unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
   unit="$unit_dir/agenthost.service"
   desktop_file="${XDG_DATA_HOME:-$HOME/.local/share}/applications/agenthost.desktop"
+  icon_file="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps/agenthost.png"
 else
   echo "unsupported OS: $os (macOS and Linux only)" >&2; exit 1
 fi
@@ -125,7 +126,7 @@ if [[ "$mode" == uninstall ]]; then
     rm -rf "$app"
   else
     systemctl --user disable agenthost.service 2>/dev/null || true
-    rm -f "$unit" "$desktop_file" "$bin_dir/agenthost-desktop"
+    rm -f "$unit" "$desktop_file" "$icon_file" "$bin_dir/agenthost-desktop"
     systemctl --user daemon-reload 2>/dev/null || true
   fi
   rm -f "$bin_dir/agenthostd" "$bin_dir/agenthost" "$relay_file"
@@ -178,7 +179,8 @@ run_args=("$bin_dir/agenthostd" run)
 
 if [[ "$os" == Darwin ]]; then
   echo "==> installing $app"
-  mkdir -p "$app/Contents/MacOS"
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+  cp "$root/desktop/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
   put "$root/desktop/target/release/agenthost-desktop" "$app/Contents/MacOS/agenthost-desktop"
   # The desktop looks for agenthostd next to itself before PATH (apps get a bare PATH).
   ln -sfn "$bin_dir/agenthostd" "$app/Contents/MacOS/agenthostd"
@@ -191,6 +193,7 @@ if [[ "$os" == Darwin ]]; then
   <key>CFBundleDisplayName</key><string>AgentHost</string>
   <key>CFBundleIdentifier</key><string>dev.agenthost.desktop</string>
   <key>CFBundleExecutable</key><string>agenthost-desktop</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -202,6 +205,9 @@ if [[ "$os" == Darwin ]]; then
 EOF
   # Ad-hoc signature with a stable identifier, so macOS can attach permissions to the app.
   codesign --force --sign - --identifier dev.agenthost.desktop "$app" >/dev/null 2>&1 || true
+  # Finder and the Dock cache icons: tell Launch Services the bundle changed.
+  touch "$app"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" >/dev/null 2>&1 || true
 
   echo "==> installing launch agent $plist"
   mkdir -p "$(dirname "$plist")"
@@ -233,13 +239,15 @@ EOF
 else
   echo "==> installing desktop app"
   put "$root/desktop/target/release/agenthost-desktop" "$bin_dir/agenthost-desktop"
-  mkdir -p "$(dirname "$desktop_file")"
+  mkdir -p "$(dirname "$desktop_file")" "$(dirname "$icon_file")"
+  cp "$root/desktop/assets/app-icon.png" "$icon_file"
   cat >"$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
 Name=AgentHost
 Comment=Run coding agents on this computer
 Exec=$bin_dir/agenthost-desktop
+Icon=agenthost
 Terminal=false
 Categories=Development;
 EOF

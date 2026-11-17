@@ -69,10 +69,10 @@ struct PrivacyCover: View {
         ZStack {
             Color(uiColor: .systemBackground).ignoresSafeArea()
             VStack(spacing: 12) {
-                Image(systemName: "lock.shield")
-                    .font(.largeTitle)
-                    .imageScale(.large)
-                    .foregroundStyle(.secondary)
+                Image("Logo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
                 Text("AgentHost")
                     .font(.headline)
                     .foregroundStyle(.secondary)
