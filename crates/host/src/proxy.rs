@@ -35,6 +35,17 @@ pub trait ProxyHooks: Send + Sync + 'static {
     fn gateway_socket(&self) -> Option<PathBuf>;
 }
 
+/// Where the proxy is inside the sandbox, as a base URL for the gateway
+/// (`{base}/s/<token>/mcp`). On Linux the sandbox runtime bridges it to a
+/// fixed port; on macOS the sandbox shares the host's loopback.
+pub fn direct_gateway_base(http_port: u16) -> String {
+    if cfg!(target_os = "linux") {
+        "http://127.0.0.1:3128".into()
+    } else {
+        format!("http://127.0.0.1:{http_port}")
+    }
+}
+
 pub struct EgressProxy {
     pub http_port: u16,
     pub socks_port: u16,
@@ -344,6 +355,15 @@ async fn handle_http(mut stream: TcpStream, shared: &Shared) -> Result<()> {
         return Ok(());
     }
 
+    // Origin-form request made to the proxy itself: the MCP gateway, for
+    // agents whose MCP client ignores HTTP_PROXY (see `DIRECT_GATEWAY_URL`).
+    let direct;
+    let target = if target.starts_with("/s/") {
+        direct = format!("http://{GATEWAY_HOST}{target}");
+        direct.as_str()
+    } else {
+        target.as_str()
+    };
     // Absolute-form request: http://host[:port]/path
     let Some(after) = target.strip_prefix("http://") else {
         respond(

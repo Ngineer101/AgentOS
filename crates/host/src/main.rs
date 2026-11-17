@@ -143,6 +143,7 @@ fn install_tools(cfg: &HostConfig) -> Result<()> {
         agents::CODEX_ACP_PACKAGE,
         agents::CLAUDE_ACP_PACKAGE,
         agents::SANDBOX_RUNTIME_PACKAGE,
+        agents::GEMINI_CLI_PACKAGE,
     ];
     println!("Installing into {}:", cfg.tools_dir.display());
     for p in packages {

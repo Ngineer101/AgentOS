@@ -12,6 +12,8 @@ use std::sync::Mutex;
 pub const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp@2.6.0";
 pub const CLAUDE_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp@0.107.0";
 pub const SANDBOX_RUNTIME_PACKAGE: &str = "@anthropic-ai/sandbox-runtime@0.0.83";
+/// Gemini CLI speaks ACP itself (`gemini --acp`).
+pub const GEMINI_CLI_PACKAGE: &str = "@google/gemini-cli@0.68.0";
 /// Oldest OpenCode with a working `opencode acp`.
 pub const OPENCODE_MIN_MAJOR: u32 = 2;
 
@@ -42,7 +44,29 @@ pub struct AgentSpec {
     pub deny_read: Vec<PathBuf>,
     /// Write a host-controlled config folder and point `XDG_CONFIG_HOME` at it.
     pub host_xdg_config: Option<(&'static str, &'static str)>,
+    /// Write a host-controlled file (name, content) and point this env var at it.
+    pub host_config_file: Option<(&'static str, &'static str, &'static str)>,
+    /// Reach the gateway at the proxy's own address rather than through it
+    /// (the agent's MCP client does not use HTTP_PROXY).
+    pub direct_gateway: bool,
+    /// ACP `authenticate` method to call after `initialize`, when the agent
+    /// offers it (agents that refuse `session/new` until told which login to use).
+    pub auth_method: Option<&'static str>,
 }
+
+/// Gemini system settings: they override your own `~/.gemini/settings.json`.
+/// Only the host's gateway as MCP server; no hooks, extensions, skills,
+/// auto-update or usage statistics.
+pub const GEMINI_SYSTEM_SETTINGS: &str = r#"{
+  "general": {"enableAutoUpdate": false, "enableAutoUpdateNotification": false, "enableNotifications": false},
+  "privacy": {"usageStatisticsEnabled": false},
+  "telemetry": {"enabled": false},
+  "mcp": {"allowed": ["agenthost"]},
+  "hooksConfig": {"enabled": false},
+  "skills": {"enabled": false},
+  "admin": {"extensions": {"enabled": false}, "skills": {"enabled": false}},
+  "security": {"folderTrust": {"enabled": false}}
+}"#;
 
 /// Every real agent's credential and state paths, so each sandbox can deny
 /// the other agents' credentials.
@@ -53,7 +77,34 @@ pub fn all_credential_paths(home: &Path) -> Vec<(AgentKind, PathBuf)> {
         (AgentKind::Claude, home.join(".claude.json")),
         (AgentKind::Opencode, home.join(".local/share/opencode")),
         (AgentKind::Opencode, home.join(".config/opencode")),
+        (AgentKind::Cursor, home.join(".config/cursor")),
+        (AgentKind::Cursor, home.join(".cursor")),
+        (AgentKind::Cursor, home.join(CURSOR_STATE)),
+        (AgentKind::Gemini, home.join(".gemini")),
     ]
+}
+
+/// Cursor's config and data folder inside agenthost sessions (instead of
+/// `~/.cursor`, which holds your personal MCP servers, hooks and plugins).
+pub const CURSOR_STATE: &str = ".local/share/agenthost-cursor";
+
+/// First program found: the override env var, then each name on PATH.
+fn find_program(env: &str, names: &[&str]) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os(env) {
+        return Some(PathBuf::from(p));
+    }
+    names
+        .iter()
+        .find_map(|n| find_in_path(n).into_iter().next())
+}
+
+/// The folder holding a binary, with symlinks resolved.
+fn real_parent(program: &Path) -> Vec<PathBuf> {
+    std::fs::canonicalize(program)
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .into_iter()
+        .collect()
 }
 
 fn find_in_path(name: &str) -> Vec<PathBuf> {
@@ -279,6 +330,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
             session_meta: None,
             deny_read: vec![],
             host_xdg_config: None,
+            host_config_file: None,
+            auth_method: None,
+            direct_gateway: false,
         },
         AgentKind::Claude => AgentSpec {
             kind,
@@ -324,6 +378,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
             })),
             deny_read: vec![],
             host_xdg_config: None,
+            host_config_file: None,
+            auth_method: None,
+            direct_gateway: false,
         },
         AgentKind::Opencode => {
             let (program, _) = find_opencode();
@@ -355,6 +412,9 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 session_meta: None,
                 deny_read: vec![home.join(".config/opencode")],
                 host_xdg_config: Some(("opencode/opencode.json", r#"{"$schema":"https://opencode.ai/config.json","autoupdate":false,"share":"disabled","mcp":{},"plugin":[]}"#)),
+                host_config_file: None,
+                auth_method: None,
+                direct_gateway: false,
             }
         }
         AgentKind::Fake => {
@@ -380,6 +440,104 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 session_meta: None,
                 deny_read: vec![],
                 host_xdg_config: None,
+                host_config_file: None,
+                auth_method: None,
+                direct_gateway: false,
+            }
+        }
+        AgentKind::Cursor => {
+            let program = find_program("AGENTHOST_CURSOR_BIN", &["cursor-agent", "agent"])
+                .unwrap_or_else(|| PathBuf::from("cursor-agent"));
+            let state = home.join(CURSOR_STATE);
+            AgentSpec {
+                kind,
+                read_paths: real_parent(&program),
+                program,
+                // Cursor's own sandbox off: ours is the boundary (and nested
+                // namespaces are not allowed inside it).
+                args: vec!["--sandbox".into(), "disabled".into(), "acp".into()],
+                // Login stays in ~/.config/cursor; config and data (chats,
+                // MCP approvals) in a folder of our own.
+                env: vec![
+                    (
+                        "CURSOR_CONFIG_DIR".into(),
+                        state.join("config").display().to_string(),
+                    ),
+                    (
+                        "CURSOR_DATA_DIR".into(),
+                        state.join("data").display().to_string(),
+                    ),
+                ],
+                hosts: vec![
+                    "cursor.sh".into(),
+                    "*.cursor.sh".into(),
+                    "cursor.com".into(),
+                    "*.cursor.com".into(),
+                ],
+                state_paths: vec![home.join(".config/cursor"), state],
+                credential_paths: vec![home.join(".config/cursor/auth.json")],
+                login_fix: "cursor-agent login".into(),
+                install_fix:
+                    "curl https://cursor.com/install -fsS | bash (or set AGENTHOST_CURSOR_BIN)"
+                        .into(),
+                session_mode: None,
+                session_meta: None,
+                // ~/.cursor/mcp.json, hooks.json, plugins and skills.
+                deny_read: vec![home.join(".cursor")],
+                host_xdg_config: None,
+                host_config_file: None,
+                auth_method: Some("cursor_login"),
+                direct_gateway: true,
+            }
+        }
+        AgentKind::Gemini => {
+            let pinned = bin.join("gemini");
+            let program = std::env::var_os("AGENTHOST_GEMINI_BIN")
+                .map(PathBuf::from)
+                .or_else(|| pinned.is_file().then(|| pinned.clone()))
+                .or_else(|| find_in_path("gemini").into_iter().next())
+                .unwrap_or(pinned);
+            let mut read_paths = vec![cfg.tools_dir.clone()];
+            read_paths.extend(install_root(&program));
+            let program_for_fix = program.clone();
+            AgentSpec {
+                kind,
+                program,
+                args: vec![
+                    "--acp".into(),
+                    "--allowed-mcp-server-names".into(),
+                    "agenthost".into(),
+                ],
+                env: vec![("GEMINI_CLI_NO_RELAUNCH".into(), "true".into())],
+                hosts: vec![
+                    "generativelanguage.googleapis.com".into(),
+                    "cloudcode-pa.googleapis.com".into(),
+                    "oauth2.googleapis.com".into(),
+                    "www.googleapis.com".into(),
+                ],
+                state_paths: vec![home.join(".gemini")],
+                read_paths,
+                credential_paths: vec![home.join(".gemini/oauth_creds.json")],
+                login_fix: format!(
+                    "{} (choose \"Sign in with Google\", then quit)",
+                    if find_in_path("gemini").first() == Some(&program_for_fix) {
+                        "gemini".to_string()
+                    } else {
+                        program_for_fix.display().to_string()
+                    }
+                ),
+                install_fix: "agenthostd install-tools".into(),
+                session_mode: None,
+                session_meta: None,
+                deny_read: vec![],
+                host_xdg_config: None,
+                host_config_file: Some((
+                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+                    "gemini/system-settings.json",
+                    GEMINI_SYSTEM_SETTINGS,
+                )),
+                auth_method: Some("oauth-personal"),
+                direct_gateway: true,
             }
         }
     }
@@ -390,7 +548,11 @@ pub fn status(kind: AgentKind, cfg: &HostConfig) -> AgentStatus {
     let s = spec(kind, cfg);
     let installed = s.program.is_file();
     let version = match kind {
-        AgentKind::Opencode | AgentKind::Fake if installed => program_version(&s.program),
+        AgentKind::Opencode | AgentKind::Cursor | AgentKind::Gemini | AgentKind::Fake
+            if installed =>
+        {
+            program_version(&s.program)
+        }
         AgentKind::Codex if installed => {
             Some(CODEX_ACP_PACKAGE.rsplit('@').next().unwrap().to_string())
         }

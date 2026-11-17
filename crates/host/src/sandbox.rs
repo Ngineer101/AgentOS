@@ -535,5 +535,56 @@ mod tests {
         let s = compile_srt(&p, 1, 2);
         assert_eq!(s["network"]["httpProxyPort"], 1);
         assert_eq!(s["network"]["socksProxyPort"], 2);
+        // The new agents' logins are hidden from the others.
+        let p = policy_for(
+            &cfg,
+            &spec,
+            Path::new("/work/repo"),
+            Path::new("/tmp/ah/s1"),
+            &NetworkProfile::default(),
+        );
+        assert!(p
+            .deny_read
+            .contains(&PathBuf::from("/home/u/.config/cursor")));
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.gemini")));
+    }
+
+    #[test]
+    fn cursor_sees_its_login_but_not_your_cursor_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let spec = crate::agents::spec(AgentKind::Cursor, &cfg);
+        let p = policy_for(
+            &cfg,
+            &spec,
+            Path::new("/work/repo"),
+            Path::new("/tmp/ah/s1"),
+            &NetworkProfile::default(),
+        );
+        // ~/.cursor holds your MCP servers, hooks and plugins.
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.cursor")));
+        assert!(p.write.contains(&PathBuf::from("/home/u/.config/cursor")));
+        assert!(!p
+            .deny_read
+            .contains(&PathBuf::from("/home/u/.config/cursor")));
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.codex")));
+        assert!(spec.direct_gateway);
+        assert_eq!(spec.auth_method, Some("cursor_login"));
+
+        let spec = crate::agents::spec(AgentKind::Gemini, &cfg);
+        let p = policy_for(
+            &cfg,
+            &spec,
+            Path::new("/work/repo"),
+            Path::new("/tmp/ah/s1"),
+            &NetworkProfile::default(),
+        );
+        assert!(p.write.contains(&PathBuf::from("/home/u/.gemini")));
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.cursor")));
+        let settings: serde_json::Value =
+            serde_json::from_str(crate::agents::GEMINI_SYSTEM_SETTINGS).unwrap();
+        assert_eq!(settings["mcp"]["allowed"], serde_json::json!(["agenthost"]));
+        assert_eq!(settings["hooksConfig"]["enabled"], false);
     }
 }

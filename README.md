@@ -1,7 +1,8 @@
 # agenthost
 
 *(working name)* A self-hosted agent host. A daemon on your own Linux or macOS
-machine runs **Codex**, **Claude Code** and **OpenCode** on your existing
+machine runs **Codex**, **Claude Code**, **OpenCode**, **Cursor** and
+**Gemini CLI** on your existing
 subscriptions, each session inside an OS sandbox, with approvals on auto
 because the sandbox is the boundary. A desktop app, a command-line client and
 an iOS app control it through one protocol; the phone reaches it through a

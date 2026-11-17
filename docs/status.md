@@ -32,6 +32,8 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Full ACP session (prompt, tool call, resume) | ✅ for Claude Code (prompt, tool call, cancel, resume after host restart with history intact); Codex and OpenCode: prompt, tool call, MCP; resume ❌ not tried |
 | Agents' built-in sandboxes nested in ours | ❌ not tested. Codex's is switched off (ACP mode `agent-full-access`); Claude Code's and OpenCode's are not used. The host's own sandbox is the boundary |
 | Hosts needed for a turn | Codex: `chatgpt.com` ✅. Claude Code: `api.anthropic.com` sufficed (also allowed: `console.anthropic.com`, `claude.ai`, `platform.claude.com`). OpenCode: `opencode.ai`/`models.dev` sufficed for this account's model; it also tries `auth.openai.com` (refused) for an OpenAI login it holds |
+| Cursor completes a turn in the sandbox | ✅ yes (CLI 2026.11.13), with an MCP call through the gateway; `~/.cursor` and `~/.ssh` were unreadable from inside. Resume ❌ not tried |
+| Gemini CLI completes a turn in the sandbox | ❌ not tried: no Google login on the test machine. Installs (0.68.0), reports "not logged in" with the fix, ACP `initialize` checked |
 | Anything on macOS | ❌ |
 
 ## Agent checklist (per agent, Linux)
@@ -121,6 +123,20 @@ is refused. The host listened on no TCP port throughout.
   - OpenCode: `~/.config/opencode` is hidden inside its sandbox and a host
     config is supplied via `XDG_CONFIG_HOME`; project config and Claude Code
     compatibility off.
+  - Cursor: `~/.cursor` (your MCP servers, hooks, plugins, skills) is hidden;
+    `CURSOR_CONFIG_DIR`/`CURSOR_DATA_DIR` point at `~/.local/share/agenthost-cursor`;
+    the login in `~/.config/cursor` stays readable. `--sandbox disabled`,
+    ACP `authenticate` with `cursor_login`.
+  - Gemini CLI: a host-written system settings file (`GEMINI_CLI_SYSTEM_SETTINGS_PATH`,
+    which overrides `~/.gemini/settings.json`) allows only the `agenthost` MCP
+    server and turns off hooks, extensions, skills, auto-update and usage
+    statistics; also `--allowed-mcp-server-names agenthost`. ACP
+    `authenticate` with `oauth-personal`.
+- **Gateway without the proxy.** Cursor's MCP client ignores `HTTP_PROXY`, so
+  Cursor and Gemini get the gateway at the proxy's own address
+  (`http://127.0.0.1:3128/s/<token>/mcp` on Linux, which the sandbox runtime
+  bridges to the session proxy and excludes via `NO_PROXY`); the proxy sends
+  origin-form `/s/…` requests to the gateway.
 - **Streaming.** Chunks go to clients as ephemeral `session.delta`
   notifications; the coalesced text is stored as one `agent.message` when the
   text ends (before a tool call, or at turn end).
@@ -154,5 +170,12 @@ is refused. The host listened on no TCP port throughout.
 - Codex can still read its own stored MCP OAuth tokens in `~/.codex` (its own
   state path); the proxy blocks their hosts.
 - On macOS, Claude Code's login check is a guess (`~/.claude.json` exists).
+- Cursor's blocking extension requests (`cursor/ask_question`,
+  `cursor/create_plan`) are answered "method not found"; they could be passed
+  to the desktop and phone instead.
+- Gemini CLI: only the Google login is detected (`~/.gemini/oauth_creds.json`);
+  an API key login is not offered. Its network hosts are a best guess
+  (`generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`,
+  `oauth2.googleapis.com`, `www.googleapis.com`) until a real turn runs.
 - Not checked: each provider's terms for third-party ACP clients on
   subscription logins (the spec lists this before milestone 2).

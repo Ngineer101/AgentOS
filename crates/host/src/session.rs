@@ -520,6 +520,12 @@ impl Actor {
                 .env
                 .push(("XDG_CONFIG_HOME".into(), dir.display().to_string()));
         }
+        if let Some((var, rel, content)) = self.spec.host_config_file {
+            let file = self.temp_dir.with_extension("cfg").join(rel);
+            std::fs::create_dir_all(file.parent().unwrap())?;
+            std::fs::write(&file, content)?;
+            self.spec.env.push((var.into(), file.display().to_string()));
+        }
         if self.spec.kind == AgentKind::Codex {
             let wrapper = self.temp_dir.with_extension("codex");
             agents::write_codex_wrapper(
@@ -610,6 +616,23 @@ impl Actor {
         let can_load = init["agentCapabilities"]["loadSession"]
             .as_bool()
             .unwrap_or(false);
+        // Agents that need to be told which of their logins to use.
+        if let Some(method) = self.spec.auth_method {
+            let offered = init["authMethods"]
+                .as_array()
+                .map(|m| m.iter().any(|x| x["id"] == method))
+                .unwrap_or(false);
+            if offered {
+                self.call_during_start("authenticate", json!({"methodId": method}))
+                    .await
+                    .map_err(|e| {
+                        StartFailure::new(
+                            format!("{} sign-in failed: {e:#}", self.spec.kind.display_name()),
+                            json!({"fix": self.spec.login_fix}),
+                        )
+                    })?;
+            }
+        }
 
         let mcp_servers = self.mcp_servers();
         let cwd = self.workspace.path.clone();
@@ -676,7 +699,19 @@ impl Actor {
         match self.ctx.gateway.get().and_then(|g| {
             g.register_session(&self.session.session_id, &self.workspace.workspace_id)
         }) {
-            Some(url) => json!([{"type": "http", "name": "agenthost", "url": url, "headers": []}]),
+            Some(mut url) => {
+                if self.spec.direct_gateway {
+                    if let Some(a) = &self.agent {
+                        let base = crate::proxy::direct_gateway_base(a._proxy.http_port);
+                        url = url.replacen(
+                            &format!("http://{}", crate::proxy::GATEWAY_HOST),
+                            &base,
+                            1,
+                        );
+                    }
+                }
+                json!([{"type": "http", "name": "agenthost", "url": url, "headers": []}])
+            }
             None => json!([]),
         }
     }
@@ -1213,9 +1248,12 @@ pub fn is_gateway_tool(title: &str, update: &Value) -> bool {
         || t.starts_with("agenthost.")
         || t.starts_with("agenthost/")
         || t.starts_with("agenthost_")
-        || t.starts_with("agenthost:");
+        || t.starts_with("agenthost:")
+        || t.starts_with("agenthost-")
+        || t.contains("(agenthost");
     let server = update["rawInput"]["server"]
         .as_str()
+        .or(update["rawInput"]["providerIdentifier"].as_str())
         .or(update["_meta"]["server"].as_str())
         == Some("agenthost");
     named || server
@@ -1274,5 +1312,28 @@ fn _assert_send() {
 impl From<StartFailure> for RpcError {
     fn from(f: StartFailure) -> Self {
         RpcError::new(jsonrpc::codes::UNAVAILABLE, f.reason).with_data(f.detail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_tools_by_agent() {
+        let none = json!({});
+        assert!(is_gateway_tool("mcp__agenthost__probe__echo", &none)); // Claude Code
+        assert!(is_gateway_tool("agenthost: magic_word", &none)); // Cursor
+        assert!(is_gateway_tool("agenthost-magic_word: magic_word", &none)); // Cursor (permission)
+        assert!(is_gateway_tool(
+            "MCP: tool",
+            &json!({"rawInput": {"providerIdentifier": "agenthost"}})
+        ));
+        assert!(is_gateway_tool("magic_word (agenthost MCP Server)", &none)); // Gemini CLI
+        assert!(!is_gateway_tool("Shell: ls", &none));
+        assert!(!is_gateway_tool(
+            "MCP: tool",
+            &json!({"rawInput": {"providerIdentifier": "figma"}})
+        ));
     }
 }

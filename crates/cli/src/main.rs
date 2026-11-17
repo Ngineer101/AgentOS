@@ -48,7 +48,7 @@ enum Cmd {
     Run {
         /// Workspace id or folder path.
         workspace: String,
-        /// codex, claude, opencode (or fake, if enabled).
+        /// codex, claude, opencode, cursor, gemini (or fake, if enabled).
         agent: String,
         prompt: String,
         /// End the session afterwards.
@@ -309,7 +309,9 @@ async fn resolve_workspace(c: &Client, s: &str) -> Result<Workspace> {
 }
 
 fn parse_agent(s: &str) -> Result<AgentKind> {
-    AgentKind::parse(s).ok_or_else(|| anyhow!("unknown agent {s:?}; use codex, claude or opencode"))
+    AgentKind::parse(s).ok_or_else(|| {
+        anyhow!("unknown agent {s:?}; use codex, claude, opencode, cursor or gemini")
+    })
 }
 
 fn parse_presets(v: &[String]) -> Result<Vec<NetworkPreset>> {

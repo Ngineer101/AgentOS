@@ -14,18 +14,28 @@ pub enum AgentKind {
     Codex,
     Claude,
     Opencode,
+    Cursor,
+    Gemini,
     /// Scripted ACP agent used for tests. Only offered when the host enables it.
     Fake,
 }
 
 impl AgentKind {
-    pub const REAL: [AgentKind; 3] = [AgentKind::Codex, AgentKind::Claude, AgentKind::Opencode];
+    pub const REAL: [AgentKind; 5] = [
+        AgentKind::Codex,
+        AgentKind::Claude,
+        AgentKind::Opencode,
+        AgentKind::Cursor,
+        AgentKind::Gemini,
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             AgentKind::Codex => "codex",
             AgentKind::Claude => "claude",
             AgentKind::Opencode => "opencode",
+            AgentKind::Cursor => "cursor",
+            AgentKind::Gemini => "gemini",
             AgentKind::Fake => "fake",
         }
     }
@@ -35,6 +45,8 @@ impl AgentKind {
             "codex" => AgentKind::Codex,
             "claude" | "claude-code" | "claude_code" => AgentKind::Claude,
             "opencode" => AgentKind::Opencode,
+            "cursor" | "cursor-agent" | "cursor_agent" => AgentKind::Cursor,
+            "gemini" | "gemini-cli" | "gemini_cli" => AgentKind::Gemini,
             "fake" => AgentKind::Fake,
             _ => return None,
         })
@@ -45,6 +57,8 @@ impl AgentKind {
             AgentKind::Codex => "Codex",
             AgentKind::Claude => "Claude Code",
             AgentKind::Opencode => "OpenCode",
+            AgentKind::Cursor => "Cursor",
+            AgentKind::Gemini => "Gemini CLI",
             AgentKind::Fake => "Fake agent",
         }
     }
