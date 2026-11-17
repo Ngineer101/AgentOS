@@ -39,6 +39,11 @@ agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
 agenthost voice download                      # local speech model for voice input (once)
 ```
 
+To install the host as a login service plus the CLI and desktop app (macOS or
+Linux), run `scripts/install.sh --relay wss://<your-relay>`; run it again after
+pulling or changing code to rebuild and restart everything. `--uninstall` removes
+it and keeps your data. For a throwaway test run instead, use `scripts/dev.sh`.
+
 Remote access: deploy `relay/` to your own Cloudflare account (see
 [relay/README.md](relay/README.md)), start the host with
 `--relay-url wss://<your-relay>`, then `agenthost device pair` shows a QR

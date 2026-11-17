@@ -136,7 +136,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                     waker();
                 };
                 let socket = socket_path();
-                let mut started = false;
+                let mut started = false; // started a host, or saw one running
                 loop {
                     let (client, mut notes) = match Client::connect(&socket).await {
                         Ok(c) => c,
@@ -152,6 +152,9 @@ pub fn start(waker: rune::Waker) -> Bridge {
                             continue;
                         }
                     };
+                    // A host is running (the service, or one we started): after a
+                    // disconnect only reconnect, so a restart doesn't race a second host.
+                    started = true;
                     let client = Arc::new(client);
                     send(FromHost::Connected { host_id: client.hello.host_id.clone() });
                     // Watch the session list for changes.
