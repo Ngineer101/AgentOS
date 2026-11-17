@@ -7,7 +7,7 @@ use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use rune::{col, el, row, text, Color, Cx, El, Icon, ScrollSpec, Tx};
 use rune_kit::shell::{RowStatus, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Kit, Markdown, Switch, TextInput};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown, Switch, TextInput};
 use serde_json::{json, Value};
 
 static PLUS: Icon = Icon {
@@ -30,6 +30,26 @@ static PHONE: Icon = Icon {
     view: 16.0,
     body: r#"<rect x="4.5" y="2" width="7" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M7 11.5H9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
 };
+static CLIP: Icon = Icon {
+    name: "ah-clip",
+    view: 16.0,
+    body: r#"<path d="M13 7.5L8.2 12.3A3 3 0 0 1 4 8.1L9 3.1A2 2 0 0 1 11.8 5.9L7 10.7A1 1 0 0 1 5.6 9.3L10 4.9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};
+static MIC: Icon = Icon {
+    name: "ah-mic",
+    view: 16.0,
+    body: r#"<rect x="6" y="2" width="4" height="8" rx="2" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M3.5 7.5A4.5 4.5 0 0 0 12.5 7.5M8 12V14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};
+static CLOSE: Icon = Icon {
+    name: "ah-close",
+    view: 16.0,
+    body: r#"<path d="M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
+};
+static STOP: Icon = Icon {
+    name: "ah-stop",
+    view: 16.0,
+    body: r#"<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>"#,
+};
 static PULSE: Icon = Icon {
     name: "ah-pulse",
     view: 16.0,
@@ -45,6 +65,9 @@ fn label(t: impl Into<String>, k: &Kit) -> El {
 }
 fn muted(t: impl Into<String>, k: &Kit) -> El {
     text(t.into()).font(k.ty.small).color(k.c.text_muted)
+}
+fn muted_wrap(t: impl Into<String>, k: &Kit) -> El {
+    muted(t, k).wrap()
 }
 fn heading(t: impl Into<String>, k: &Kit) -> El {
     text(t.into()).font(k.ty.body_medium).color(k.c.text_strong)
@@ -291,25 +314,183 @@ fn session_screen(s: &App, id: &str, k: &Kit) -> El {
         .child(badge(state_label(sess.state), sess.state == SessionState::WaitingApproval, k))
         .child(muted(sess.state_reason.clone().unwrap_or_default(), k));
     let composer = if live {
-        col()
-            .key("composer")
-            .w_full()
-            .gap(8.0)
-            .px(16.0)
-            .pb(14.0)
-            .child(
-                TextInput::new(&s.prompt).width(None)
-                    .placeholder("Message the agent — Enter to send")
-                    .large()
-                    .on_edit(|s: &mut App| &mut s.prompt)
-                    .on_submit(|s: &mut App, _: &mut Tx| s.send_prompt())
-                    .build(k),
-            )
-            .child(row().w_full().center_y().child(status).child(el().grow(1.0)).child(actions).child(button("Send", k, ButtonVariant::Submit, |s: &mut App| s.send_prompt())))
+        let mut c = col().key("composer").w_full().gap(8.0).px(16.0).pb(14.0);
+        if let Some(ask) = voice_offer(s, k) {
+            c = c.child(ask);
+        }
+        if let Some(chips) = file_chips(s, id, k) {
+            c = c.child(chips);
+        }
+        let uploading = s.files.get(id).is_some_and(|f| f.iter().any(|f| matches!(f.state, crate::model::FileState::Uploading)));
+        let left = if s.host_has_media() { media_controls(s, k) } else { row() };
+        c.child(
+            TextInput::new(&s.prompt)
+                .width(None)
+                .placeholder("Message the agent — Enter to send")
+                .large()
+                .on_edit(|s: &mut App| &mut s.prompt)
+                .on_submit(|s: &mut App, _: &mut Tx| s.send_prompt())
+                .build(k),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(left)
+                .child(status)
+                .child(el().grow(1.0))
+                .child(actions)
+                .child(Button::new("Send").variant(ButtonVariant::Submit).disabled(uploading).on_press(|s: &mut App| s.send_prompt()).build(k)),
+        )
     } else {
         col().key("composer").w_full().px(16.0).pb(14.0).child(status)
     };
-    col().w_full().grow(1.0).min_h(0.0).child(transcript).child(composer)
+    col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _: &mut Tx| s.attach(files))
+        .child(transcript)
+        .child(composer)
+}
+
+/// Attach and microphone buttons, or the recording strip while recording.
+fn media_controls(s: &App, k: &Kit) -> El {
+    use crate::model::Mic;
+    match &s.mic {
+        Mic::Recording(r) => {
+            let secs = r.seconds();
+            let level = (s.mic_level * 4.0).clamp(0.05, 1.0);
+            row()
+                .key("recording")
+                .gap(8.0)
+                .center_y()
+                .child(IconButton::new(&STOP).variant(IconButtonVariant::Contrast).label("Stop and transcribe").on_press(|s: &mut App| s.mic_press()).build(k))
+                .child(el().w(8.0).h(8.0).radius(4.0).fill(k.c.danger.fg))
+                .child(text(format!("{}:{:02}", secs / 60, secs % 60)).font(k.ty.ui_medium).color(k.c.text_strong))
+                .child(row().w(60.0).h(4.0).radius(2.0).fill(k.c.layer_02).child(el().w(60.0 * level).h(4.0).radius(2.0).fill(k.c.text_base)))
+                .child(button("Discard", k, ButtonVariant::GhostMuted, |s: &mut App| s.mic_cancel()))
+        }
+        Mic::Transcribing => row().key("transcribing").gap(8.0).center_y().child(muted("Transcribing…", k)),
+        Mic::Idle => {
+            let mic_help = match &s.voice {
+                Some(v) if v.ready => "Voice input: click, talk, click again",
+                Some(v) if v.progress.is_some() => "Voice input: the speech model is downloading",
+                _ => "Voice input (downloads a speech model once)",
+            };
+            row()
+                .key("media")
+                .gap(2.0)
+                .center_y()
+                .child(
+                    IconButton::new(&CLIP)
+                        .variant(IconButtonVariant::Ghost)
+                        .label("Attach files")
+                        .on_press_tx(|_: &mut App, tx: &mut Tx| {
+                            let options = rune::FileDialogOptions { title: "Attach a file".into(), ..Default::default() };
+                            tx.open_file(options, |s: &mut App, result, _| match result {
+                                Ok(Some(p)) => s.attach(&[p]),
+                                Ok(None) => {}
+                                Err(e) => s.error = Some(format!("Could not open the file picker: {e}")),
+                            });
+                        })
+                        .build(k),
+                )
+                .child(IconButton::new(&MIC).variant(IconButtonVariant::Ghost).label(mic_help).on_press(|s: &mut App| s.mic_press()).build(k))
+        }
+    }
+}
+
+/// The one-time question before the speech model downloads, then its progress.
+fn voice_offer(s: &App, k: &Kit) -> Option<El> {
+    let v = s.voice.as_ref()?;
+    if let Some(p) = &v.progress {
+        let pct = p.received * 100 / p.total.max(1);
+        return Some(muted(format!("Downloading the speech model for voice input… {pct}% of {} MB", p.total / 1_000_000), k).key("voice-progress"));
+    }
+    if !s.ask_voice_download {
+        return None;
+    }
+    Some(
+        card(k)
+            .key("voice-offer")
+            .child(label("Download the speech model?", k))
+            .child(muted_wrap(
+                format!(
+                    "Voice input turns speech into text on this computer with {} ({} MB, downloaded once). Your recordings never leave your machines. Phones paired with this host use it too.",
+                    v.model,
+                    v.download_bytes / 1_000_000
+                ),
+                k,
+            ))
+            .child(
+                row()
+                    .gap(8.0)
+                    .child(button("Download", k, ButtonVariant::Submit, |s: &mut App| s.download_voice()))
+                    .child(button("Not now", k, ButtonVariant::Ghost, |s: &mut App| s.ask_voice_download = false)),
+            ),
+    )
+}
+
+/// Files waiting to go with the next message.
+fn file_chips(s: &App, id: &str, k: &Kit) -> Option<El> {
+    use crate::model::FileState;
+    let files = s.files.get(id).filter(|f| !f.is_empty())?;
+    let mut r = row().key("files").w_full().gap(6.0).wrap();
+    for f in files {
+        let lid = f.local_id;
+        let (note, color) = match &f.state {
+            FileState::Uploading => ("uploading…".to_string(), k.c.text_faint),
+            FileState::Ready(a) => (human_size(a.size), k.c.text_faint),
+            FileState::Failed(e) => (format!("failed: {e}"), k.c.danger.fg),
+        };
+        r = r.child(
+            row()
+                .key(format!("file-{lid}"))
+                .gap(6.0)
+                .center_y()
+                .pl(10.0)
+                .pr(2.0)
+                .py(2.0)
+                .radius(k.radius.md)
+                .fill(k.c.layer_02)
+                .border(1.0, k.c.border_weak)
+                .child(text(clip(&f.name, 40)).font(k.ty.small).color(k.c.text_strong))
+                .child(text(note).font(k.ty.small).color(color))
+                .child(IconButton::new(&CLOSE).variant(IconButtonVariant::GhostMuted).label("Remove").on_press(move |s: &mut App| s.remove_file(lid)).build(k)),
+        );
+    }
+    Some(r)
+}
+
+/// A prompt bubble's text and attached file names.
+fn prompt_body(p: &Value, k: &Kit) -> Vec<El> {
+    let mut v = vec![];
+    let t = p["text"].as_str().unwrap_or("");
+    if !t.is_empty() {
+        v.push(text(t.to_string()).font(k.ty.body).color(k.c.text_strong).wrap().selectable(true));
+    }
+    for a in p["attachments"].as_array().into_iter().flatten() {
+        let name = a["name"].as_str().unwrap_or("file");
+        let size = a["size"].as_u64().map(human_size).unwrap_or_default();
+        v.push(
+            row()
+                .gap(6.0)
+                .center_y()
+                .child(rune::icon(&CLIP, 14.0).color(k.c.text_faint))
+                .child(text(format!("{name} · {size}")).font(k.ty.small).color(k.c.text_base).wrap()),
+        );
+    }
+    v
+}
+
+fn human_size(b: u64) -> String {
+    match b {
+        b if b >= 1024 * 1024 => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+        b if b >= 1024 => format!("{} KB", b / 1024),
+        b => format!("{b} B"),
+    }
 }
 
 fn event_row(s: &App, sess: &Session, e: &Event, results: &std::collections::HashMap<&str, &Event>, k: &Kit) -> Option<El> {
@@ -323,7 +504,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, results: &std::collections::Has
                 .py(10.0)
                 .radius(k.radius.lg)
                 .fill(k.c.layer_02)
-                .child(text(str_of(&p["text"])).font(k.ty.body).color(k.c.text_strong).wrap().selectable(true)),
+                .gap(6.0)
+                .children(prompt_body(p, k)),
         ),
         EventType::AgentMessage => reply(p["text"].as_str().unwrap_or(""), false, k),
         EventType::AgentThought => text(clip(&str_of(&p["text"]), 600)).font(k.ty.small).color(k.c.text_faint).wrap(),

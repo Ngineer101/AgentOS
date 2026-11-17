@@ -78,3 +78,24 @@ fn reply_links_open_only_for_web_and_mail() {
     assert!(!is_web_link("vscode://open?x"));
     assert!(!is_web_link("relative/path.md"));
 }
+
+/// Needs a microphone: `cargo test mic_records -- --ignored`.
+#[test]
+#[ignore]
+fn mic_records_a_wav() {
+    let r = crate::audio::Recorder::start().expect("microphone");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let wav = r.finish().expect("audio");
+    assert_eq!(&wav[..4], b"RIFF");
+    assert!(wav.len() > 16_000, "{}", wav.len());
+}
+
+#[test]
+fn wav_header_is_valid() {
+    let w = crate::audio::wav16(16000, &[0.0, 0.5, -0.5, 1.5]);
+    assert_eq!(&w[..4], b"RIFF");
+    assert_eq!(&w[8..16], b"WAVEfmt ");
+    assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), 16000);
+    assert_eq!(w.len(), 44 + 8);
+    assert_eq!(i16::from_le_bytes(w[50..52].try_into().unwrap()), i16::MAX, "clamped");
+}

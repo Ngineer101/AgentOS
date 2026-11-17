@@ -1066,12 +1066,6 @@ public func FfiConverterTypePairingListener_lower(_ value: PairingListener) -> U
 
 
 
-/**
- * One live, greeted connection to the host through the relay.
- *
- * Reconnecting means calling [`RemoteClient::connect`] again; after a
- * reconnect, re-subscribe with `events.subscribe` and the last seen `seq`.
- */
 public protocol RemoteClientProtocol: AnyObject, Sendable {
     
     /**
@@ -1097,13 +1091,24 @@ public protocol RemoteClientProtocol: AnyObject, Sendable {
      */
     func isConnected()  -> Bool
     
+    /**
+     * Transcribe a WAV recording with the host's speech model and return the
+     * text. Fails with `Rpc { code: -32006 (unavailable) }` and data
+     * `{"needs_download": true}` when the model is not installed: ask the
+     * user, then call `voice.download`.
+     */
+    func transcribeWavFile(path: String, language: String?) async throws  -> String
+    
+    /**
+     * Send a file to the host for the next prompt (protocol 2 hosts). `name`
+     * defaults to the file's own name and `mime` is guessed from the name
+     * when absent. Returns the `Attachment` as JSON text; pass its
+     * `attachment_id` in `session.prompt`'s `attachments`. Files can be up to
+     * 25 MB. The file is read here, so a temporary copy may be deleted after.
+     */
+    func uploadFile(path: String, name: String?, mime: String?) async throws  -> String
+    
 }
-/**
- * One live, greeted connection to the host through the relay.
- *
- * Reconnecting means calling [`RemoteClient::connect`] again; after a
- * reconnect, re-subscribe with `events.subscribe` and the last seen `seq`.
- */
 open class RemoteClient: RemoteClientProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
 
@@ -1233,6 +1238,51 @@ open func isConnected() -> Bool  {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * Transcribe a WAV recording with the host's speech model and return the
+     * text. Fails with `Rpc { code: -32006 (unavailable) }` and data
+     * `{"needs_download": true}` when the model is not installed: ask the
+     * user, then call `voice.download`.
+     */
+open func transcribeWavFile(path: String, language: String?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_agenthost_ffi_fn_method_remoteclient_transcribe_wav_file(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterOptionString.lower(language)
+                )
+            },
+            pollFunc: ffi_agenthost_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_agenthost_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_agenthost_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeAgentHostError_lift
+        )
+}
+    
+    /**
+     * Send a file to the host for the next prompt (protocol 2 hosts). `name`
+     * defaults to the file's own name and `mime` is guessed from the name
+     * when absent. Returns the `Attachment` as JSON text; pass its
+     * `attachment_id` in `session.prompt`'s `attachments`. Files can be up to
+     * 25 MB. The file is read here, so a temporary copy may be deleted after.
+     */
+open func uploadFile(path: String, name: String?, mime: String?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_agenthost_ffi_fn_method_remoteclient_upload_file(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterOptionString.lower(name),FfiConverterOptionString.lower(mime)
+                )
+            },
+            pollFunc: ffi_agenthost_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_agenthost_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_agenthost_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeAgentHostError_lift
+        )
 }
     
 
@@ -1958,6 +2008,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agenthost_ffi_checksum_method_remoteclient_is_connected() != 54864) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_remoteclient_transcribe_wav_file() != 43946) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_remoteclient_upload_file() != 44424) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agenthost_ffi_checksum_constructor_remoteclient_connect() != 45504) {

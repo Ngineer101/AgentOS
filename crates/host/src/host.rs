@@ -59,13 +59,18 @@ impl Host {
             cfg.file_secrets,
         )?);
         let audit = crate::audit::Audit::new(Some(cfg.logs_dir().join("audit.jsonl")));
+        let uploads = crate::uploads::Uploads::open(&cfg.data_dir)?;
+        let bus = Bus::new();
+        let voice = crate::voice::Voice::new(&cfg.data_dir, bus.clone());
         let ctx = Arc::new(Ctx {
             cfg,
             store,
-            bus: Bus::new(),
+            bus,
             host_id,
             gateway: OnceLock::new(),
             audit,
+            uploads,
+            voice,
         });
         let sessions = SessionManager::new(ctx.clone());
         Ok(Arc::new(Host {

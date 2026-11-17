@@ -117,7 +117,9 @@ async fn run(cfg: HostConfig) -> Result<()> {
         _ = sigterm() => {}
     }
     tracing::info!("shutting down");
-    host.sessions.shutdown();
+    host.sessions
+        .shutdown_and_wait(std::time::Duration::from_secs(10))
+        .await;
     if let Some(d) = host.devices.get() {
         d.shutdown();
     }

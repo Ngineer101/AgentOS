@@ -107,7 +107,7 @@ fn base(s: &mut App) {
         host_id: "host_3f9a1c".into(),
         version: "0.1.0".into(),
         os: "linux".into(),
-        protocol_version: 1,
+        protocol_version: 2,
         agents: vec![
             AgentStatus { agent: AgentKind::Codex, display_name: "Codex".into(), installed: true, version: Some("2.6.0".into()), logged_in: true, available: true, problem: None, fix: None },
             AgentStatus { agent: AgentKind::Claude, display_name: "Claude Code".into(), installed: true, version: Some("0.107.0".into()), logged_in: true, available: true, problem: None, fix: None },
@@ -131,13 +131,14 @@ fn base(s: &mut App) {
         },
         relay: RelayStatus { configured: true, connected: true, url: Some("wss://relay.example.workers.dev".into()), error: None },
     });
+    s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, progress: None, error: None });
 }
 
 fn transcript(s: &mut App) {
     let sid = "ses_1";
     let events = vec![
         ev(sid, 1, EventType::SessionState, json!({"state": "created"})),
-        ev(sid, 2, EventType::Prompt, json!({"text": "The resume test fails about one run in ten. Find out why and fix it, then open an issue describing the root cause."})),
+        ev(sid, 2, EventType::Prompt, json!({"text": "The resume test fails about one run in ten. Find out why and fix it, then open an issue describing the root cause.", "attachments": [{"attachment_id": "att_1", "name": "ci-failure.log", "mime": "text/plain", "size": 48_213}, {"attachment_id": "att_2", "name": "screenshot.png", "mime": "image/png", "size": 1_204_311}]})),
         ev(sid, 3, EventType::AgentThought, json!({"text": "Look at the test first, then the actor's restart path."})),
         ev(sid, 4, EventType::ToolCall, json!({"tool_call_id": "t1", "name": "cargo test -p agenthost-host resume", "arguments": {"command": "cargo test -p agenthost-host resume"}, "source": "sandbox"})),
         ev(sid, 5, EventType::ToolResult, json!({"tool_call_id": "t1", "status": "completed", "output": "running 1 test\ntest resume_after_host_restart_keeps_history ... ok\n\ntest result: ok. 1 passed"})),
@@ -168,6 +169,33 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("session", |s| {
         base(s);
         transcript(s);
+        s.screen = Screen::Session("ses_1".into());
+    }),
+    ("session-compose", |s| {
+        use crate::model::{FileState, PendingFile};
+        base(s);
+        transcript(s);
+        s.approvals.clear();
+        s.voice.as_mut().unwrap().ready = false;
+        s.ask_voice_download = true;
+        s.prompt = rune::TextEdit::new("Here is the crash from this morning");
+        s.files.insert(
+            "ses_1".into(),
+            vec![
+                PendingFile { local_id: 1, name: "crash-report.txt".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "crash-report.txt".into(), mime: "text/plain".into(), size: 18_400 }) },
+                PendingFile { local_id: 2, name: "recording of the bug.mov".into(), state: FileState::Uploading },
+            ],
+        );
+        s.screen = Screen::Session("ses_1".into());
+    }),
+    ("session-voice-download", |s| {
+        base(s);
+        transcript(s);
+        s.approvals.clear();
+        let v = s.voice.as_mut().unwrap();
+        v.ready = false;
+        v.progress = Some(VoiceProgress { received: 190_000_000, total: 475_271_763 });
+        s.mic = crate::model::Mic::Transcribing;
         s.screen = Screen::Session("ses_1".into());
     }),
     ("new", |s| {

@@ -35,6 +35,8 @@ agenthost status                              # sandbox health, agents, login st
 agenthost workspace add ~/code/myproject --profile packages
 agenthost run ~/code/myproject claude "Summarise this repo"
 agenthost chat ~/code/myproject codex         # interactive
+agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
+agenthost voice download                      # local speech model for voice input (once)
 ```
 
 Remote access: deploy `relay/` to your own Cloudflare account (see

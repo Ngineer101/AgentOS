@@ -41,6 +41,15 @@ bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "2"
 libc = "0.2"
+hound = "3.5"
+tar = "0.4"
+bzip2 = "0.6"
+# Local speech-to-text for voice input (statically linked ONNX Runtime).
+sherpa-onnx = { version = "=2.0.1", optional = true }
+
+[features]
+default = ["voice"]
+voice = ["dep:sherpa-onnx"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

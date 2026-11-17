@@ -579,3 +579,82 @@ async fn events_never_change() {
 fn rusqlite_open(p: &std::path::Path) -> rusqlite::Connection {
     rusqlite::Connection::open(p).unwrap()
 }
+
+#[tokio::test]
+async fn attachments_reach_the_agent() {
+    let th = TestHost::start().await;
+    let (c, mut n) = th.client().await;
+    let sid = new_session(&th, &c).await;
+    c.subscribe(&sid, 0).await.unwrap();
+    // Two pieces, so the upload really is chunked.
+    let body = vec![b'x'; UPLOAD_CHUNK_BYTES + 10];
+    let a = c
+        .upload("notes/../big log.txt", None, &body, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(a.name, "big log.txt");
+    assert_eq!(a.mime, "text/plain");
+    assert_eq!(a.size, body.len() as u64);
+    let r = c
+        .prompt_with_attachments(&sid, "p1", "look", &[a.attachment_id.clone()])
+        .await
+        .unwrap();
+    assert!(r.accepted);
+    let (events, _) = collect_until(&mut n, T, turn_end).await;
+    let prompt = events.iter().find(|e| e.kind == EventType::Prompt).unwrap();
+    assert_eq!(prompt.payload["attachments"][0]["name"], "big log.txt");
+    let reply = events
+        .iter()
+        .find(|e| e.kind == EventType::AgentMessage)
+        .unwrap()
+        .payload["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(reply.starts_with("echo: look\n\nAttached files"), "{reply}");
+    let path = reply
+        .lines()
+        .find_map(|l| l.strip_prefix("- "))
+        .and_then(|l| l.split(" (").next())
+        .unwrap();
+    assert!(path.ends_with("/attachments/big log.txt"), "{path}");
+    assert_eq!(std::fs::read(path).unwrap(), body);
+    // The host's copy is handed over; a retry of the same prompt is a no-op.
+    assert!(th.host.ctx.uploads.get(&a.attachment_id).is_err());
+    let again = c
+        .prompt_with_attachments(&sid, "p1", "look", &[a.attachment_id.clone()])
+        .await
+        .unwrap();
+    assert!(!again.accepted);
+    // Unknown attachments are refused.
+    assert!(c
+        .prompt_with_attachments(&sid, "p2", "x", &["att_nope".into()])
+        .await
+        .is_err());
+    // Attachments alone are a valid prompt.
+    let b = c.upload("a.png", None, b"\x89PNG", |_, _| {}).await.unwrap();
+    assert_eq!(b.mime, "image/png");
+    c.prompt_with_attachments(&sid, "p3", "", &[b.attachment_id])
+        .await
+        .unwrap();
+    let (events, _) = collect_until(&mut n, T, turn_end).await;
+    let reply = events
+        .iter()
+        .find(|e| e.kind == EventType::AgentMessage)
+        .unwrap();
+    assert!(reply.payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("/attachments/a.png (image/png, 4 bytes)"));
+}
+
+#[tokio::test]
+async fn voice_reports_a_missing_model() {
+    let th = TestHost::start().await;
+    let (c, _n) = th.client().await;
+    let st: VoiceStatus = c.call(methods::VOICE_STATUS, serde_json::json!({})).await.unwrap();
+    assert!(!st.ready);
+    assert!(st.download_bytes > 100_000_000);
+    let err = c.transcribe_wav(b"RIFF", None).await.unwrap_err();
+    assert!(format!("{err:#}").contains("not installed"), "{err:#}");
+}

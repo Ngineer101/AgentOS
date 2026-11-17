@@ -25,6 +25,8 @@ pub struct Ctx {
     pub host_id: String,
     pub gateway: OnceLock<Arc<dyn GatewayApi>>,
     pub audit: crate::audit::Audit,
+    pub uploads: crate::uploads::Uploads,
+    pub voice: Arc<crate::voice::Voice>,
 }
 
 impl Ctx {

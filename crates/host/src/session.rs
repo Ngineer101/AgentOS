@@ -17,7 +17,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -38,6 +38,7 @@ pub enum Cmd {
     Prompt {
         seq: i64,
         text: String,
+        attachments: Vec<Attachment>,
     },
     Cancel,
     End,
@@ -63,6 +64,8 @@ impl SessionHandle {
 pub struct SessionManager {
     ctx: Arc<Ctx>,
     live: Mutex<HashMap<String, SessionHandle>>,
+    /// When this host run started (placeholders older than this aren't ours).
+    started_at: std::time::SystemTime,
 }
 
 impl SessionManager {
@@ -70,6 +73,7 @@ impl SessionManager {
         Arc::new(Self {
             ctx,
             live: Mutex::new(HashMap::new()),
+            started_at: std::time::SystemTime::now(),
         })
     }
 
@@ -169,17 +173,38 @@ impl SessionManager {
         if s.state.is_terminal() {
             return Err(RpcError::invalid_state(format!("session is {}", s.state)));
         }
-        if p.text.trim().is_empty() {
+        if p.text.trim().is_empty() && p.attachments.is_empty() {
             return Err(RpcError::invalid_params("empty prompt"));
+        }
+        if p.attachments.len() > MAX_ATTACHMENTS_PER_PROMPT {
+            return Err(RpcError::invalid_params(format!(
+                "at most {MAX_ATTACHMENTS_PER_PROMPT} attachments per message"
+            )));
+        }
+        let mut attachments = vec![];
+        for id in &p.attachments {
+            match self.ctx.uploads.get(id) {
+                Ok((a, _)) => attachments.push(a),
+                // A retried prompt whose files were already handed over.
+                Err(e) => {
+                    if let Ok(Some(seq)) = self.ctx.store.prompt_seq(&p.session_id, &p.prompt_id) {
+                        return Ok(SessionPromptResult {
+                            seq,
+                            accepted: false,
+                        });
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let mut payload = json!({"text": p.text, "prompt_id": p.prompt_id, "device": origin});
+        if !attachments.is_empty() {
+            payload["attachments"] = serde_json::to_value(&attachments).unwrap();
         }
         let (ev, seq) = self
             .ctx
             .store
-            .append_prompt(
-                &p.session_id,
-                &p.prompt_id,
-                json!({"text": p.text, "prompt_id": p.prompt_id, "device": origin}),
-            )
+            .append_prompt(&p.session_id, &p.prompt_id, payload)
             .map_err(|e| RpcError::internal(e.to_string()))?;
         let Some(ev) = ev else {
             return Ok(SessionPromptResult {
@@ -191,7 +216,11 @@ impl SessionManager {
         let h = self
             .handle(&p.session_id)
             .ok_or_else(|| RpcError::invalid_state("session is not running"))?;
-        h.send(Cmd::Prompt { seq, text: p.text });
+        h.send(Cmd::Prompt {
+            seq,
+            text: p.text,
+            attachments,
+        });
         Ok(SessionPromptResult {
             seq,
             accepted: true,
@@ -295,6 +324,26 @@ impl SessionManager {
         }
     }
 
+    /// Stop every agent, wait (up to `timeout`) for them to exit, then remove
+    /// sandbox placeholders this host run left in workspaces. Each session's
+    /// own sweep skips a workspace while other sessions there are live, which
+    /// at shutdown is all of them.
+    pub async fn shutdown_and_wait(&self, timeout: Duration) {
+        self.shutdown();
+        let deadline = Instant::now() + timeout;
+        while self.live_count() > 0 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if self.live_count() > 0 {
+            return; // still running: their placeholders are still mounted
+        }
+        if let Ok(list) = self.ctx.store.workspace_list() {
+            for w in list {
+                sandbox::sweep_mount_points(Path::new(&w.path), self.started_at);
+            }
+        }
+    }
+
     pub fn live_count(&self) -> usize {
         self.live.lock().unwrap().len()
     }
@@ -358,6 +407,46 @@ struct Running {
     _proxy: EgressProxy,
 }
 
+struct Queued {
+    seq: i64,
+    text: String,
+    attachments: Vec<Attachment>,
+}
+
+fn resource_link(uri: &str, a: &Attachment) -> Value {
+    json!({"type": "resource_link", "uri": uri, "name": a.name, "mimeType": a.mime, "size": a.size})
+}
+
+fn is_text_mime(m: &str) -> bool {
+    m.starts_with("text/") || m == "application/json"
+}
+
+fn human_size(b: u64) -> String {
+    if b >= 1024 * 1024 {
+        format!("{:.1} MB", b as f64 / (1024.0 * 1024.0))
+    } else if b >= 1024 {
+        format!("{} KB", b / 1024)
+    } else {
+        format!("{b} bytes")
+    }
+}
+
+/// `dir/name`, or `dir/name (2).ext` and so on if taken.
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
+    if !p.exists() {
+        return p;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
+    };
+    (2..)
+        .map(|i| dir.join(format!("{stem} ({i}){ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
 struct Actor {
     ctx: Arc<Ctx>,
     session: Session,
@@ -367,7 +456,9 @@ struct Actor {
     state: SessionState,
     temp_dir: PathBuf,
     agent: Option<Running>,
-    queue: VecDeque<(i64, String)>,
+    queue: VecDeque<Queued>,
+    /// The agent's `promptCapabilities` from `initialize`.
+    prompt_caps: Value,
     turn: Option<TurnFuture>,
     turn_prompt_seq: i64,
     cancel_deadline: Option<Instant>,
@@ -415,6 +506,7 @@ impl Actor {
             temp_dir,
             agent: None,
             queue: VecDeque::new(),
+            prompt_caps: Value::Null,
             turn: None,
             turn_prompt_seq: 0,
             cancel_deadline: None,
@@ -613,6 +705,7 @@ impl Actor {
                 Value::Null,
             ));
         }
+        self.prompt_caps = init["agentCapabilities"]["promptCapabilities"].clone();
         let can_load = init["agentCapabilities"]["loadSession"]
             .as_bool()
             .unwrap_or(false);
@@ -790,8 +883,8 @@ impl Actor {
     async fn main_loop(&mut self) -> Exit {
         loop {
             if self.turn.is_none() && self.state == SessionState::Idle {
-                if let Some((seq, text)) = self.queue.pop_front() {
-                    if let Err(e) = self.start_turn(seq, text).await {
+                if let Some(q) = self.queue.pop_front() {
+                    if let Err(e) = self.start_turn(q).await {
                         return Exit::Failed(format!("could not send prompt: {e}"), Value::Null);
                     }
                 }
@@ -817,7 +910,15 @@ impl Actor {
             match step {
                 Step::Cmd(None) | Step::Cmd(Some(Cmd::Shutdown)) => return Exit::Shutdown,
                 Step::Cmd(Some(Cmd::End)) => return Exit::Ended,
-                Step::Cmd(Some(Cmd::Prompt { seq, text })) => self.queue.push_back((seq, text)),
+                Step::Cmd(Some(Cmd::Prompt {
+                    seq,
+                    text,
+                    attachments,
+                })) => self.queue.push_back(Queued {
+                    seq,
+                    text,
+                    attachments,
+                }),
                 Step::Cmd(Some(Cmd::Cancel)) => self.request_cancel(None).await,
                 Step::Cmd(Some(Cmd::Approval { waiting })) => {
                     if waiting && self.state == SessionState::Running {
@@ -887,13 +988,15 @@ impl Actor {
         }
     }
 
-    async fn start_turn(&mut self, seq: i64, text: String) -> Result<()> {
+    async fn start_turn(&mut self, q: Queued) -> Result<()> {
+        let seq = q.seq;
         let acp_id = self.session.acp_session_id.clone().unwrap_or_default();
         let conn = self.agent.as_ref().unwrap().conn.clone();
+        let prompt = self.prompt_blocks(q)?;
         let rx = conn
             .request(
                 "session/prompt",
-                json!({"sessionId": acp_id, "prompt": [{"type": "text", "text": text}]}),
+                json!({"sessionId": acp_id, "prompt": prompt}),
             )
             .await?;
         self.turn = Some(Box::pin(async move {
@@ -910,6 +1013,60 @@ impl Actor {
             Some(json!({"prompt_seq": seq})),
         );
         Ok(())
+    }
+
+    /// ACP content for a prompt. Attached files are copied into the session's
+    /// temp folder, which the agent can read, and named in the text so every
+    /// agent sees them; images also go inline and small text files embedded
+    /// when the agent says it accepts those.
+    fn prompt_blocks(&self, q: Queued) -> Result<Vec<Value>> {
+        if q.attachments.is_empty() {
+            return Ok(vec![json!({"type": "text", "text": q.text})]);
+        }
+        let dir = self.temp_dir.join("attachments");
+        std::fs::create_dir_all(&dir)?;
+        let image_ok = self.prompt_caps["image"].as_bool().unwrap_or(false);
+        let embed_ok = self.prompt_caps["embeddedContext"].as_bool().unwrap_or(false);
+        let mut listing = String::from("Attached files (read them from these paths):");
+        let mut extra = vec![];
+        for a in &q.attachments {
+            let src = match self.ctx.uploads.get(&a.attachment_id) {
+                Ok((_, p)) => p,
+                Err(_) => {
+                    listing.push_str(&format!("\n- {} (no longer available)", a.name));
+                    continue;
+                }
+            };
+            let dest = unique_path(&dir, &a.name);
+            std::fs::copy(&src, &dest)?;
+            self.ctx.uploads.remove(&a.attachment_id);
+            let path = dest.to_string_lossy().to_string();
+            listing.push_str(&format!("\n- {path} ({}, {})", a.mime, human_size(a.size)));
+            let uri = format!("file://{path}");
+            if a.is_image() && image_ok && a.size <= 5 * 1024 * 1024 && a.mime != "image/heic" {
+                use base64::Engine;
+                let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&dest)?);
+                extra.push(json!({"type": "image", "mimeType": a.mime, "data": data, "uri": uri}));
+            } else if embed_ok && is_text_mime(&a.mime) && a.size <= 256 * 1024 {
+                match std::fs::read_to_string(&dest) {
+                    Ok(text) => extra.push(json!({
+                        "type": "resource",
+                        "resource": {"uri": uri, "mimeType": a.mime, "text": text}
+                    })),
+                    Err(_) => extra.push(resource_link(&uri, a)),
+                }
+            } else {
+                extra.push(resource_link(&uri, a));
+            }
+        }
+        let text = if q.text.trim().is_empty() {
+            listing
+        } else {
+            format!("{}\n\n{listing}", q.text)
+        };
+        let mut blocks = vec![json!({"type": "text", "text": text})];
+        blocks.extend(extra);
+        Ok(blocks)
     }
 
     async fn request_cancel(&mut self, host_reason: Option<String>) {

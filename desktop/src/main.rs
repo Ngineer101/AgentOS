@@ -1,5 +1,6 @@
 //! agenthost desktop app: the full control surface, over the host's Unix socket.
 
+mod audio;
 mod bridge;
 mod demo;
 mod model;
@@ -22,6 +23,15 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
         if tx.open_url(&url).is_err() {
             s.notice = Some(format!("Could not open the browser. Open this link yourself: {url}"));
         }
+    }
+    // While recording: the meter and timer move, and a forgotten recording stops.
+    if let model::Mic::Recording(r) = &s.mic {
+        s.mic_level = s.mic_level * 0.6 + r.level() * 0.4;
+        if r.seconds() >= audio::MAX_SECONDS {
+            s.mic_press();
+        }
+        tx.wake_after(std::time::Duration::from_millis(100));
+        return true;
     }
     // Keep "3m ago" labels fresh.
     tx.wake_after(std::time::Duration::from_secs(30));

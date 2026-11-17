@@ -573,7 +573,11 @@ pub struct SessionPromptParams {
     pub session_id: String,
     /// Client-generated id; the same id twice produces one prompt.
     pub prompt_id: String,
+    /// May be empty when there are attachments.
     pub text: String,
+    /// Attachment ids from `upload.finish`, given to the agent with the text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -692,6 +696,131 @@ pub struct PairConfirmParams {
 pub struct DeviceRenameParams {
     pub device_id: String,
     pub name: String,
+}
+
+// ---------------------------------------------------------------------------
+// Attachments and voice
+// ---------------------------------------------------------------------------
+
+/// Largest file one upload may carry.
+pub const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+/// Most attachments on one prompt.
+pub const MAX_ATTACHMENTS_PER_PROMPT: usize = 10;
+/// Largest raw piece in one `upload.append` (before base64).
+pub const UPLOAD_CHUNK_BYTES: usize = 512 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadBeginParams {
+    /// File name as the user sees it; the host keeps only the last path part.
+    pub name: String,
+    /// Total size in bytes.
+    pub size: u64,
+    /// MIME type if the client knows it; otherwise the host guesses from the name.
+    #[serde(default)]
+    pub mime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadBeginResult {
+    pub upload_id: String,
+    /// Send pieces of at most this many bytes (before base64).
+    pub chunk_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadAppendParams {
+    pub upload_id: String,
+    /// Byte offset of this piece; must equal the bytes received so far.
+    pub offset: u64,
+    /// The piece, standard base64.
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadAppendResult {
+    pub received: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadRef {
+    pub upload_id: String,
+}
+
+/// A file the host holds for a prompt or a transcription.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Attachment {
+    pub attachment_id: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+}
+
+impl Attachment {
+    pub fn is_image(&self) -> bool {
+        self.mime.starts_with("image/")
+    }
+}
+
+/// MIME type from a file name, for clients and the host alike.
+pub fn guess_mime(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "pdf" => "application/pdf",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "json" => "application/json",
+        "zip" => "application/zip",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "md" | "markdown" => "text/markdown",
+        "txt" | "log" | "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "kt"
+        | "swift" | "c" | "h" | "cc" | "cpp" | "hpp" | "rb" | "php" | "sh" | "toml" | "yaml"
+        | "yml" | "xml" | "sql" | "css" | "scss" | "ini" | "cfg" | "conf" | "env" | "diff"
+        | "patch" => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceTranscribeParams {
+    /// A WAV recording from `upload.finish`.
+    pub attachment_id: String,
+    /// Language hint such as "en"; the model detects it when absent.
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceTranscribeResult {
+    pub text: String,
+}
+
+/// The local speech model, as clients show it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct VoiceStatus {
+    /// e.g. "NVIDIA Nemotron 3.5 ASR".
+    pub model: String,
+    /// Download size, for the "download?" prompt.
+    pub download_bytes: u64,
+    /// Installed and usable.
+    pub ready: bool,
+    /// Present while downloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<VoiceProgress>,
+    /// Why the last download or load failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceProgress {
+    pub received: u64,
+    pub total: u64,
 }
 
 #[cfg(test)]

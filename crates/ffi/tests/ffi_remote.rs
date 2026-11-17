@@ -309,6 +309,49 @@ async fn pair_connect_sessions_resume_and_revoke() {
     let r = call(&phone, m::SESSION_PROMPT, prompt).await.unwrap();
     assert_eq!(r["accepted"], false);
 
+    // Attachments through the relay: a file bigger than one tunnel frame
+    // and one upload piece.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("photo.jpg");
+    std::fs::write(&f, vec![7u8; 700_000]).unwrap();
+    let att: Value = serde_json::from_str(
+        &phone
+            .upload_file(f.to_string_lossy().into(), None, None)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(att["name"], "photo.jpg");
+    assert_eq!(att["mime"], "image/jpeg");
+    assert_eq!(att["size"], 700_000);
+    let r = call(
+        &phone,
+        m::SESSION_PROMPT,
+        json!({"session_id": sid, "prompt_id": "p-att", "text": "see photo", "attachments": [att["attachment_id"]]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["accepted"], true);
+    let (events, _) = events_until(&mut notes, is_turn_end).await;
+    assert!(
+        events.iter().any(|e| e["type"] == "agent.message"
+            && e["payload"]["text"].as_str().unwrap_or("").contains("/attachments/photo.jpg (image/jpeg")),
+        "{events:#?}"
+    );
+    let last_seq = events.last().unwrap()["seq"].as_i64().unwrap();
+    // Voice without the model: a typed error that says to download.
+    std::fs::write(dir.path().join("a.wav"), b"RIFF").unwrap();
+    match phone
+        .transcribe_wav_file(dir.path().join("a.wav").to_string_lossy().into(), None)
+        .await
+    {
+        Err(AgentHostError::Rpc { code, data_json, .. }) => {
+            assert_eq!(code, codes::UNAVAILABLE);
+            assert!(data_json.unwrap_or_default().contains("needs_download"));
+        }
+        other => panic!("{other:?}"),
+    }
+
     // Typed errors: capability denied, unknown session, bad params.
     match call(&phone, m::WORKSPACE_ADD, json!({"path": "/tmp"})).await {
         Err(AgentHostError::Rpc { code, .. }) => assert_eq!(code, codes::CAPABILITY_DENIED),

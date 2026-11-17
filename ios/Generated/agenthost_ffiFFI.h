@@ -363,6 +363,16 @@ RustBuffer uniffi_agenthost_ffi_fn_method_remoteclient_hello(uint64_t ptr, RustC
 int8_t uniffi_agenthost_ffi_fn_method_remoteclient_is_connected(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_TRANSCRIBE_WAV_FILE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_TRANSCRIBE_WAV_FILE
+uint64_t uniffi_agenthost_ffi_fn_method_remoteclient_transcribe_wav_file(uint64_t ptr, RustBuffer path, RustBuffer language
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_UPLOAD_FILE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_UPLOAD_FILE
+uint64_t uniffi_agenthost_ffi_fn_method_remoteclient_upload_file(uint64_t ptr, RustBuffer path, RustBuffer name, RustBuffer mime
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FUNC_PAIR
 #define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FUNC_PAIR
 uint64_t uniffi_agenthost_ffi_fn_func_pair(RustBuffer qr, RustBuffer device_name, uint64_t listener
@@ -696,6 +706,18 @@ uint16_t uniffi_agenthost_ffi_checksum_method_remoteclient_hello(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_IS_CONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_IS_CONNECTED
 uint16_t uniffi_agenthost_ffi_checksum_method_remoteclient_is_connected(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_TRANSCRIBE_WAV_FILE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_TRANSCRIBE_WAV_FILE
+uint16_t uniffi_agenthost_ffi_checksum_method_remoteclient_transcribe_wav_file(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_UPLOAD_FILE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_REMOTECLIENT_UPLOAD_FILE
+uint16_t uniffi_agenthost_ffi_checksum_method_remoteclient_upload_file(void
     
 );
 #endif

@@ -41,6 +41,20 @@ pub const DEVICE_PAIR_CONFIRM: &str = "device.pair_confirm";
 pub const DEVICE_RENAME: &str = "device.rename";
 pub const DEVICE_REVOKE: &str = "device.revoke";
 
+/// Send a file to the host in pieces: `upload.begin`, then `upload.append`
+/// until all bytes are sent, then `upload.finish`, which returns an
+/// [`crate::Attachment`] to pass to `session.prompt` or `voice.transcribe`.
+pub const UPLOAD_BEGIN: &str = "upload.begin";
+pub const UPLOAD_APPEND: &str = "upload.append";
+pub const UPLOAD_FINISH: &str = "upload.finish";
+
+/// The local speech-to-text model: whether it is installed, downloading or ready.
+pub const VOICE_STATUS: &str = "voice.status";
+/// Download and install the speech model (once per host).
+pub const VOICE_DOWNLOAD: &str = "voice.download";
+/// Turn an uploaded recording (WAV) into text. The recording is deleted after.
+pub const VOICE_TRANSCRIBE: &str = "voice.transcribe";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -57,6 +71,9 @@ pub const N_DEVICE_REVOKED: &str = "device.revoked";
 /// A connector's status or tools changed on its own (sign-in finished or
 /// failed). Params: `{"connector_id"}`. Admin connections only.
 pub const N_CONNECTOR_CHANGED: &str = "connector.changed";
+/// The speech model's status changed (download progress, installed, failed).
+/// Params are a [`crate::VoiceStatus`]. Sent to every connection.
+pub const N_VOICE_CHANGED: &str = "voice.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -97,9 +114,10 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     use Capability::*;
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
-        | SESSION_GET | APPROVAL_LIST => Read,
+        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | EVENTS_SUBSCRIBE
-        | EVENTS_UNSUBSCRIBE => Sessions,
+        | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
+        | VOICE_TRANSCRIBE => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
@@ -133,6 +151,12 @@ mod tests {
             APPROVAL_RESPOND,
             EVENTS_SUBSCRIBE,
             HOST_INFO,
+            UPLOAD_BEGIN,
+            UPLOAD_APPEND,
+            UPLOAD_FINISH,
+            VOICE_STATUS,
+            VOICE_DOWNLOAD,
+            VOICE_TRANSCRIBE,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

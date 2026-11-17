@@ -325,6 +325,33 @@ pub struct HelloInfo {
 ///
 /// Reconnecting means calling [`RemoteClient::connect`] again; after a
 /// reconnect, re-subscribe with `events.subscribe` and the last seen `seq`.
+impl RemoteClient {
+    fn connected(&self) -> Result<Arc<Client>, AgentHostError> {
+        self.client
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(AgentHostError::NotConnected)
+    }
+}
+
+async fn read_limited(path: &str) -> Result<Vec<u8>, AgentHostError> {
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| AgentHostError::InvalidInput { detail: format!("read {path}: {e}") })?;
+    if meta.len() > agenthost_proto::MAX_ATTACHMENT_BYTES {
+        return Err(AgentHostError::InvalidInput {
+            detail: format!(
+                "the file is too large: files can be up to {} MB",
+                agenthost_proto::MAX_ATTACHMENT_BYTES / (1024 * 1024)
+            ),
+        });
+    }
+    tokio::fs::read(path)
+        .await
+        .map_err(|e| AgentHostError::InvalidInput { detail: format!("read {path}: {e}") })
+}
+
 #[derive(uniffi::Object)]
 pub struct RemoteClient {
     client: Mutex<Option<Arc<Client>>>,
@@ -453,6 +480,61 @@ impl RemoteClient {
                 Ok(Err(e)) => Err(AgentHostError::rpc(e)),
                 Err(_) => Err(transport(format!("{method} timed out"))),
             }
+        })
+        .await
+    }
+
+    /// Send a file to the host for the next prompt (protocol 2 hosts). `name`
+    /// defaults to the file's own name and `mime` is guessed from the name
+    /// when absent. Returns the `Attachment` as JSON text; pass its
+    /// `attachment_id` in `session.prompt`'s `attachments`. Files can be up to
+    /// 25 MB. The file is read here, so a temporary copy may be deleted after.
+    pub async fn upload_file(
+        &self,
+        path: String,
+        name: Option<String>,
+        mime: Option<String>,
+    ) -> Result<String, AgentHostError> {
+        let client = self.connected()?;
+        on_runtime(async move {
+            let data = read_limited(&path).await?;
+            let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| {
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".into())
+            });
+            let a = tokio::time::timeout(
+                Duration::from_secs(600),
+                client.upload(&name, mime.as_deref(), &data, |_, _| {}),
+            )
+            .await
+            .map_err(|_| transport("upload timed out".into()))?
+            .map_err(|e| AgentHostError::from_anyhow(e, transport))?;
+            Ok(serde_json::to_string(&a).unwrap())
+        })
+        .await
+    }
+
+    /// Transcribe a WAV recording with the host's speech model and return the
+    /// text. Fails with `Rpc { code: -32006 (unavailable) }` and data
+    /// `{"needs_download": true}` when the model is not installed: ask the
+    /// user, then call `voice.download`.
+    pub async fn transcribe_wav_file(
+        &self,
+        path: String,
+        language: Option<String>,
+    ) -> Result<String, AgentHostError> {
+        let client = self.connected()?;
+        on_runtime(async move {
+            let data = read_limited(&path).await?;
+            tokio::time::timeout(
+                Duration::from_secs(300),
+                client.transcribe_wav(&data, language.as_deref()),
+            )
+            .await
+            .map_err(|_| transport("transcription timed out".into()))?
+            .map_err(|e| AgentHostError::from_anyhow(e, transport))
         })
         .await
     }

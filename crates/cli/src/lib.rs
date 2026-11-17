@@ -173,6 +173,95 @@ impl Client {
         .await
     }
 
+    /// Send a prompt with attachments (ids from [`Client::upload`]).
+    pub async fn prompt_with_attachments(
+        &self,
+        session_id: &str,
+        prompt_id: &str,
+        text: &str,
+        attachments: &[String],
+    ) -> Result<SessionPromptResult> {
+        self.call(
+            methods::SESSION_PROMPT,
+            json!({"session_id": session_id, "prompt_id": prompt_id, "text": text, "attachments": attachments}),
+        )
+        .await
+    }
+
+    /// Send bytes to the host in pieces; `progress(sent, total)` after each.
+    pub async fn upload(
+        &self,
+        name: &str,
+        mime: Option<&str>,
+        data: &[u8],
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<Attachment> {
+        use base64::Engine;
+        let total = data.len() as u64;
+        let b: UploadBeginResult = self
+            .call(
+                methods::UPLOAD_BEGIN,
+                json!({"name": name, "size": total, "mime": mime}),
+            )
+            .await?;
+        let chunk = b.chunk_bytes.clamp(1, UPLOAD_CHUNK_BYTES);
+        let mut offset = 0usize;
+        progress(0, total);
+        for piece in data.chunks(chunk) {
+            let _: UploadAppendResult = self
+                .call(
+                    methods::UPLOAD_APPEND,
+                    json!({
+                        "upload_id": b.upload_id,
+                        "offset": offset,
+                        "data": base64::engine::general_purpose::STANDARD.encode(piece),
+                    }),
+                )
+                .await?;
+            offset += piece.len();
+            progress(offset as u64, total);
+        }
+        self.call(methods::UPLOAD_FINISH, json!({"upload_id": b.upload_id}))
+            .await
+    }
+
+    /// Upload a file from disk under its own name.
+    pub async fn upload_file(&self, path: &Path) -> Result<Attachment> {
+        let meta = tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        if !meta.is_file() {
+            return Err(anyhow!("{} is not a file", path.display()));
+        }
+        if meta.len() > MAX_ATTACHMENT_BYTES {
+            return Err(anyhow!(
+                "{} is too large: files can be up to {} MB",
+                path.display(),
+                MAX_ATTACHMENT_BYTES / (1024 * 1024)
+            ));
+        }
+        let data = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".into());
+        self.upload(&name, None, &data, |_, _| {}).await
+    }
+
+    /// Upload a WAV recording and turn it into text.
+    pub async fn transcribe_wav(&self, wav: &[u8], language: Option<&str>) -> Result<String> {
+        let a = self.upload("recording.wav", Some("audio/wav"), wav, |_, _| {}).await?;
+        let r: VoiceTranscribeResult = self
+            .call(
+                methods::VOICE_TRANSCRIBE,
+                json!({"attachment_id": a.attachment_id, "language": language}),
+            )
+            .await?;
+        Ok(r.text)
+    }
+
     pub async fn subscribe(
         &self,
         session_id: &str,

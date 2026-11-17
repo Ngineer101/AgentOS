@@ -30,6 +30,8 @@ pub enum Tag {
     /// A user action whose failure should be shown; on success, refresh this list.
     Action { what: String, refresh: Refresh },
     Subscribed(String),
+    /// `voice.status` or `voice.download`.
+    Voice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,6 +46,10 @@ pub enum Refresh {
 
 pub enum ToHost {
     Call { tag: Tag, method: &'static str, params: Value },
+    /// Send a file from disk; answered by [`FromHost::Uploaded`].
+    Upload { local_id: u64, path: PathBuf },
+    /// Transcribe a WAV recording; answered by [`FromHost::Transcribed`].
+    Transcribe { wav: Vec<u8> },
 }
 
 pub enum FromHost {
@@ -53,6 +59,8 @@ pub enum FromHost {
     StartedHost,
     Reply { tag: Tag, result: Result<Value, RpcError> },
     Note(Notification),
+    Uploaded { local_id: u64, result: Result<agenthost_proto::Attachment, String> },
+    Transcribed(Result<String, String>),
 }
 
 pub struct Bridge {
@@ -63,6 +71,9 @@ pub struct Bridge {
 impl Bridge {
     pub fn call(&self, tag: Tag, method: &'static str, params: Value) {
         let _ = self.tx.send(ToHost::Call { tag, method, params });
+    }
+    pub fn send(&self, cmd: ToHost) {
+        let _ = self.tx.send(cmd);
     }
 }
 
@@ -153,13 +164,17 @@ pub fn start(waker: rune::Waker) -> Bridge {
                     loop {
                         tokio::select! {
                             cmd = cmd_rx.recv() => {
-                                let Some(ToHost::Call { tag, method, params }) = cmd else { return };
+                                let Some(cmd) = cmd else { return };
                                 let c = client.clone();
                                 let s = out_tx.clone();
                                 let w = waker.clone();
                                 tokio::spawn(async move {
-                                    let result = c.request(method, params).await;
-                                    let _ = s.send(FromHost::Reply { tag, result });
+                                    let msg = match cmd {
+                                        ToHost::Call { tag, method, params } => FromHost::Reply { tag, result: c.request(method, params).await },
+                                        ToHost::Upload { local_id, path } => FromHost::Uploaded { local_id, result: c.upload_file(&path).await.map_err(|e| format!("{e:#}")) },
+                                        ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
+                                    };
+                                    let _ = s.send(msg);
                                     w();
                                 });
                             }

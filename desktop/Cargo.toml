@@ -19,13 +19,15 @@ path = "src/main.rs"
 agenthost-proto = { path = "../crates/proto" }
 agenthost-cli = { path = "../crates/cli" }
 # Rune is pre-release: pin a rev of `dev` (never rewritten).
-rune = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b", features = ["native-file-dialog"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b", features = ["markdown"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 qrcode = { version = "0.14", default-features = false }
+# Microphone capture for voice input.
+cpal = "0.16"
 
 [dev-dependencies]
 agenthost-host = { path = "../crates/host" }

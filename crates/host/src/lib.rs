@@ -19,7 +19,9 @@ pub mod sandbox;
 pub mod secrets;
 pub mod session;
 pub mod store;
+pub mod uploads;
 pub mod util;
+pub mod voice;
 
 pub use config::HostConfig;
 pub use host::Host;

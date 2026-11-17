@@ -176,6 +176,9 @@ pub async fn serve_connection(
                     Ok(BusMsg::ConnectorChanged(id)) if conn.principal.capabilities.contains(&Capability::Admin) && conn.greeted => {
                         conn.notify(m::N_CONNECTOR_CHANGED, json!({"connector_id": id})).await;
                     }
+                    Ok(BusMsg::VoiceChanged(v)) if conn.greeted => {
+                        conn.notify(m::N_VOICE_CHANGED, serde_json::to_value(v).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -383,6 +386,23 @@ impl Conn {
             | m::CONNECTOR_REMOVE
             | m::CONNECTOR_SIGN_IN
             | m::CONNECTOR_REFRESH => h.connector_call(method, p).await,
+
+            m::UPLOAD_BEGIN => to_value(h.ctx.uploads.begin(params(p)?)?),
+            m::UPLOAD_APPEND => to_value(h.ctx.uploads.append(params(p)?)?),
+            m::UPLOAD_FINISH => {
+                let r: UploadRef = params(p)?;
+                to_value(h.ctx.uploads.finish(&r.upload_id)?)
+            }
+
+            m::VOICE_STATUS => to_value(h.ctx.voice.status()),
+            m::VOICE_DOWNLOAD => to_value(h.ctx.voice.download()),
+            m::VOICE_TRANSCRIBE => {
+                let vp: VoiceTranscribeParams = params(p)?;
+                let (_, path) = h.ctx.uploads.get(&vp.attachment_id)?;
+                let r = h.ctx.voice.transcribe(&path, vp.language).await;
+                h.ctx.uploads.remove(&vp.attachment_id);
+                to_value(VoiceTranscribeResult { text: r? })
+            }
 
             m::DEVICE_LIST
             | m::DEVICE_PAIR_START

@@ -512,6 +512,18 @@ impl Store {
     }
 
     /// Record a prompt once per `prompt_id`. Returns the event and whether it is new.
+    /// The seq of an already accepted prompt id.
+    pub fn prompt_seq(&self, session_id: &str, prompt_id: &str) -> Result<Option<i64>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT seq FROM prompt_ids WHERE session_id = ?1 AND prompt_id = ?2",
+                params![session_id, prompt_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?)
+    }
+
     pub fn append_prompt(
         &self,
         session_id: &str,

@@ -34,6 +34,26 @@ pub struct Transcript {
     pub live: String,
 }
 
+/// A file picked for the next message.
+pub struct PendingFile {
+    pub local_id: u64,
+    pub name: String,
+    pub state: FileState,
+}
+
+pub enum FileState {
+    Uploading,
+    Ready(Attachment),
+    Failed(String),
+}
+
+/// The composer's microphone.
+pub enum Mic {
+    Idle,
+    Recording(crate::audio::Recorder),
+    Transcribing,
+}
+
 #[derive(Default, Clone)]
 pub struct Pairing {
     pub pairing_id: String,
@@ -76,6 +96,15 @@ pub struct App {
     pub pairing: Option<Pairing>,
     pub error: Option<String>,
     pub notice: Option<String>,
+    /// Files waiting to go with the next message, by session.
+    pub files: HashMap<String, Vec<PendingFile>>,
+    pub next_local_id: u64,
+    pub voice: Option<VoiceStatus>,
+    pub mic: Mic,
+    /// Recent microphone level, 0..1, for the meter.
+    pub mic_level: f32,
+    /// Asking whether to download the speech model.
+    pub ask_voice_download: bool,
 }
 
 pub fn init() -> App {
@@ -107,6 +136,12 @@ pub fn init() -> App {
         pairing: None,
         error: None,
         notice: None,
+        files: HashMap::new(),
+        next_local_id: 1,
+        voice: None,
+        mic: Mic::Idle,
+        mic_level: 0.0,
+        ask_voice_download: false,
     }
 }
 
@@ -170,18 +205,138 @@ impl App {
 
     pub fn send_prompt(&mut self) {
         let Screen::Session(id) = &self.screen else { return };
+        let id = id.clone();
         let text = self.prompt.text.trim().to_string();
-        if text.is_empty() {
+        let files = self.files.get(&id).map(|f| f.as_slice()).unwrap_or(&[]);
+        if files.iter().any(|f| matches!(f.state, FileState::Uploading)) {
+            self.notice = Some("Wait a moment: files are still uploading.".into());
             return;
         }
-        let id = id.clone();
-        self.act(
-            "Send prompt",
-            m::SESSION_PROMPT,
-            json!({"session_id": id, "prompt_id": uuid::Uuid::new_v4().to_string(), "text": text}),
-            Refresh::None,
-        );
+        let ids: Vec<String> = files
+            .iter()
+            .filter_map(|f| match &f.state {
+                FileState::Ready(a) => Some(a.attachment_id.clone()),
+                _ => None,
+            })
+            .collect();
+        if text.is_empty() && ids.is_empty() {
+            return;
+        }
+        let mut params = json!({"session_id": id, "prompt_id": uuid::Uuid::new_v4().to_string(), "text": text});
+        if !ids.is_empty() {
+            params["attachments"] = json!(ids);
+        }
+        self.act("Send prompt", m::SESSION_PROMPT, params, Refresh::None);
         self.prompt.clear();
+        self.files.remove(&id);
+    }
+
+    /// Whether the host takes attachments and voice (protocol 2).
+    pub fn host_has_media(&self) -> bool {
+        self.info.as_ref().map(|i| i.protocol_version >= 2).unwrap_or(false)
+    }
+
+    /// Attach files to the current session's next message.
+    pub fn attach(&mut self, paths: &[std::path::PathBuf]) {
+        let Screen::Session(id) = self.screen.clone() else { return };
+        if !self.host_has_media() {
+            self.notice = Some("Update agenthostd to attach files.".into());
+            return;
+        }
+        for p in paths {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+            if p.is_dir() {
+                self.notice = Some(format!("{name} is a folder. Attach files, or tell the agent where the folder is."));
+                continue;
+            }
+            let list = self.files.entry(id.clone()).or_default();
+            if list.len() >= MAX_ATTACHMENTS_PER_PROMPT {
+                self.notice = Some(format!("A message can carry up to {MAX_ATTACHMENTS_PER_PROMPT} files."));
+                break;
+            }
+            let local_id = self.next_local_id;
+            self.next_local_id += 1;
+            list.push(PendingFile { local_id, name, state: FileState::Uploading });
+            if let Some(b) = &self.bridge {
+                b.send(crate::bridge::ToHost::Upload { local_id, path: p.clone() });
+            }
+        }
+        self.prompt.focused = true;
+    }
+
+    pub fn remove_file(&mut self, local_id: u64) {
+        for list in self.files.values_mut() {
+            list.retain(|f| f.local_id != local_id);
+        }
+    }
+
+    /// The microphone button: start, or stop and transcribe; offer the
+    /// model download the first time.
+    pub fn mic_press(&mut self) {
+        match std::mem::replace(&mut self.mic, Mic::Idle) {
+            Mic::Idle => {
+                let Some(v) = self.voice.clone() else {
+                    self.notice = Some("Update agenthostd to use voice input.".into());
+                    return;
+                };
+                if !v.ready {
+                    if let Some(p) = &v.progress {
+                        self.notice = Some(format!("The speech model is still downloading ({}%).", p.received * 100 / p.total.max(1)));
+                    } else {
+                        self.ask_voice_download = true;
+                    }
+                    return;
+                }
+                match crate::audio::Recorder::start() {
+                    Ok(r) => self.mic = Mic::Recording(r),
+                    Err(e) => self.error = Some(e),
+                }
+            }
+            Mic::Recording(r) => match r.finish() {
+                Some(wav) => {
+                    self.mic = Mic::Transcribing;
+                    if let Some(b) = &self.bridge {
+                        b.send(crate::bridge::ToHost::Transcribe { wav });
+                    }
+                }
+                None => self.notice = Some("That was too short to hear anything. Click the microphone, talk, then click it again.".into()),
+            },
+            Mic::Transcribing => self.mic = Mic::Transcribing,
+        }
+    }
+
+    /// Stop recording without using it.
+    pub fn mic_cancel(&mut self) {
+        if let Mic::Recording(_) = self.mic {
+            self.mic = Mic::Idle;
+        }
+    }
+
+    pub fn download_voice(&mut self) {
+        self.ask_voice_download = false;
+        self.call(Tag::Voice, m::VOICE_DOWNLOAD, json!({}));
+    }
+
+    /// Put dictated text at the caret, spaced from what is there.
+    fn insert_dictation(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            self.notice = Some("No speech was recognised. Try again a little closer to the microphone.".into());
+            return;
+        }
+        let (start, end) = self.prompt.range();
+        let before = self.prompt.text[..start].chars().last();
+        let after = self.prompt.text[end..].chars().next();
+        let mut s = String::new();
+        if before.is_some_and(|c| !c.is_whitespace()) {
+            s.push(' ');
+        }
+        s.push_str(text);
+        if after.is_some_and(|c| !c.is_whitespace()) {
+            s.push(' ');
+        }
+        self.prompt.insert(&s);
+        self.prompt.focused = true;
     }
 
     /// Apply everything the bridge has delivered. True if anything changed.
@@ -207,6 +362,7 @@ impl App {
                 self.subscribed.clear();
                 self.error = None;
                 self.refresh_all();
+                self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
                 if let Screen::Session(id) = self.screen.clone() {
                     self.ensure_subscribed(&id);
                 }
@@ -219,6 +375,9 @@ impl App {
             }
             FromHost::Reply { tag, result } => match (tag, result) {
                 (Tag::HostInfo, Ok(v)) => self.info = parse(v),
+                (Tag::Voice, Ok(v)) => self.voice = parse(v),
+                // An older host without voice: no microphone button.
+                (Tag::Voice, Err(_)) => self.voice = None,
                 (Tag::Workspaces, Ok(v)) => self.workspaces = parse(v).unwrap_or_default(),
                 (Tag::Sessions, Ok(v)) => {
                     self.sessions = parse(v).unwrap_or_default();
@@ -287,6 +446,24 @@ impl App {
                 (_, Err(e)) => self.error = Some(e.message),
             },
             FromHost::Note(n) => self.on_note(n),
+            FromHost::Uploaded { local_id, result } => {
+                for list in self.files.values_mut() {
+                    if let Some(f) = list.iter_mut().find(|f| f.local_id == local_id) {
+                        f.state = match result {
+                            Ok(a) => FileState::Ready(a),
+                            Err(e) => FileState::Failed(e),
+                        };
+                        break;
+                    }
+                }
+            }
+            FromHost::Transcribed(r) => {
+                self.mic = Mic::Idle;
+                match r {
+                    Ok(text) => self.insert_dictation(&text),
+                    Err(e) => self.error = Some(format!("Voice input failed: {e}")),
+                }
+            }
         }
     }
 
@@ -383,6 +560,19 @@ impl App {
                 }
             }
             m::N_CONNECTOR_CHANGED => self.refresh(Refresh::Connectors),
+            m::N_VOICE_CHANGED => {
+                if let Some(v) = parse::<VoiceStatus>(n.params) {
+                    let was_ready = self.voice.as_ref().map(|v| v.ready).unwrap_or(false);
+                    if v.ready && !was_ready {
+                        self.notice = Some("Voice input is ready. Click the microphone, talk, then click it again.".into());
+                    } else if let (Some(e), None) = (&v.error, &v.progress) {
+                        if self.voice.as_ref().is_some_and(|o| o.progress.is_some()) {
+                            self.error = Some(format!("Speech model: {e}"));
+                        }
+                    }
+                    self.voice = Some(v);
+                }
+            }
             m::N_PAIRING_DONE => {
                 let ok = n.params["ok"] == json!(true);
                 let name = n.params["device_name"].as_str().unwrap_or("device").to_string();

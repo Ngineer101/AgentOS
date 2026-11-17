@@ -64,7 +64,7 @@ fi
 if pgrep -x agenthostd >/dev/null; then
   echo "==> stopping the running agenthostd"
   pkill -TERM -x agenthostd || true
-  for _ in $(seq 50); do pgrep -x agenthostd >/dev/null || break; sleep 0.1; done
+  for _ in $(seq 150); do pgrep -x agenthostd >/dev/null || break; sleep 0.1; done
   pkill -KILL -x agenthostd 2>/dev/null || true
 fi
 

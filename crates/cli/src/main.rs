@@ -5,7 +5,7 @@ use agenthost_cli::{as_event, Client};
 use agenthost_proto::jsonrpc::Notification;
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -54,6 +54,9 @@ enum Cmd {
         /// End the session afterwards.
         #[arg(long)]
         end: bool,
+        /// Attach a file (repeatable).
+        #[arg(long = "attach", short = 'a')]
+        attach: Vec<PathBuf>,
     },
     /// Interactive chat in a new or existing session.
     Chat {
@@ -76,6 +79,9 @@ enum Cmd {
     /// Paired devices.
     #[command(subcommand, alias = "dev")]
     Device(DeviceCmd),
+    /// Voice input: the local speech model.
+    #[command(subcommand)]
+    Voice(VoiceCmd),
     /// Send any protocol method.
     Raw {
         method: String,
@@ -84,6 +90,21 @@ enum Cmd {
     /// Pair this CLI as a remote device (like a phone).
     #[command(subcommand)]
     Remote(RemoteCmd),
+}
+
+#[derive(Subcommand)]
+enum VoiceCmd {
+    /// Whether the speech model is installed.
+    Status,
+    /// Download and install the speech model, showing progress.
+    Download,
+    /// Transcribe a WAV recording.
+    Transcribe {
+        wav: PathBuf,
+        /// Language hint, e.g. en (detected when absent).
+        #[arg(long)]
+        language: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -577,7 +598,12 @@ async fn run(cli: Cli) -> Result<()> {
             agent,
             prompt,
             end,
+            attach,
         } => {
+            let mut ids = vec![];
+            for f in &attach {
+                ids.push(c.upload_file(f).await?.attachment_id);
+            }
             let w = resolve_workspace(&c, &workspace).await?;
             let s = c
                 .create_session(&w.workspace_id, parse_agent(&agent)?)
@@ -587,7 +613,10 @@ async fn run(cli: Cli) -> Result<()> {
                 eprintln!("session {}", s.session_id);
             }
             c.subscribe(&s.session_id, s.last_seq).await?;
-            let r = c.prompt(&s.session_id, &prompt).await?;
+            let prompt_id = uuid::Uuid::new_v4().to_string();
+            let r = c
+                .prompt_with_attachments(&s.session_id, &prompt_id, &prompt, &ids)
+                .await?;
             let mut rd = Renderer::new(json_out);
             rd.skip_prompt_seq = Some(r.seq);
             follow_turn(&mut notes, &mut rd, r.seq).await;
@@ -596,6 +625,50 @@ async fn run(cli: Cli) -> Result<()> {
                     .await?;
             }
         }
+        Cmd::Voice(v) => match v {
+            VoiceCmd::Status => {
+                let st: VoiceStatus = c.call(m::VOICE_STATUS, json!({})).await?;
+                if json_out {
+                    println!("{}", serde_json::to_string_pretty(&st)?);
+                } else {
+                    print_voice(&st);
+                }
+            }
+            VoiceCmd::Download => {
+                let mut st: VoiceStatus = c.call(m::VOICE_DOWNLOAD, json!({})).await?;
+                while st.progress.is_some() {
+                    if let Some(p) = &st.progress {
+                        eprint!(
+                            "\rdownloading {}: {} / {} MB   ",
+                            st.model,
+                            p.received / 1_000_000,
+                            p.total / 1_000_000
+                        );
+                    }
+                    match notes.recv().await {
+                        Some(n) if n.method == m::N_VOICE_CHANGED => {
+                            st = serde_json::from_value(n.params)?;
+                        }
+                        Some(_) => {}
+                        None => bail!("lost the host connection"),
+                    }
+                }
+                eprintln!();
+                print_voice(&st);
+                if !st.ready {
+                    bail!("the speech model is not installed");
+                }
+            }
+            VoiceCmd::Transcribe { wav, language } => {
+                let data = std::fs::read(&wav).with_context(|| format!("read {}", wav.display()))?;
+                let text = c.transcribe_wav(&data, language.as_deref()).await?;
+                if json_out {
+                    println!("{}", json!({"text": text}));
+                } else {
+                    println!("{text}");
+                }
+            }
+        },
         Cmd::Chat {
             workspace,
             agent,
@@ -1329,4 +1402,21 @@ fn truncate_str(s: &str, max: usize) -> String {
         end -= 1;
     }
     format!("{}…", &s[..end])
+}
+
+fn print_voice(st: &VoiceStatus) {
+    let state = if st.ready {
+        "installed".to_string()
+    } else if let Some(p) = &st.progress {
+        format!("downloading ({} of {} MB)", p.received / 1_000_000, p.total / 1_000_000)
+    } else {
+        format!(
+            "not installed ({} MB download): run `agenthost voice download`",
+            st.download_bytes / 1_000_000
+        )
+    };
+    println!("{}: {state}", st.model);
+    if let Some(e) = &st.error {
+        println!("  {e}");
+    }
 }

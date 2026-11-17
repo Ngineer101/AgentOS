@@ -23,6 +23,14 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | 7 | iOS app | 🟡 Rust FFI (`crates/ffi`, UniFFI) ✅ tested end to end (pair, connect, stream, revoke, host offline) and through generated foreign bindings; SwiftUI app (`ios/`, six screens, Face ID gate, Secure Enclave–wrapped Keychain keys, switcher cover, offline cache) **never compiled** — needs a Mac |
 | 8 | Desktop app | 🟡 seven screens in Rune (`desktop/`); every screen rendered headless and checked by eye; model and bridge tested against a real host; not run as an interactive window, not run on macOS |
 
+## Chat features (17 Nov 2026)
+
+| Feature | Status |
+| --- | --- |
+| Markdown in agent replies | Desktop ✅ (rune-kit `Markdown`, streaming mode for the live reply; links open only for http/https/mailto), rendered headless and checked by eye. iOS: block parser (`ios/AgentHost/Core/MarkdownBlocks.swift`) passes 16 tests in a Linux Swift 6 container; the SwiftUI view **not compiled** |
+| Attachments | Host ✅: `upload.begin/append/finish` (512 KB pieces, 25 MB a file, 10 a message), files kept in `<data>/uploads` (owner-only, outside every sandbox), copied into the session's temp folder at turn start and named in the prompt text; images go inline when the agent takes images, small text files embedded when it takes embedded context, otherwise `resource_link`. Tested with the fake agent over the socket and through the relay (FFI), and with **Cursor** in the sandbox (it read the attached file). Desktop: file picker, drop (not on Wayland: winit has no file drags there), chips, names in the prompt bubble; rendered headless. iOS: written, **not compiled** |
+| Voice input | Host ✅: NVIDIA Nemotron 3.5 ASR streaming 0.6B (int8, sherpa-onnx export, 475 MB) downloaded on request with a pinned SHA-256, run on the CPU through `sherpa-onnx` 2.0.1 (statically linked ONNX Runtime, about 36 MB in `agenthostd`). Download, checksum, unpacking and transcription through `voice.*` checked here (sample French and German clips: about 0.5–0.8 s for 3–5 s of audio after a 1.5 s first load). Desktop: microphone through `cpal` checked (records a WAV); the full speak → text path not tried with a voice. iOS: written, **not compiled** |
+
 ## Milestone 0 answers (Linux)
 
 | Question | Answer |
@@ -177,5 +185,12 @@ is refused. The host listened on no TCP port throughout.
   an API key login is not offered. Its network hosts are a best guess
   (`generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`,
   `oauth2.googleapis.com`, `www.googleapis.com`) until a real turn runs.
+- Voice: transcription runs after you stop recording, not live while you
+  talk; the model is multilingual and detects the language itself.
+  Recordings up to 10 minutes. The model loads on first use (about 1.5 s,
+  roughly 1 GB of memory while loaded) and stays loaded.
+- Attachments are copied into the session's temp folder, so the agent can
+  read them but they are not in the workspace; they are deleted with the
+  session's temp folder when it ends.
 - Not checked: each provider's terms for third-party ACP clients on
   subscription logins (the spec lists this before milestone 2).
