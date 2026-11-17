@@ -266,6 +266,31 @@ async fn replayed_frame_closes_the_connection() {
 }
 
 #[tokio::test]
+async fn silent_relay_link_is_noticed_and_reconnect_catches_up() {
+    // Short keepalive for this process: ping every 200 ms, dead after 1 s.
+    std::env::set_var("AGENTHOST_KEEPALIVE_MS", "200,1000");
+    let (th, relay) = host_with_relay().await;
+    let state = pair(&th, true).await.unwrap();
+    let (phone, _n, mut closed) = remote::connect(&state).await.unwrap();
+    phone.request(m::SESSION_LIST, json!({})).await.unwrap();
+    // Healthy and idle: pings keep it open past the silence limit.
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    assert!(closed.borrow().is_none(), "closed while healthy: {:?}", closed.borrow());
+    // The network dies without a close: the device notices by itself.
+    relay.tamper.lock().unwrap().stall_devices = true;
+    tokio::time::timeout(Duration::from_secs(5), closed.changed())
+        .await
+        .expect("a dead link was not noticed")
+        .unwrap();
+    let reason = closed.borrow().clone().unwrap();
+    assert!(reason.contains("connection lost"), "{reason}");
+    // Back online: a new connection works and replays what happened meanwhile.
+    relay.tamper.lock().unwrap().stall_devices = false;
+    let (phone2, _, _) = remote::connect(&state).await.unwrap();
+    phone2.request(m::SESSION_LIST, json!({})).await.unwrap();
+}
+
+#[tokio::test]
 async fn host_offline_is_reported() {
     let (th, relay) = host_with_relay().await;
     let state = pair(&th, true).await.unwrap();

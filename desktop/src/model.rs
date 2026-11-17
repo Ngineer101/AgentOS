@@ -105,6 +105,10 @@ pub struct App {
     pub mic_level: f32,
     /// Asking whether to download the speech model.
     pub ask_voice_download: bool,
+    /// Subscription id per subscribed session (to replace it on a resync).
+    pub sub_ids: HashMap<String, String>,
+    /// Sessions the host says are ahead of us: (its last seq, when we heard).
+    pub behind: HashMap<String, (i64, std::time::Instant)>,
 }
 
 pub fn init() -> App {
@@ -142,6 +146,8 @@ pub fn init() -> App {
         mic: Mic::Idle,
         mic_level: 0.0,
         ask_voice_download: false,
+        sub_ids: HashMap::new(),
+        behind: HashMap::new(),
     }
 }
 
@@ -360,6 +366,8 @@ impl App {
             FromHost::Connected { .. } => {
                 self.conn = Conn::Connected;
                 self.subscribed.clear();
+                self.sub_ids.clear();
+                self.behind.clear();
                 self.error = None;
                 self.refresh_all();
                 self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
@@ -434,7 +442,12 @@ impl App {
                         self.open_session(&id);
                     }
                 }
-                (Tag::Subscribed(_), Ok(_)) => {}
+                (Tag::Subscribed(id), Ok(v)) => {
+                    if let Some(sub) = v["subscription_id"].as_str() {
+                        self.sub_ids.insert(id, sub.to_string());
+                    }
+                }
+                (Tag::Quiet, _) => {}
                 (Tag::Action { refresh, .. }, Ok(_)) => self.refresh(refresh),
                 (Tag::Subscribed(id), Err(e)) => {
                     self.subscribed.remove(&id);
@@ -465,6 +478,34 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Safety net for live updates: a session the host says has newer events
+    /// than we got within a moment is subscribed again from where we are, so
+    /// a lost stream heals without reopening or restarting. True while any
+    /// check is pending (poll wakes again).
+    pub fn catch_up(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let mut redo = vec![];
+        self.behind.retain(|id, (want, since)| {
+            let have = self.transcripts.get(id).map(|t| t.last_seq).unwrap_or(0);
+            if have >= *want {
+                return false;
+            }
+            if now.duration_since(*since) < std::time::Duration::from_millis(1500) {
+                return true;
+            }
+            redo.push(id.clone());
+            false
+        });
+        for id in redo {
+            if let Some(old) = self.sub_ids.remove(&id) {
+                self.call(Tag::Quiet, m::EVENTS_UNSUBSCRIBE, json!({"subscription_id": old}));
+            }
+            self.subscribed.remove(&id);
+            self.ensure_subscribed(&id);
+        }
+        !self.behind.is_empty()
     }
 
     /// Start a connector's OAuth sign-in; the browser opens when it replies.
@@ -544,6 +585,13 @@ impl App {
             }
             m::N_SESSION_CHANGED => {
                 if let Some(s) = parse::<Session>(n.params) {
+                    let have = self.transcripts.get(&s.session_id).map(|t| t.last_seq).unwrap_or(0);
+                    if self.subscribed.contains(&s.session_id) && s.last_seq > have {
+                        // Usually the events are just behind this message; if
+                        // they don't come, `catch_up` asks for them again.
+                        let e = self.behind.entry(s.session_id.clone()).or_insert((s.last_seq, std::time::Instant::now()));
+                        e.0 = e.0.max(s.last_seq);
+                    }
                     let waiting = s.state == SessionState::WaitingApproval;
                     let was = self.session(&s.session_id).map(|x| x.state == SessionState::WaitingApproval).unwrap_or(false);
                     self.upsert_session(s);

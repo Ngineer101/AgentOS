@@ -136,6 +136,8 @@ final class AppModel: ObservableObject {
     private var dirtyTranscripts: Set<String> = []
     private var pathMonitor: NWPathMonitor?
     private var networkAvailable = true
+    /// The network interface in use (Wi-Fi, cellular), to notice a switch.
+    private var networkInterface: NWInterface.InterfaceType?
     private var unlocking = false
     private let constants = protocolConstants()
 
@@ -313,6 +315,15 @@ final class AppModel: ObservableObject {
         connect()
     }
 
+    /// Drop the current connection and connect again at once (the network
+    /// changed under it, so the old socket is probably dead).
+    private func reconnectNow() {
+        guard phase == .ready else { return }
+        stopConnection()
+        attempt = 0
+        connect()
+    }
+
     private func stopConnection() {
         connectTask?.cancel()
         connectTask = nil
@@ -328,8 +339,11 @@ final class AppModel: ObservableObject {
     private func scheduleReconnect() {
         guard phase == .ready, connectTask == nil else { return }
         attempt += 1
-        // 1, 2, 4, 8, 16, 30, 30… seconds, with jitter.
-        let base = min(30.0, pow(2.0, Double(max(0, attempt - 1))))
+        // 1, 2, 4, 8, 16, 30, 30… seconds, with jitter. While the host is
+        // offline (restarting, asleep) keep checking every few seconds so the
+        // app is back within moments of it.
+        let cap = link == .hostOffline ? 4.0 : 30.0
+        let base = min(cap, pow(2.0, Double(max(0, attempt - 1))))
         let delay = base * Double.random(in: 0.8...1.2)
         connectTask = Task { [weak self] in
             await self?.connectLoop(initialDelay: delay)
@@ -606,6 +620,7 @@ final class AppModel: ObservableObject {
             if !SessionStateName.isTerminal(s.state) {
                 Task { await subscribe(s.sessionId) }
             }
+            catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
         case RPC.nDeviceRevoked:
             deviceRemoved()
         case RPC.nVoiceChanged:
@@ -613,6 +628,23 @@ final class AppModel: ObservableObject {
             voice = v
         default:
             break
+        }
+    }
+
+    /// Safety net for live updates: the host says this session has newer
+    /// events than we hold. They are usually just behind this message; if
+    /// they haven't arrived after a moment, subscribe again from where we are
+    /// so a lost stream heals without reopening the app.
+    private func catchUpIfBehind(_ sessionId: String, hostLastSeq: Int64) {
+        guard subscribed.contains(sessionId),
+              hostLastSeq > (transcripts[sessionId]?.lastSeq ?? 0) else { return }
+        let gen = generation
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, gen == self.generation, self.link.isOnline else { return }
+            if (self.transcripts[sessionId]?.lastSeq ?? 0) < hostLastSeq {
+                await self.subscribe(sessionId, force: true)
+            }
         }
     }
 
@@ -736,12 +768,20 @@ final class AppModel: ObservableObject {
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] path in
             let up = path.status == .satisfied
+            let via = path.availableInterfaces.first?.type
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     let wasUp = self.networkAvailable
+                    let wasVia = self.networkInterface
                     self.networkAvailable = up
-                    if up && !wasUp { self.retryNow() }
+                    self.networkInterface = via
+                    if up && !wasUp {
+                        self.retryNow()
+                    } else if up, wasVia != nil, via != wasVia, self.link.isOnline {
+                        // Wi-Fi to cellular or back: the old socket won't survive.
+                        self.reconnectNow()
+                    }
                 }
             }
         }

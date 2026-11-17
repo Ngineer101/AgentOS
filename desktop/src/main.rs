@@ -19,6 +19,9 @@ fn setup(s: &mut App, waker: Waker) {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    if s.catch_up() {
+        tx.wake_after(std::time::Duration::from_millis(500));
+    }
     for url in std::mem::take(&mut s.open_queue) {
         if tx.open_url(&url).is_err() {
             s.notice = Some(format!("Could not open the browser. Open this link yourself: {url}"));
@@ -46,7 +49,7 @@ fn on_key(s: &mut App, ev: &KeyEvent, _: &mut Tx) -> bool {
     false
 }
 
-fn main() {
+pub(crate) fn app() -> rune::App<App> {
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((16.0, 25.0)), drag_regions: true };
     rune::App::new(AppSpec {
         setup: Some(setup),
@@ -58,5 +61,8 @@ fn main() {
         ..AppSpec::new("agenthost", (1180.0, 760.0), model::init, view::view)
     })
     .chrome(chrome)
-    .run();
+}
+
+fn main() {
+    app().run();
 }

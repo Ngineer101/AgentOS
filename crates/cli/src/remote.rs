@@ -202,6 +202,21 @@ pub async fn pair(qr_text: &str, name: &str, on_code: impl FnOnce(&str)) -> Resu
 
 /// Connect to the host through the relay and speak the client protocol.
 /// The returned receiver ends when the tunnel closes; `closed` then says why.
+/// How often a device pings the relay, and how long a silent link may last.
+/// Tests shorten both with `AGENTHOST_KEEPALIVE_MS=<ping>,<silence>`.
+fn keepalive() -> (Duration, Duration) {
+    std::env::var("AGENTHOST_KEEPALIVE_MS")
+        .ok()
+        .and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((
+                Duration::from_millis(a.trim().parse().ok()?),
+                Duration::from_millis(b.trim().parse().ok()?),
+            ))
+        })
+        .unwrap_or((Duration::from_secs(15), Duration::from_secs(40)))
+}
+
 pub async fn connect(
     state: &DeviceState,
 ) -> Result<(
@@ -233,20 +248,42 @@ pub async fn connect(
     let (closed_tx, closed_rx) = tokio::sync::watch::channel::<Option<String>>(None);
     let (mut sink, mut stream) = ws.split();
     tokio::spawn(async move {
+        // Keepalive: the relay answers `ping` itself. A link that stays
+        // silent longer than DEVICE_SILENCE is dead (the phone slept, Wi-Fi
+        // changed, a NAT forgot us) even if TCP hasn't noticed, so close it
+        // and let the app reconnect and catch up.
+        let (every, silence) = keepalive();
+        let mut ping = tokio::time::interval(every);
+        ping.tick().await;
+        let mut heard = tokio::time::Instant::now();
         let reason = loop {
             tokio::select! {
                 line = out_rx.recv() => {
                     let Some(line) = line else { break "client closed".to_string() };
                     match transport.seal(line.as_bytes()) {
                         Ok(frames) => {
+                            let mut failed = None;
                             for f in frames {
-                                if sink.send(WsMsg::Binary(f)).await.is_err() { break; }
+                                if let Err(e) = sink.send(WsMsg::Binary(f)).await {
+                                    failed = Some(e.to_string());
+                                    break;
+                                }
                             }
+                            if let Some(e) = failed { break format!("connection lost: {e}"); }
                         }
                         Err(e) => break format!("tunnel error: {e}"),
                     }
                 }
+                _ = ping.tick() => {
+                    if heard.elapsed() > silence {
+                        break "connection lost: the relay stopped answering".to_string();
+                    }
+                    if let Err(e) = sink.send(WsMsg::Text(r#"{"type":"ping"}"#.into())).await {
+                        break format!("connection lost: {e}");
+                    }
+                }
                 msg = stream.next() => {
+                    heard = tokio::time::Instant::now();
                     match msg {
                         Some(Ok(WsMsg::Binary(b))) => match transport.open(&b) {
                             Ok(Some(m)) => {

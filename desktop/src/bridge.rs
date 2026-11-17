@@ -32,6 +32,8 @@ pub enum Tag {
     Subscribed(String),
     /// `voice.status` or `voice.download`.
     Voice,
+    /// Housekeeping whose answer doesn't matter.
+    Quiet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

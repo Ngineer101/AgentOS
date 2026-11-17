@@ -30,6 +30,9 @@ pub struct Tamper {
     pub replay_device_frame: Option<usize>,
     /// Device→host frames forwarded so far.
     pub device_frames: usize,
+    /// Go silent towards devices: forward nothing to or from them and answer
+    /// no pings, like a network that died without closing the socket.
+    pub stall_devices: bool,
 }
 
 enum Ctl {
@@ -229,12 +232,16 @@ impl DevRelay {
                     }
                     let cid = String::from_utf8_lossy(&rest[..n as usize]).to_string();
                     let payload = rest[n as usize..].to_vec();
+                    if self.tamper.lock().unwrap().stall_devices {
+                        continue;
+                    }
                     self.tamper.lock().unwrap().log.push(payload.clone());
                     let st = self.state.lock().unwrap();
                     if let Some((d, _)) = st.rooms.get(&rid).and_then(|r| r.conns.get(&cid)) {
                         let _ = d.send(Ctl::Msg(Message::Binary(payload)));
                     }
                 }
+                (_, Message::Binary(_)) if self.tamper.lock().unwrap().stall_devices => {}
                 (_, Message::Binary(b)) => {
                     let mut payloads = vec![b.to_vec()];
                     {
@@ -262,6 +269,11 @@ impl DevRelay {
                 }
                 (_, Message::Close(_)) => break,
                 ("host", _) => {}
+                // Keepalive, answered like the Worker's auto-response.
+                (_, Message::Text(_)) if self.tamper.lock().unwrap().stall_devices => {}
+                (_, Message::Text(t)) if t.as_str() == r#"{"type":"ping"}"# => {
+                    let _ = tx.send(Ctl::Msg(Message::Text(r#"{"type":"pong"}"#.to_string())));
+                }
                 (_, Message::Text(_)) => break,
                 _ => {}
             }

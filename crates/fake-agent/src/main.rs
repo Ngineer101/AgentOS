@@ -19,7 +19,8 @@
 //!
 //! Environment: `FAKE_AGENT_HOME` (state, default `$HOME/.fake-agent`),
 //! `FAKE_AGENT_LOGGED_OUT=1` (fail `session/new` with auth required),
-//! `FAKE_AGENT_PROTOCOL_VERSION` (override the version it reports).
+//! `FAKE_AGENT_PROTOCOL_VERSION` (override the version it reports),
+//! `FAKE_AGENT_CHUNK_MS` (pause between reply chunks).
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -266,7 +267,15 @@ async fn say(agent: &Agent, sid: &str, text: &str) {
     agent.append_history(sid, "agent", text);
     // Stream in a few chunks so the host sees deltas.
     let chars: Vec<char> = text.chars().collect();
+    // FAKE_AGENT_CHUNK_MS: pause between chunks, to stream like a real model.
+    let pause = std::env::var("FAKE_AGENT_CHUNK_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     for chunk in chars.chunks(8) {
+        if pause > 0 {
+            tokio::time::sleep(Duration::from_millis(pause)).await;
+        }
         let s: String = chunk.iter().collect();
         agent
             .update(

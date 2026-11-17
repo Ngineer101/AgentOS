@@ -42,6 +42,10 @@ struct Pairing {
     decision: Option<oneshot::Sender<bool>>,
 }
 
+/// How often the host pings the relay, and how long a silent link may last.
+const RELAY_PING: Duration = Duration::from_secs(20);
+const RELAY_SILENCE: Duration = Duration::from_secs(50);
+
 pub struct Remote {
     host: Weak<Host>,
     ctx: Arc<Ctx>,
@@ -215,7 +219,7 @@ impl Remote {
             self.control(json!({"type":"pairing.open","token_hash": b64(&tunnel::sha256(&tunnel::pairing_token(&p.secret))),"expires_at": p.expires_at}));
         }
         let writer = tokio::spawn(async move {
-            let mut ping = tokio::time::interval(Duration::from_secs(25));
+            let mut ping = tokio::time::interval(RELAY_PING);
             loop {
                 tokio::select! {
                     o = rx.recv() => {
@@ -229,7 +233,17 @@ impl Remote {
                 }
             }
         });
-        while let Some(msg) = stream.next().await {
+        // The relay answers every ping; silence this long means the link is
+        // dead (sleep, network change) even if TCP hasn't noticed.
+        loop {
+            let msg = match tokio::time::timeout(RELAY_SILENCE, stream.next()).await {
+                Err(_) => {
+                    writer.abort();
+                    bail!("the relay stopped answering; reconnecting");
+                }
+                Ok(None) => break,
+                Ok(Some(m)) => m,
+            };
             match msg? {
                 WsMsg::Text(t) => {
                     let v: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
