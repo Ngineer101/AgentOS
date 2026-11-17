@@ -1,0 +1,23 @@
+.gitignore
+  s_73be34ccbc346c::t_d41c3c430bca11 9
+README.md
+  s_73be34ccbc346c::t_983187f31d2df6 65
+scripts/dev.sh
+  s_73be34ccbc346c::t_891aa8943d95ed 1-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ef9235fe346db3b5ccb86f3dc8755c56436f507",
+  "prompts": {},
+  "sessions": {
+    "s_73be34ccbc346c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_73be34ccbc346c",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
