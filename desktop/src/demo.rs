@@ -113,6 +113,19 @@ fn base(s: &mut App) {
             AgentStatus { agent: AgentKind::Codex, display_name: "Codex".into(), installed: true, version: Some("2.6.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("codex".into()), profile_name: None, config_dir: None },
             AgentStatus { agent: AgentKind::Claude, display_name: "Claude Code".into(), installed: true, version: Some("0.107.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("claude".into()), profile_name: None, config_dir: None },
             AgentStatus {
+                agent: AgentKind::Claude,
+                display_name: "Claude Code".into(),
+                installed: true,
+                version: Some("0.107.0".into()),
+                logged_in: true,
+                available: true,
+                problem: None,
+                fix: None,
+                profile_id: Some("prof_work".into()),
+                profile_name: Some("Work".into()),
+                config_dir: Some("/home/nico/.claude-work".into()),
+            },
+            AgentStatus {
                 agent: AgentKind::Opencode,
                 display_name: "OpenCode".into(),
                 installed: true,
@@ -206,7 +219,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         base(s);
         s.screen = Screen::NewSession;
         s.new_ws = Some("ws_relay".into());
-        s.new_agent = Some(AgentKind::Claude);
+        s.new_agent = Some("prof_work".into());
     }),
     ("workspaces", |s| {
         base(s);

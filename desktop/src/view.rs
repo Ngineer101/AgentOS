@@ -2,7 +2,7 @@
 //! Connectors, Devices and Host status.
 
 use crate::bridge::{Refresh, Tag};
-use crate::model::{ago, App, Conn, Screen};
+use crate::model::{ago, login_key, App, Conn, Screen};
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use rune::{col, el, row, text, Color, Cx, El, Icon, ScrollSpec, Tx};
@@ -157,7 +157,14 @@ fn session_title(s: &App, id: &str) -> String {
     match s.session(id) {
         Some(x) => {
             let ws = s.workspace(&x.workspace_id).map(|w| w.name.clone()).unwrap_or_default();
-            format!("{} · {}", x.agent.display_name(), ws)
+            let profile = x
+                .profile_id
+                .as_ref()
+                .and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id)))
+                .and_then(|a| a.profile_name.clone())
+                .map(|n| format!(" · {n}"))
+                .unwrap_or_default();
+            format!("{}{profile} · {}", x.agent.display_name(), ws)
         }
         None => "Session".into(),
     }
@@ -679,22 +686,23 @@ fn new_session_screen(s: &App, k: &Kit) -> El {
     c = c.child(heading("Agent", k));
     let agents = s.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
     for a in agents {
-        let sub = if a.available {
+        let mut sub = if a.available {
             format!("Ready{}", a.version.as_ref().map(|v| format!(" · {v}")).unwrap_or_default())
         } else {
             format!("Unavailable: {} — fix: {}", a.problem.clone().unwrap_or_default(), a.fix.clone().unwrap_or_default())
         };
-        let kind = a.agent;
-        c = c.child(choice(a.display_name.clone(), sub, s.new_agent == Some(kind), a.available, k, move |s: &mut App| s.new_agent = Some(kind)));
+        if let Some(dir) = &a.config_dir {
+            sub = format!("{sub} · {dir}");
+        }
+        let key = login_key(&a);
+        let selected = s.new_agent.as_deref() == Some(key.as_str());
+        c = c.child(choice(a.label(), sub, selected, a.available, k, move |s: &mut App| s.new_agent = Some(key.clone())));
     }
+    c = c.child(muted_wrap("Several subscriptions of one agent? Add a profile per config folder under Host status.", k));
     let ready = s.new_ws.is_some() && s.new_agent.is_some();
     let start = Button::new("Start session")
         .variant(if ready { ButtonVariant::Submit } else { ButtonVariant::Neutral })
-        .on_press(|s: &mut App| {
-            if let (Some(w), Some(a)) = (s.new_ws.clone(), s.new_agent) {
-                s.call(Tag::SessionCreated, m::SESSION_CREATE, json!({"workspace_id": w, "agent": a}));
-            }
-        })
+        .on_press(|s: &mut App| s.start_session())
         .build(k);
     scroll_page(c.child(row().child(start)))
 }
@@ -1136,6 +1144,70 @@ fn devices_screen(s: &App, k: &Kit) -> El {
 // Host status
 // ---------------------------------------------------------------------------
 
+/// "Add an agent profile": another login of an agent, kept in its own config folder.
+fn profile_form(s: &App, info: &HostInfo, k: &Kit) -> El {
+    let mut kinds: Vec<AgentKind> = vec![];
+    for a in &info.agents {
+        if a.agent.profile_env().is_some() && !kinds.contains(&a.agent) {
+            kinds.push(a.agent);
+        }
+    }
+    let mut pick = row().gap(6.0).wrap();
+    for kind in kinds {
+        let on = s.profile_agent == Some(kind);
+        pick = pick.child(button(kind.display_name(), k, if on { ButtonVariant::Contrast } else { ButtonVariant::Ghost }, move |s: &mut App| s.profile_agent = Some(kind)));
+    }
+    let setting = s
+        .profile_agent
+        .and_then(|a| a.profile_env())
+        .map(|v| format!("The folder the agent's {v} setting points at, e.g. ~/.claude-work. Log in there once (the fix shown after adding)."))
+        .unwrap_or_else(|| "Pick the agent, then give the profile a name and its config folder.".into());
+    col()
+        .w_full()
+        .gap(8.0)
+        .pt(8.0)
+        .child(heading("Add a profile", k))
+        .child(muted_wrap("Each profile is another login of an agent (a work and a personal subscription, say). New sessions can pick it; its folder stays hidden from every other session.", k))
+        .child(pick)
+        .child(
+            TextInput::new(&s.profile_name).width(None)
+                .placeholder("Name, e.g. Work")
+                .on_edit(|s: &mut App| &mut s.profile_name)
+                .build(k),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    col().grow(1.0).child(
+                        TextInput::new(&s.profile_dir).width(None)
+                            .placeholder("~/.claude-work")
+                            .on_edit(|s: &mut App| &mut s.profile_dir)
+                            .on_submit(|s: &mut App, _: &mut Tx| s.add_profile())
+                            .build(k),
+                    ),
+                )
+                .child(
+                    Button::new("Choose…")
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Regular)
+                        .on_press_tx(|_: &mut App, tx: &mut Tx| {
+                            let options = rune::FileDialogOptions { title: "The agent's config folder".into(), ..Default::default() };
+                            tx.open_folder(options, |s: &mut App, result, _| match result {
+                                Ok(Some(p)) => s.profile_dir.replace_text(&p.display().to_string()),
+                                Ok(None) => {}
+                                Err(e) => s.error = Some(format!("Could not open the folder picker: {e}")),
+                            });
+                        })
+                        .build(k),
+                )
+                .child(button("Add profile", k, ButtonVariant::Contrast, |s: &mut App| s.add_profile())),
+        )
+        .child(muted_wrap(setting, k))
+}
+
 fn host_screen(s: &App, k: &Kit) -> El {
     let Some(info) = &s.info else { return page(k, "host").child(muted("Waiting for the host…", k)) };
     let ok = |b: bool| badge(if b { "ok" } else { "needs attention" }, !b, k);
@@ -1151,15 +1223,24 @@ fn host_screen(s: &App, k: &Kit) -> El {
     }
     let mut agents = card(k).child(heading("Agents", k));
     for a in &info.agents {
-        let mut r = row().w_full().gap(8.0).center_y().child(label(a.display_name.clone(), k)).child(muted(a.version.clone().unwrap_or_default(), k)).child(el().grow(1.0)).child(ok(a.available));
+        let mut r = row().w_full().gap(8.0).center_y().child(label(a.label(), k)).child(muted(a.version.clone().unwrap_or_default(), k)).child(el().grow(1.0)).child(ok(a.available));
         if !a.available {
             r = r.child(muted(a.problem.clone().unwrap_or_default(), k));
         }
+        if let (Some(id), Some(_)) = (a.profile_id.clone(), &a.profile_name) {
+            r = r.child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| {
+                s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo)
+            }));
+        }
         agents = agents.child(r);
+        if let Some(dir) = &a.config_dir {
+            agents = agents.child(row().gap(6.0).child(muted("Config folder:", k)).child(mono(dir.clone(), k)));
+        }
         if let Some(fix) = a.fix.as_ref().filter(|_| !a.available) {
             agents = agents.child(row().gap(6.0).child(muted("Fix:", k)).child(mono(fix.clone(), k)));
         }
     }
+    agents = agents.child(profile_form(s, info, k));
     let r = &info.relay;
     let relay = card(k)
         .child(row().gap(8.0).center_y().child(heading("Relay", k)).child(badge(if !r.configured { "off" } else if r.connected { "connected" } else { "disconnected" }, r.configured && !r.connected, k)))

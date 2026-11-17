@@ -55,7 +55,7 @@ fn desktop_model_runs_a_session_against_a_real_host() {
     app.act("Add workspace", agenthost_proto::methods::WORKSPACE_ADD, serde_json::json!({"path": work}), bridge::Refresh::Workspaces);
     pump(&mut app, |a| !a.workspaces.is_empty());
     app.new_ws = Some(app.workspaces[0].workspace_id.clone());
-    app.new_agent = Some(AgentKind::Fake);
+    app.new_agent = Some("fake".into());
     app.call(bridge::Tag::SessionCreated, agenthost_proto::methods::SESSION_CREATE, serde_json::json!({"workspace_id": app.new_ws, "agent": "fake"}));
     pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).map(|s| s.state == SessionState::Idle).unwrap_or(false)));
     let Screen::Session(sid) = app.screen.clone() else { unreachable!() };

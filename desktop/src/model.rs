@@ -92,7 +92,12 @@ pub struct App {
     pub rename: TextEdit,
     pub renaming: Option<String>,
     pub new_ws: Option<String>,
-    pub new_agent: Option<AgentKind>,
+    /// The chosen login for a new session ([`login_key`]).
+    pub new_agent: Option<String>,
+    /// The "Add an agent profile" form on the host screen.
+    pub profile_agent: Option<AgentKind>,
+    pub profile_name: TextEdit,
+    pub profile_dir: TextEdit,
     pub pairing: Option<Pairing>,
     pub error: Option<String>,
     pub notice: Option<String>,
@@ -109,6 +114,11 @@ pub struct App {
     pub sub_ids: HashMap<String, String>,
     /// Sessions the host says are ahead of us: (its last seq, when we heard).
     pub behind: HashMap<String, (i64, std::time::Instant)>,
+}
+
+/// One login of an agent: its profile id, or (hosts before profiles) its name.
+pub fn login_key(a: &AgentStatus) -> String {
+    a.profile_id.clone().unwrap_or_else(|| a.agent.as_str().to_string())
 }
 
 pub fn init() -> App {
@@ -137,6 +147,9 @@ pub fn init() -> App {
         renaming: None,
         new_ws: None,
         new_agent: None,
+        profile_agent: None,
+        profile_name: TextEdit::new(""),
+        profile_dir: TextEdit::new(""),
         pairing: None,
         error: None,
         notice: None,
@@ -163,6 +176,35 @@ impl App {
     }
 
     /// A user action: errors are shown; success refreshes a list.
+    /// Start a session in the chosen workspace as the chosen login.
+    pub fn start_session(&self) {
+        let (Some(ws), Some(key)) = (&self.new_ws, &self.new_agent) else { return };
+        let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();
+        let Some(a) = agents.iter().find(|a| &login_key(a) == key) else { return };
+        let mut params = json!({"workspace_id": ws, "agent": a.agent});
+        if let Some(id) = &a.profile_id {
+            params["profile_id"] = json!(id);
+        }
+        self.call(Tag::SessionCreated, m::SESSION_CREATE, params);
+    }
+
+    /// Add the profile from the host screen's form.
+    pub fn add_profile(&mut self) {
+        let name = self.profile_name.text.trim().to_string();
+        let dir = self.profile_dir.text.trim().to_string();
+        let Some(agent) = self.profile_agent else {
+            self.error = Some("Pick the agent the profile is for.".into());
+            return;
+        };
+        if name.is_empty() || dir.is_empty() {
+            self.error = Some("A profile needs a name and its config folder.".into());
+            return;
+        }
+        self.act("Add profile", m::AGENT_PROFILE_ADD, json!({"agent": agent, "name": name, "config_dir": dir}), Refresh::HostInfo);
+        self.profile_name.clear();
+        self.profile_dir.clear();
+    }
+
     pub fn act(&self, what: &str, method: &'static str, params: Value, refresh: Refresh) {
         self.call(Tag::Action { what: what.into(), refresh }, method, params);
     }
