@@ -54,6 +54,9 @@ pub const N_PAIRING_PENDING: &str = "pairing.pending";
 pub const N_PAIRING_DONE: &str = "pairing.done";
 /// Sent to a device right before the host closes its connection after revoking it.
 pub const N_DEVICE_REVOKED: &str = "device.revoked";
+/// A connector's status or tools changed on its own (sign-in finished or
+/// failed). Params: `{"connector_id"}`. Admin connections only.
+pub const N_CONNECTOR_CHANGED: &str = "connector.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]

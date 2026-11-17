@@ -20,6 +20,8 @@ pub enum BusMsg {
     },
     /// A device was revoked; its connections must close.
     DeviceRevoked(String),
+    /// A connector's status or tools changed (by id).
+    ConnectorChanged(String),
 }
 
 #[derive(Clone)]

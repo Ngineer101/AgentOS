@@ -173,6 +173,9 @@ pub async fn serve_connection(
                         v["pairing_id"] = json!(pairing_id);
                         conn.notify(m::N_PAIRING_DONE, v).await;
                     }
+                    Ok(BusMsg::ConnectorChanged(id)) if conn.principal.capabilities.contains(&Capability::Admin) && conn.greeted => {
+                        conn.notify(m::N_CONNECTOR_CHANGED, json!({"connector_id": id})).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }

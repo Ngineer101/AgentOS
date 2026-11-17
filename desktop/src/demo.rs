@@ -72,6 +72,29 @@ fn base(s: &mut App) {
         ],
         created_at: t,
     }];
+    let sentry = |id: &str, name: &str, status: &str| Connector {
+        connector_id: id.into(),
+        name: name.into(),
+        url: "https://mcp.sentry.dev/mcp".into(),
+        auth: ConnectorAuth::Oauth,
+        enabled: true,
+        status: status.into(),
+        status_detail: None,
+        write_policy: ToolPolicy::Ask,
+        read_policy: ToolPolicy::Auto,
+        tools: if status == "ok" {
+            vec![
+                ConnectorTool { name: "search_issues".into(), description: Some("Search issues in an organization".into()), kind: ToolKind::Read, policy: ToolPolicy::Auto, policy_override: None },
+                ConnectorTool { name: "update_issue".into(), description: Some("Resolve, assign or ignore an issue".into()), kind: ToolKind::Write, policy: ToolPolicy::Ask, policy_override: None },
+            ]
+        } else {
+            vec![]
+        },
+        created_at: t,
+    };
+    s.connectors.push(sentry("con_sw", "Sentry (work)", "ok"));
+    s.connectors.push(sentry("con_sp", "Sentry (personal)", "needs_sign_in"));
+    s.signing_in.insert("con_sp".into(), "https://mcp.sentry.dev/oauth/authorize?response_type=code&client_id=…".into());
     s.devices = vec![Device {
         device_id: "dev_1".into(),
         name: "Nico's iPhone".into(),

@@ -664,42 +664,39 @@ fn workspace_card(s: &App, w: &Workspace, k: &Kit) -> El {
 // ---------------------------------------------------------------------------
 
 fn connectors_screen(s: &App, k: &Kit) -> El {
-    let add = col()
+    let add = row()
         .w_full()
         .gap(8.0)
-        .child(TextInput::new(&s.conn_url).width(None).placeholder("https://mcp.example.com/mcp").on_edit(|s: &mut App| &mut s.conn_url).build(k))
+        .center_y()
         .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .child(col().grow(1.0).child(TextInput::new(&s.conn_token).width(None).placeholder("Bearer token (optional; OAuth servers need none)").secure().on_edit(|s: &mut App| &mut s.conn_token).build(k)))
-                .child(button("Add connector", k, ButtonVariant::Contrast, |s: &mut App| {
-                    let url = s.conn_url.text.trim().to_string();
-                    if url.is_empty() {
-                        return;
-                    }
-                    let token = s.conn_token.text.trim().to_string();
-                    let params = if token.is_empty() { json!({"url": url}) } else { json!({"url": url, "token": token}) };
-                    s.act("Add connector", m::CONNECTOR_ADD, params, Refresh::Connectors);
-                    s.conn_url.clear();
-                    s.conn_token.clear();
-                })),
-        );
+            col().grow(1.0).child(
+                TextInput::new(&s.conn_url)
+                    .width(None)
+                    .placeholder("Server URL, e.g. https://mcp.sentry.dev/mcp")
+                    .on_edit(|s: &mut App| &mut s.conn_url)
+                    .on_submit(|s: &mut App, _: &mut Tx| s.add_connector())
+                    .build(k),
+            ),
+        )
+        .child(button("Add", k, ButtonVariant::Contrast, |s: &mut App| s.add_connector()));
     let mut c = page(k, "connectors")
-        .child(heading("Add a remote MCP server", k))
-        .child(muted("Credentials stay on the host; agents reach connectors only through the host's gateway. Write tools ask first by default.", k))
+        .child(muted("Paste a remote MCP server's URL. If it needs an account, your browser opens so you can sign in. For two accounts on one service (work and personal), add it twice and rename each.", k).wrap())
+        .child(muted("Read tools are allowed and write tools ask you first. Click a tool's setting to cycle Allow, Ask and Off.", k).wrap())
         .child(add);
+    if s.connectors.is_empty() {
+        c = c.child(muted("No connectors yet.", k));
+    }
     for conn in &s.connectors {
-        c = c.child(connector_card(conn, k));
+        c = c.child(connector_card(s, conn, k));
     }
     scroll_page(c)
 }
 
 fn policy_name(p: ToolPolicy) -> &'static str {
     match p {
-        ToolPolicy::Auto => "auto",
-        ToolPolicy::Ask => "ask",
-        ToolPolicy::Disabled => "off",
+        ToolPolicy::Auto => "Allow",
+        ToolPolicy::Ask => "Ask",
+        ToolPolicy::Disabled => "Off",
     }
 }
 
@@ -711,32 +708,103 @@ fn next_policy(p: ToolPolicy) -> ToolPolicy {
     }
 }
 
-fn connector_card(c: &Connector, k: &Kit) -> El {
+fn status_label(status: &str) -> &'static str {
+    match status {
+        "ok" => "connected",
+        "needs_sign_in" => "needs sign-in",
+        "error" => "error",
+        _ => "checking",
+    }
+}
+
+fn connector_card(s: &App, c: &Connector, k: &Kit) -> El {
     let id = c.connector_id.clone();
-    let mut head = row().w_full().center_y().gap(8.0).child(heading(c.name.clone(), k)).child(badge(&c.status, c.status == "ok", k)).child(el().grow(1.0));
-    if c.status == "needs_sign_in" || c.auth == ConnectorAuth::Oauth {
-        let ids = id.clone();
-        head = head.child(button("Sign in", k, ButtonVariant::Contrast, move |s: &mut App| {
-            s.call(Tag::Action { what: "Sign in".into(), refresh: Refresh::Connectors }, m::CONNECTOR_SIGN_IN, json!({"connector_id": ids}));
+    let signing = s.signing_in.get(&c.connector_id);
+    let renaming = s.renaming.as_deref() == Some(c.connector_id.as_str());
+
+    let title: El = if renaming {
+        let idn = id.clone();
+        col().grow(1.0).child(
+            TextInput::new(&s.rename)
+                .width(None)
+                .placeholder("e.g. Sentry (work)")
+                .on_edit(|s: &mut App| &mut s.rename)
+                .on_submit(move |s: &mut App, _: &mut Tx| {
+                    let n = s.rename.text.trim().to_string();
+                    if !n.is_empty() {
+                        s.act("Rename connector", m::CONNECTOR_UPDATE, json!({"connector_id": idn, "name": n}), Refresh::Connectors);
+                    }
+                    s.renaming = None;
+                })
+                .build(k),
+        )
+    } else {
+        let badge_el = match signing {
+            Some(_) => badge("waiting for browser", true, k),
+            None => badge(status_label(&c.status), c.status != "ok", k),
+        };
+        row().grow(1.0).gap(8.0).center_y().child(heading(c.name.clone(), k)).child(badge_el)
+    };
+    let mut head = row().w_full().center_y().gap(8.0).child(title);
+
+    if renaming {
+        head = head.child(button("Cancel", k, ButtonVariant::Ghost, |s: &mut App| s.renaming = None));
+    } else {
+        match signing {
+            Some(link) if !link.is_empty() => {
+                let l = link.clone();
+                head = head.child(button("Open browser again", k, ButtonVariant::Ghost, move |s: &mut App| s.open_queue.push(l.clone())));
+            }
+            Some(_) => {}
+            None if c.status == "needs_sign_in" || (c.status == "error" && c.auth == ConnectorAuth::Oauth) => {
+                let ids = id.clone();
+                head = head.child(button("Sign in", k, ButtonVariant::Contrast, move |s: &mut App| s.sign_in(&ids)));
+            }
+            None if c.status == "error" => {
+                let idf = id.clone();
+                head = head.child(button("Retry", k, ButtonVariant::Ghost, move |s: &mut App| {
+                    s.act("Refresh", m::CONNECTOR_REFRESH, json!({"connector_id": idf}), Refresh::Connectors)
+                }));
+            }
+            None => {}
+        }
+        let (idr, nm) = (id.clone(), c.name.clone());
+        head = head.child(button("Rename", k, ButtonVariant::Ghost, move |s: &mut App| {
+            s.renaming = Some(idr.clone());
+            s.rename = rune::TextEdit::new(nm.clone());
+            s.rename.focused = true;
+        }));
+        let ide = id.clone();
+        let enabled = c.enabled;
+        head = head.child(
+            Switch::new(enabled)
+                .label("On")
+                .on_toggle(move |s: &mut App| s.act("Turn connector on or off", m::CONNECTOR_UPDATE, json!({"connector_id": ide, "enabled": !enabled}), Refresh::Connectors))
+                .build(k)
+                .key(format!("{}-enabled", c.connector_id)),
+        );
+        let idr = id.clone();
+        head = head.child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| {
+            s.act("Remove connector", m::CONNECTOR_REMOVE, json!({"connector_id": idr}), Refresh::Connectors)
         }));
     }
-    let idf = id.clone();
-    head = head.child(button("Refresh", k, ButtonVariant::Ghost, move |s: &mut App| {
-        s.act("Refresh", m::CONNECTOR_REFRESH, json!({"connector_id": idf}), Refresh::Connectors)
-    }));
-    let ide = id.clone();
-    let enabled = c.enabled;
-    head = head.child(
-        Switch::new(enabled)
-            .label("Enabled")
-            .on_toggle(move |s: &mut App| s.act("Enable", m::CONNECTOR_UPDATE, json!({"connector_id": ide, "enabled": !enabled}), Refresh::Connectors))
-            .build(k)
-            .key(format!("{}-enabled", c.connector_id)),
-    );
-    let idr = id.clone();
-    head = head.child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| {
-        s.act("Remove connector", m::CONNECTOR_REMOVE, json!({"connector_id": idr}), Refresh::Connectors)
-    }));
+
+    let mut card = card(k)
+        .key(format!("conn-{}", c.connector_id))
+        .child(head)
+        .child(muted(format!("{} · agents see its tools as {}__…", c.url, connector_slug(&c.name)), k));
+    if let Some(link) = signing.filter(|l| !l.is_empty()) {
+        card = card
+            .child(muted("Finish signing in in your browser. This updates by itself when you're done. If no browser opened, open this link:", k).wrap())
+            .child(mono(link.clone(), k));
+    } else if c.status == "error" {
+        if let Some(d) = &c.status_detail {
+            card = card.child(text(d.clone()).font(k.ty.small).color(k.c.danger.icon).wrap());
+        }
+    }
+    if c.tools.is_empty() {
+        return card;
+    }
     let mut tools = col().w_full().gap(2.0);
     for t in &c.tools {
         let (idt, name, next) = (id.clone(), t.name.clone(), next_policy(t.policy));
@@ -754,12 +822,7 @@ fn connector_card(c: &Connector, k: &Kit) -> El {
                 })),
         );
     }
-    let mut card = card(k).key(format!("conn-{}", c.connector_id)).child(head).child(muted(c.url.clone(), k));
-    if let Some(d) = &c.status_detail {
-        card = card.child(muted(d.clone(), k));
-    }
-    card.child(muted(format!("Read tools: {} by default · write tools: {} by default · press a tool's policy to change it", policy_name(c.read_policy), policy_name(c.write_policy)), k))
-        .child(tools)
+    card.child(tools)
 }
 
 // ---------------------------------------------------------------------------

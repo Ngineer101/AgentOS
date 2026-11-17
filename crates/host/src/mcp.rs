@@ -10,6 +10,7 @@
 //! credential attached. Agents never see a credential.
 
 use crate::api::Principal;
+use crate::bus::BusMsg;
 use crate::ctx::{Ctx, GatewayApi};
 use crate::host::ConnectorAdmin;
 use crate::proxy::GATEWAY_HOST;
@@ -82,19 +83,7 @@ pub fn exposed_name(slug: &str, tool: &str) -> String {
 }
 
 pub fn slug(name: &str) -> String {
-    let mut s: String = name
-        .to_ascii_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    s = s.trim_matches('_').to_string();
-    while s.contains("__") {
-        s = s.replace("__", "_");
-    }
-    if s.is_empty() {
-        s = "mcp".into();
-    }
-    s.chars().take(24).collect()
+    agenthost_proto::connector_slug(name)
 }
 
 fn text_result(text: &str, is_error: bool) -> Value {
@@ -739,6 +728,9 @@ impl Gateway {
             }
         }
         let _ = self.ctx.store.connector_save(c);
+        self.ctx
+            .bus
+            .publish(BusMsg::ConnectorChanged(c.connector_id.clone()));
     }
 
     // -----------------------------------------------------------------------
@@ -946,6 +938,7 @@ impl Gateway {
                         c.status = "error".into();
                         c.status_detail = Some(format!("sign-in failed: {e:#}"));
                         let _ = gw.ctx.store.connector_save(&c);
+                        gw.ctx.bus.publish(BusMsg::ConnectorChanged(cid.clone()));
                     }
                 }
             }
@@ -1154,16 +1147,24 @@ impl ConnectorAdmin for Arc<Gateway> {
                 } else {
                     ConnectorAuth::None
                 });
+                let name = match a.name.as_deref().map(str::trim) {
+                    Some(n) if !n.is_empty() => n.to_string(),
+                    _ => {
+                        let existing = self
+                            .ctx
+                            .store
+                            .connector_list()
+                            .map_err(|e| RpcError::internal(e.to_string()))?;
+                        let names: Vec<&str> = existing.iter().map(|c| c.name.as_str()).collect();
+                        agenthost_proto::default_connector_name(
+                            u.host_str().unwrap_or("mcp"),
+                            &names,
+                        )
+                    }
+                };
                 let mut c = ConnectorRow {
                     connector_id: new_id("con"),
-                    name: a.name.unwrap_or_else(|| {
-                        u.host_str()
-                            .unwrap_or("mcp")
-                            .split('.')
-                            .find(|p| !matches!(*p, "mcp" | "www" | "api"))
-                            .unwrap_or("mcp")
-                            .to_string()
-                    }),
+                    name,
                     url: a.url,
                     auth,
                     enabled: true,
@@ -1191,7 +1192,11 @@ impl ConnectorAdmin for Arc<Gateway> {
                 let u: ConnectorUpdateParams = serde_json::from_value(p).map_err(bad)?;
                 let mut c = self.get(&u.connector_id)?;
                 if let Some(n) = u.name {
-                    c.name = n;
+                    let n = n.trim();
+                    if n.is_empty() {
+                        return Err(RpcError::invalid_params("a connector needs a name"));
+                    }
+                    c.name = n.to_string();
                 }
                 if let Some(e) = u.enabled {
                     c.enabled = e;
@@ -1261,13 +1266,17 @@ impl ConnectorAdmin for Arc<Gateway> {
             }
             m::CONNECTOR_SIGN_IN => {
                 let id: IdParams = serde_json::from_value(p).map_err(bad)?;
-                let c = self.get(&id.id)?;
+                let mut c = self.get(&id.id)?;
                 let url = self.oauth_start(&c).await.map_err(|e| {
                     RpcError::new(
                         codes::UNAVAILABLE,
                         format!("sign-in could not start: {e:#}"),
                     )
                 })?;
+                // Until the browser comes back: success sets `ok`, failure `error`.
+                c.status = "needs_sign_in".into();
+                c.status_detail = Some("waiting for sign-in in the browser".into());
+                let _ = self.ctx.store.connector_save(&c);
                 serde_json::to_value(ConnectorSignInResult {
                     authorize_url: Some(url),
                     status: "waiting_for_browser".into(),

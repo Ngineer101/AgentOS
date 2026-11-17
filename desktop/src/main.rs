@@ -18,6 +18,11 @@ fn setup(s: &mut App, waker: Waker) {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    for url in std::mem::take(&mut s.open_queue) {
+        if tx.open_url(&url).is_err() {
+            s.notice = Some(format!("Open this link in your browser to sign in: {url}"));
+        }
+    }
     // Keep "3m ago" labels fresh.
     tx.wake_after(std::time::Duration::from_secs(30));
     changed

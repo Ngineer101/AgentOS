@@ -434,6 +434,47 @@ pub struct Connector {
     pub created_at: i64,
 }
 
+/// The prefix a connector's tools get when agents see them
+/// (`<slug>__<tool>`): its name, lowercased, with runs of anything else as `_`.
+pub fn connector_slug(name: &str) -> String {
+    let mut s = String::new();
+    for c in name.to_ascii_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c);
+        } else if !s.ends_with('_') {
+            s.push('_');
+        }
+    }
+    let s: String = s.trim_matches('_').chars().take(24).collect();
+    let s = s.trim_end_matches('_').to_string();
+    if s.is_empty() {
+        "mcp".into()
+    } else {
+        s
+    }
+}
+
+/// A name for a new connector at `host`: the service's name ("Sentry" for
+/// `mcp.sentry.dev`), numbered when one by that name exists ("Sentry 2").
+pub fn default_connector_name(host: &str, existing: &[&str]) -> String {
+    let part = host
+        .split('.')
+        .find(|p| !matches!(*p, "mcp" | "www" | "api" | "app"))
+        .unwrap_or("mcp");
+    let mut base: String = part.to_string();
+    if let Some(f) = base.get_mut(0..1) {
+        f.make_ascii_uppercase();
+    }
+    let taken = |n: &str| existing.iter().any(|e| e.eq_ignore_ascii_case(n));
+    if !taken(&base) {
+        return base;
+    }
+    (2..)
+        .map(|i| format!("{base} {i}"))
+        .find(|n| !taken(n))
+        .unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // Method params and results
 // ---------------------------------------------------------------------------
@@ -642,6 +683,22 @@ pub struct DeviceRenameParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connector_names_and_slugs() {
+        assert_eq!(default_connector_name("mcp.sentry.dev", &[]), "Sentry");
+        assert_eq!(
+            default_connector_name("mcp.sentry.dev", &["sentry"]),
+            "Sentry 2"
+        );
+        assert_eq!(
+            default_connector_name("mcp.sentry.dev", &["Sentry", "Sentry 2"]),
+            "Sentry 3"
+        );
+        assert_eq!(connector_slug("Sentry (work)"), "sentry_work");
+        assert_eq!(connector_slug("GitHub Issues!"), "github_issues");
+        assert_eq!(connector_slug("--"), "mcp");
+    }
 
     #[test]
     fn state_machine() {

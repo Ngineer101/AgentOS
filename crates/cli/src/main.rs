@@ -775,10 +775,7 @@ async fn connector_cmd(c: &Client, cmd: ConnCmd, json_out: bool) -> Result<()> {
                     k.tools.len()
                 );
                 if k.status == "needs_sign_in" {
-                    println!(
-                        "Sign in with: agenthost connector sign-in {}",
-                        k.connector_id
-                    );
+                    sign_in(c, &k.connector_id).await?;
                 }
             }
         }
@@ -819,44 +816,7 @@ async fn connector_cmd(c: &Client, cmd: ConnCmd, json_out: bool) -> Result<()> {
                 println!("Updated {}", k.name);
             }
         }
-        ConnCmd::SignIn { connector } => {
-            let r: ConnectorSignInResult = c
-                .call(m::CONNECTOR_SIGN_IN, json!({"connector_id": connector}))
-                .await?;
-            match r.authorize_url {
-                Some(u) => {
-                    println!("Open this URL in your browser to sign in:\n\n  {u}\n");
-                    let _ = std::process::Command::new(if cfg!(target_os = "macos") {
-                        "open"
-                    } else {
-                        "xdg-open"
-                    })
-                    .arg(&u)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
-                    println!("Waiting for sign-in to finish…");
-                    for _ in 0..300 {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        let list: Vec<Connector> = c.call(m::CONNECTOR_LIST, json!({})).await?;
-                        if let Some(k) = list.iter().find(|k| k.connector_id == connector) {
-                            if k.status == "ok" {
-                                println!("Signed in. {} tools.", k.tools.len());
-                                return Ok(());
-                            }
-                            if k.status == "error" {
-                                bail!(
-                                    "sign-in failed: {}",
-                                    k.status_detail.clone().unwrap_or_default()
-                                );
-                            }
-                        }
-                    }
-                    bail!("timed out waiting for sign-in");
-                }
-                None => println!("{}", r.status),
-            }
-        }
+        ConnCmd::SignIn { connector } => sign_in(c, &connector).await?,
         ConnCmd::Refresh { connector } => {
             let k: Connector = c
                 .call(m::CONNECTOR_REFRESH, json!({"connector_id": connector}))
@@ -871,6 +831,45 @@ async fn connector_cmd(c: &Client, cmd: ConnCmd, json_out: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Open the connector's OAuth sign-in in the browser and wait for it to finish.
+async fn sign_in(c: &Client, connector: &str) -> Result<()> {
+    let r: ConnectorSignInResult = c
+        .call(m::CONNECTOR_SIGN_IN, json!({"connector_id": connector}))
+        .await?;
+    let Some(u) = r.authorize_url else {
+        println!("{}", r.status);
+        return Ok(());
+    };
+    println!("Opening your browser to sign in. If it doesn't open, visit:\n\n  {u}\n");
+    let _ = std::process::Command::new(if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    })
+    .arg(&u)
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .spawn();
+    println!("Waiting for sign-in to finish…");
+    for _ in 0..300 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let list: Vec<Connector> = c.call(m::CONNECTOR_LIST, json!({})).await?;
+        if let Some(k) = list.iter().find(|k| k.connector_id == connector) {
+            if k.status == "ok" {
+                println!("Signed in to {}. {} tools.", k.name, k.tools.len());
+                return Ok(());
+            }
+            if k.status == "error" {
+                bail!(
+                    "sign-in failed: {}",
+                    k.status_detail.clone().unwrap_or_default()
+                );
+            }
+        }
+    }
+    bail!("timed out waiting for sign-in")
 }
 
 async fn device_cmd(

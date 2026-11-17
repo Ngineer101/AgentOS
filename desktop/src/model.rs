@@ -63,7 +63,12 @@ pub struct App {
     pub custom_host: TextEdit,
     pub host_for: Option<String>,
     pub conn_url: TextEdit,
-    pub conn_token: TextEdit,
+    /// Connectors whose browser sign-in is under way, with the sign-in link
+    /// once the host has sent it.
+    pub signing_in: HashMap<String, String>,
+    /// Links to open in the browser on the next poll (handlers and replies
+    /// have no `Tx`; `poll` does).
+    pub open_queue: Vec<String>,
     pub rename: TextEdit,
     pub renaming: Option<String>,
     pub new_ws: Option<String>,
@@ -93,7 +98,8 @@ pub fn init() -> App {
         custom_host: TextEdit::new(""),
         host_for: None,
         conn_url: TextEdit::new(""),
-        conn_token: TextEdit::new("").secure(),
+        signing_in: HashMap::new(),
+        open_queue: vec![],
         rename: TextEdit::new(""),
         renaming: None,
         new_ws: None,
@@ -220,7 +226,40 @@ impl App {
                         self.screen = Screen::Workspaces;
                     }
                 }
-                (Tag::Connectors, Ok(v)) => self.connectors = parse(v).unwrap_or_default(),
+                (Tag::Connectors, Ok(v)) => {
+                    self.connectors = parse(v).unwrap_or_default();
+                    self.settle_sign_ins();
+                }
+                (Tag::ConnectorAdded, Ok(v)) => {
+                    if let Some(c) = parse::<Connector>(v) {
+                        let (id, name, url) = (c.connector_id.clone(), c.name.clone(), c.url.clone());
+                        let twin = self.connectors.iter().any(|x| x.url == url && x.connector_id != id);
+                        let needs = c.status == "needs_sign_in";
+                        self.upsert_connector(c);
+                        if needs {
+                            self.sign_in(&id);
+                            self.notice = Some(if twin {
+                                format!("Sign in to {name} in your browser. If the browser is still signed in to your other account, switch accounts there first.")
+                            } else {
+                                format!("Sign in to {name} in your browser to finish adding it.")
+                            });
+                        } else {
+                            self.notice = Some(format!("Added {name}."));
+                        }
+                    }
+                }
+                (Tag::SignIn(id), Ok(v)) => match parse::<ConnectorSignInResult>(v).and_then(|r| r.authorize_url) {
+                    Some(u) => {
+                        self.signing_in.insert(id, u.clone());
+                        self.open_queue.push(u);
+                    }
+                    None => self.refresh(Refresh::Connectors),
+                },
+                (Tag::SignIn(id), Err(e)) => {
+                    self.signing_in.remove(&id);
+                    self.error = Some(format!("Sign-in could not start: {}", e.message));
+                }
+                (Tag::ConnectorAdded, Err(e)) => self.error = Some(format!("Could not add the server: {}", e.message)),
                 (Tag::Devices, Ok(v)) => self.devices = parse(v).unwrap_or_default(),
                 (Tag::Approvals, Ok(v)) => self.approvals = parse(v).unwrap_or_default(),
                 (Tag::PairStart, Ok(v)) => {
@@ -247,6 +286,49 @@ impl App {
                 (_, Err(e)) => self.error = Some(e.message),
             },
             FromHost::Note(n) => self.on_note(n),
+        }
+    }
+
+    /// Start a connector's OAuth sign-in; the browser opens when it replies.
+    pub fn sign_in(&mut self, id: &str) {
+        self.signing_in.insert(id.to_string(), String::new());
+        self.call(Tag::SignIn(id.into()), m::CONNECTOR_SIGN_IN, json!({"connector_id": id}));
+    }
+
+    /// Add the server in the URL field; names come from the host.
+    pub fn add_connector(&mut self) {
+        let mut url = self.conn_url.text.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        if !url.contains("://") {
+            url = format!("https://{url}");
+        }
+        self.error = None;
+        self.call(Tag::ConnectorAdded, m::CONNECTOR_ADD, json!({"url": url}));
+        self.conn_url.clear();
+    }
+
+    /// Sign-ins that finished, one way or the other, since the last list.
+    fn settle_sign_ins(&mut self) {
+        let mut done = vec![];
+        for c in &self.connectors {
+            if self.signing_in.contains_key(&c.connector_id) && c.status != "needs_sign_in" {
+                done.push((c.connector_id.clone(), c.name.clone(), c.status == "ok", c.tools.len()));
+            }
+        }
+        let known: HashSet<&str> = self.connectors.iter().map(|c| c.connector_id.as_str()).collect();
+        self.signing_in.retain(|id, _| known.contains(id.as_str()));
+        for (id, name, ok, n) in done {
+            self.signing_in.remove(&id);
+            self.notice = Some(if ok { format!("Signed in to {name}. {n} tools available.") } else { format!("Sign-in to {name} didn't finish.") });
+        }
+    }
+
+    fn upsert_connector(&mut self, c: Connector) {
+        match self.connectors.iter_mut().find(|x| x.connector_id == c.connector_id) {
+            Some(x) => *x = c,
+            None => self.connectors.push(c),
         }
     }
 
@@ -299,6 +381,7 @@ impl App {
                     }
                 }
             }
+            m::N_CONNECTOR_CHANGED => self.refresh(Refresh::Connectors),
             m::N_PAIRING_DONE => {
                 let ok = n.params["ok"] == json!(true);
                 let name = n.params["device_name"].as_str().unwrap_or("device").to_string();

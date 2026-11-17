@@ -23,6 +23,10 @@ pub enum Tag {
     Approvals,
     PairStart,
     SessionCreated,
+    /// `connector.add`: opens sign-in straight away if the server needs it.
+    ConnectorAdded,
+    /// `connector.sign_in` for this connector: open the returned URL.
+    SignIn(String),
     /// A user action whose failure should be shown; on success, refresh this list.
     Action { what: String, refresh: Refresh },
     Subscribed(String),
