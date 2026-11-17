@@ -1,4 +1,8 @@
+import AVFoundation
+import PhotosUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// The live transcript of one session, laid out for a narrow screen.
 struct SessionView: View {
@@ -10,6 +14,21 @@ struct SessionView: View {
     @State private var confirmEnd = false
     @State private var approvalShown: PendingApprovalModel?
     @FocusState private var promptFocused: Bool
+    @Environment(\.openURL) private var openURL
+
+    // Attachments and voice input (protocol 2 hosts).
+    @StateObject private var composer = ComposerModel()
+    @StateObject private var recorder = VoiceRecorder()
+    @State private var showPhotoPicker = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showFileImporter = false
+    @State private var transcribing = false
+    @State private var confirmVoiceDownload = false
+    @State private var micDenied = false
+    /// The user asked for the speech model in this screen: show its progress
+    /// and errors, and a short notice when it is ready.
+    @State private var voiceDownloadRequested = false
+    @State private var voiceNotice: String?
 
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
@@ -136,10 +155,102 @@ struct SessionView: View {
                 .environmentObject(model)
         }
         .onAppear { model.open(sessionId) }
+        .onDisappear { recorder.cancel() }
+        .alert("Download the speech model?", isPresented: $confirmVoiceDownload) {
+            Button("Download") { startVoiceDownload() }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text(voiceDownloadMessage)
+        }
+        .alert("Microphone Access Is Off", isPresented: $micDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("To use voice input, allow AgentHost to use the microphone in Settings → AgentHost.")
+        }
+        .onChange(of: model.voice?.ready) { old, new in
+            guard voiceDownloadRequested, new == true, old != true else { return }
+            voiceDownloadRequested = false
+            voiceNotice = "Speech model ready. Tap the microphone to talk."
+            Task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                voiceNotice = nil
+            }
+        }
     }
 
+    // MARK: Composer
+
     private var promptBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            voiceStatusLine
+            if !composer.attachments.isEmpty {
+                AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
+            }
+            if recorder.isRecording || transcribing {
+                RecordingStrip(
+                    recorder: recorder,
+                    transcribing: transcribing,
+                    onCancel: { cancelRecording() },
+                    onStop: { stopRecording() }
+                )
+            } else {
+                promptRow
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $photoItems,
+            maxSelectionCount: max(1, composer.remainingSlots),
+            matching: .images
+        )
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            let skipped = composer.addPhotos(items, model: model)
+            photoItems = []
+            reportSkipped(skipped)
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                reportSkipped(composer.addFiles(urls, model: model))
+            case let .failure(error):
+                actionError = userMessage(for: error)
+            }
+        }
+    }
+
+    private var promptRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if model.hostSupportsMedia {
+                Menu {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
+                        Label("Photo Library", systemImage: "photo.on.rectangle")
+                    }
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("Files", systemImage: "folder")
+                    }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.title3)
+                        .frame(width: 28, height: 36)
+                }
+                .disabled(!canPrompt || composer.remainingSlots == 0)
+                .accessibilityLabel("Attach")
+            }
             // Messages-style field: a rounded capsule on the bar.
             TextField(placeholder, text: $draft, axis: .vertical)
                 .lineLimit(1...6)
@@ -153,7 +264,18 @@ struct SessionView: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
                 )
-            if SessionStateName.isBusy(session?.state ?? "") && draft.isEmpty {
+            if model.hostSupportsMedia {
+                Button {
+                    micTapped()
+                } label: {
+                    Image(systemName: "mic")
+                        .font(.title3)
+                        .frame(width: 28, height: 36)
+                }
+                .disabled(!canPrompt || model.voice?.isDownloading == true)
+                .accessibilityLabel("Dictate")
+            }
+            if SessionStateName.isBusy(session?.state ?? "") && draft.isEmpty && composer.attachments.isEmpty {
                 Button {
                     Task { await run { try await model.cancel(sessionId) } }
                 } label: {
@@ -163,18 +285,160 @@ struct SessionView: View {
                 .accessibilityLabel("Cancel turn")
             } else {
                 Button {
-                    model.sendPrompt(sessionId: sessionId, text: draft)
+                    model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
                     draft = ""
+                    composer.clear()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title)
                 }
-                .disabled(!canPrompt || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canSend)
                 .accessibilityLabel("Send prompt")
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+    }
+
+    private var canSend: Bool {
+        guard canPrompt, !composer.isUploading else { return false }
+        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.ready.isEmpty
+    }
+
+    /// Speech model download progress, its failure, or "ready".
+    @ViewBuilder
+    private var voiceStatusLine: some View {
+        if let v = model.voice, v.isDownloading {
+            let fraction = v.progress?.fraction ?? 0
+            HStack(spacing: 8) {
+                ProgressView(value: fraction)
+                    .frame(width: 60)
+                Text("Downloading speech model… \(Int(fraction * 100))%")
+                    .monospacedDigit()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else if let notice = voiceNotice {
+            Label(notice, systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if voiceDownloadRequested, let v = model.voice, !v.ready {
+            if let err = v.error {
+                Text("Speech model download failed: \(err)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text("Downloading speech model…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var voiceDownloadMessage: String {
+        let name = model.voice?.model ?? "NVIDIA Nemotron 3.5 ASR"
+        let size = formatBytes(model.voice?.downloadBytes ?? 475_271_763)
+        return "Voice input turns speech into text on your computer with \(name) (\(size), downloaded once to the computer, not this phone)."
+    }
+
+    @MainActor
+    private func reportSkipped(_ count: Int) {
+        if count > 0 {
+            actionError = "Up to \(RPC.maxAttachments) attachments per prompt; \(count) left out."
+        }
+    }
+
+    @MainActor
+    private func startVoiceDownload() {
+        voiceDownloadRequested = true
+        Task {
+            do {
+                try await model.downloadVoiceModel()
+            } catch {
+                voiceDownloadRequested = false
+                actionError = userMessage(for: error)
+            }
+        }
+    }
+
+    @MainActor
+    private func micTapped() {
+        if let v = model.voice, !v.ready {
+            if !v.isDownloading { confirmVoiceDownload = true }
+            return
+        }
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            startRecording()
+        case .undetermined:
+            Task {
+                if await AVAudioApplication.requestRecordPermission() {
+                    startRecording()
+                } else {
+                    micDenied = true
+                }
+            }
+        default:
+            micDenied = true
+        }
+    }
+
+    @MainActor
+    private func startRecording() {
+        guard canPrompt, !recorder.isRecording, !transcribing else { return }
+        recorder.onAutoStop = { stopRecording() }
+        do {
+            try recorder.start()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            actionError = nil
+        } catch {
+            actionError = "Recording failed: \(userMessage(for: error))"
+        }
+    }
+
+    @MainActor
+    private func cancelRecording() {
+        recorder.cancel()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// Stop, transcribe on the host, and add the text to the draft.
+    @MainActor
+    private func stopRecording() {
+        guard let url = recorder.stop() else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        transcribing = true
+        Task {
+            var text = ""
+            var failure: Error?
+            do {
+                text = try await model.transcribe(wavAt: url)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                failure = error
+            }
+            try? FileManager.default.removeItem(at: url)
+            transcribing = false
+            if let failure {
+                if isVoiceModelMissing(failure) {
+                    confirmVoiceDownload = true
+                } else {
+                    actionError = "Transcription failed: \(userMessage(for: failure))"
+                }
+                return
+            }
+            if text.isEmpty {
+                actionError = "No speech was recognized."
+            } else {
+                actionError = nil
+                if draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") {
+                    draft += text
+                } else {
+                    draft += " " + text
+                }
+            }
+            promptFocused = true
+        }
     }
 
     private var placeholder: String {
@@ -204,14 +468,20 @@ struct TranscriptRowView: View {
 
     var body: some View {
         switch row {
-        case let .prompt(_, text, device, ts):
+        case let .prompt(_, text, attachments, device, ts):
             VStack(alignment: .trailing, spacing: 2) {
-                Text(text)
-                    .textSelection(.enabled)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 9)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                if !text.isEmpty {
+                    Text(text)
+                        .textSelection(.enabled)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                if !attachments.isEmpty {
+                    PromptAttachmentsView(attachments: attachments)
+                        .padding(.vertical, 2)
+                }
                 HStack(spacing: 4) {
                     if let d = device { Text(d) }
                     Text(dateFromMillis(ts), style: .time)
@@ -223,8 +493,8 @@ struct TranscriptRowView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
 
         case let .agentMessage(_, text):
-            MarkdownText(text: text)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MarkdownView(text: text)
+                .equatable()
 
         case let .thought(_, text):
             ThoughtRow(text: text)
@@ -310,22 +580,6 @@ struct TranscriptRowView: View {
     }
 }
 
-/// Agent text, with inline Markdown (bold, code, links) where it parses.
-struct MarkdownText: View {
-    let text: String
-
-    var body: some View {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(attributed).textSelection(.enabled)
-        } else {
-            Text(text).textSelection(.enabled)
-        }
-    }
-}
-
 struct ThoughtRow: View {
     let text: String
     @State private var expanded = false
@@ -402,15 +656,28 @@ struct ToolCallRow: View {
     }
 }
 
+/// Monospaced text that scrolls sideways instead of wrapping, with an
+/// optional language label (Markdown code fences).
 struct CodeBlock: View {
     let text: String
+    var language: String? = nil
+    var font: Font = .caption2.monospaced()
 
     var body: some View {
-        ScrollView(.horizontal) {
-            Text(text)
-                .font(.caption2.monospaced())
-                .textSelection(.enabled)
-                .padding(8)
+        VStack(alignment: .leading, spacing: 0) {
+            if let language, !language.isEmpty {
+                Text(language)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 6)
+            }
+            ScrollView(.horizontal) {
+                Text(text)
+                    .font(font)
+                    .textSelection(.enabled)
+                    .padding(8)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .tertiarySystemBackground),
@@ -473,8 +740,8 @@ struct StreamingRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Text(streaming.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MarkdownView(text: streaming.text, streaming: true)
+                .equatable()
                 .opacity(0.85)
         }
     }
@@ -487,11 +754,17 @@ struct PendingPromptRow: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             // Not yet accepted by the host: the same bubble, dimmed.
-            Text(prompt.text)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 9)
-                .background(Color.accentColor.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            if !prompt.text.isEmpty {
+                Text(prompt.text)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .background(Color.accentColor.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            if !prompt.attachments.isEmpty {
+                PromptAttachmentsView(attachments: prompt.attachments)
+                    .opacity(0.7)
+            }
             if let f = prompt.failure {
                 HStack {
                     Text(f).font(.caption2).foregroundStyle(.red)

@@ -7,8 +7,9 @@
 > (`crates/ffi`) *is* built and tested (see "What is verified").
 
 A native SwiftUI app (iOS 17+) for following and steering an agenthost from
-your phone: pair with one host by QR code, read sessions, send prompts,
-start a session in an existing workspace, and answer MCP approvals.
+your phone: pair with one host by QR code, read sessions, send prompts
+(with photos and files attached, or dictated), start a session in an
+existing workspace, and answer MCP approvals.
 
 All security-relevant protocol code (relay authentication, the Noise
 `XXpsk3` pairing and `IK` handshakes, framing, replay protection, JSON-RPC)
@@ -72,6 +73,8 @@ must be reachable from the phone.
 | Safe prompt retry | Each prompt gets a client-generated `prompt_id` (UUID) kept in an outbox until the host answers; resent with the same id after a reconnect (the host records it once) |
 | Approval reaches the host within 2 s | `approval.respond` straight from `ApprovalView`; a status row on the Sessions list and a status card on the Session screen while anything is `waiting_approval` |
 | Capability errors and "update required" | Typed `AgentHostError.Rpc(code:…)` from Rust; `-32001` and `-32002` get specific messages. `hello` rejection stops reconnecting and shows "Update required" |
+| Attachments (protocol 2 hosts) | Composer paperclip menu: Photo Library (`PhotosPicker`; HEIC re-encoded as JPEG) or Files (`.fileImporter`, any type, several at once). Each pick is copied to a temporary file, sent with `RemoteClient.uploadFile` straight away (up to 25 MB, 10 per prompt), then deleted; the ids go in `session.prompt` `attachments`. Chips show progress and failures; Send waits for uploads. Sent attachments are listed under the prompt bubble |
+| Voice input (protocol 2 hosts) | Mic button records 16 kHz mono 16-bit WAV (`AVAudioRecorder`, at most 5 minutes) and `RemoteClient.transcribeWavFile` turns it into text on the user's computer (the host's speech model), never on the phone or a third party; the text is added to the draft. The model is downloaded to the computer once, after a "Download the speech model?" confirmation (`voice.download`, progress from `voice.changed`). Needs microphone permission (`NSMicrophoneUsageDescription`); the photo picker needs none |
 
 Unpair (Host screen) deletes this phone's keys and cache. A phone may not
 call `device.revoke`, so the desktop should also revoke the device.
@@ -95,4 +98,5 @@ layout.
   test, not committed).
 - **Not verified:** anything in Swift, the XcodeGen project, `build-rust.sh`
   on macOS (the iOS cross-compile, the XCFramework), Keychain and Secure
-  Enclave behaviour, the camera scanner, layout.
+  Enclave behaviour, the camera scanner, photo/file pickers, audio
+  recording, layout.

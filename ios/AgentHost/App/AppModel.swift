@@ -47,6 +47,8 @@ struct OutgoingPrompt: Identifiable, Equatable {
     var id: String
     var sessionId: String
     var text: String
+    /// Already uploaded; sent by id with the prompt.
+    var attachments: [AttachmentInfo] = []
     var failure: String?
 }
 
@@ -113,6 +115,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var outbox: [OutgoingPrompt] = []
     /// Set when the cache was written last (shown when offline).
     @Published private(set) var cachedAt: Date?
+    /// The host's protocol version from `hello` on the last connection.
+    @Published private(set) var hostProtocolVersion: UInt32?
+    /// The host's speech model (protocol 2 hosts), kept current by `voice.changed`.
+    @Published private(set) var voice: VoiceStatusModel?
 
     // MARK: Private state
 
@@ -137,6 +143,12 @@ final class AppModel: ObservableObject {
 
     var anyWaitingApproval: Bool {
         sessions.contains { $0.state == SessionStateName.waitingApproval } || !approvals.isEmpty
+    }
+
+    /// Attachments and voice input: hosts on protocol 2 or newer. Uses the
+    /// cached host info until the first connection.
+    var hostSupportsMedia: Bool {
+        (hostProtocolVersion ?? hostInfo?.protocolVersion ?? 0) >= RPC.mediaProtocolVersion
     }
 
     func workspaceName(_ id: String) -> String {
@@ -266,6 +278,8 @@ final class AppModel: ObservableObject {
         transcripts = [:]
         streaming = [:]
         outbox = []
+        hostProtocolVersion = nil
+        voice = nil
         watched = []
         subscribed = []
         subscriptionIds = [:]
@@ -345,8 +359,9 @@ final class AppModel: ObservableObject {
                 return
             }
             client = c
+            hostProtocolVersion = c.hello().protocolVersion
             subscribed = []
-        subscriptionIds = [:]
+            subscriptionIds = [:]
             link = .online
             attempt = 0
             connectTask = nil
@@ -381,6 +396,7 @@ final class AppModel: ObservableObject {
     /// Snapshot everything, re-subscribe, and resend unacknowledged prompts.
     private func didConnect() async {
         await refreshAll()
+        await refreshVoice()
         let live = sessions.filter { !SessionStateName.isTerminal($0.state) }.map(\.sessionId)
         for sid in watched.union(live) {
             await subscribe(sid)
@@ -413,6 +429,37 @@ final class AppModel: ObservableObject {
         if let list: [PendingApprovalModel] = try? await call(RPC.approvalList, [:]) {
             approvals = list
         }
+    }
+
+    // MARK: Attachments and voice
+
+    func refreshVoice() async {
+        guard link.isOnline, hostSupportsMedia else { return }
+        if let v: VoiceStatusModel = try? await call(RPC.voiceStatus, [:]) {
+            voice = v
+        }
+    }
+
+    /// Start the one-time speech model download on the host; progress
+    /// arrives as `voice.changed`.
+    func downloadVoiceModel() async throws {
+        let v: VoiceStatusModel = try await call(RPC.voiceDownload, [:])
+        voice = v
+    }
+
+    /// Send a local file to the host for the next prompt. The file is read
+    /// during the call, so a temporary copy can be deleted afterwards.
+    func uploadFile(at url: URL, name: String, mime: String?) async throws -> AttachmentInfo {
+        guard let c = client else { throw AgentHostError.NotConnected }
+        let text = try await c.uploadFile(path: url.path(percentEncoded: false), name: name, mime: mime)
+        return try JSONDecoder().decode(AttachmentInfo.self, from: Data(text.utf8))
+    }
+
+    /// Turn a WAV recording into text with the host's speech model (on the
+    /// user's computer, not this phone).
+    func transcribe(wavAt url: URL) async throws -> String {
+        guard let c = client else { throw AgentHostError.NotConnected }
+        return try await c.transcribeWavFile(path: url.path(percentEncoded: false), language: nil)
     }
 
     // MARK: Calls
@@ -472,10 +519,15 @@ final class AppModel: ObservableObject {
         return s
     }
 
-    func sendPrompt(sessionId: String, text: String) {
+    func sendPrompt(sessionId: String, text: String, attachments: [AttachmentInfo] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let p = OutgoingPrompt(id: UUID().uuidString.lowercased(), sessionId: sessionId, text: trimmed)
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        let p = OutgoingPrompt(
+            id: UUID().uuidString.lowercased(),
+            sessionId: sessionId,
+            text: trimmed,
+            attachments: attachments
+        )
         outbox.append(p)
         Task { await deliver(p) }
     }
@@ -495,11 +547,12 @@ final class AppModel: ObservableObject {
     /// leave it queued for the next connection; host errors are shown.
     private func deliver(_ p: OutgoingPrompt) async {
         guard link.isOnline else { return }
+        var params: [String: Any] = ["session_id": p.sessionId, "prompt_id": p.id, "text": p.text]
+        if !p.attachments.isEmpty {
+            params["attachments"] = p.attachments.map(\.attachmentId)
+        }
         do {
-            let _: PromptResultModel = try await call(
-                RPC.sessionPrompt,
-                ["session_id": p.sessionId, "prompt_id": p.id, "text": p.text]
-            )
+            let _: PromptResultModel = try await call(RPC.sessionPrompt, params)
             // Accepted now or earlier (accepted == false): either way, recorded once.
             outbox.removeAll { $0.id == p.id }
         } catch let e as AgentHostError {
@@ -555,6 +608,9 @@ final class AppModel: ObservableObject {
             }
         case RPC.nDeviceRevoked:
             deviceRemoved()
+        case RPC.nVoiceChanged:
+            guard let v = try? JSONDecoder().decode(VoiceStatusModel.self, from: data) else { return }
+            voice = v
         default:
             break
         }

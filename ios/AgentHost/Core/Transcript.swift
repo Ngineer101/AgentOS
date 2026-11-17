@@ -65,7 +65,7 @@ struct Transcript: Codable {
 
 /// One row of the rendered transcript.
 enum TranscriptRow: Identifiable {
-    case prompt(seq: Int64, text: String, device: String?, ts: Int64)
+    case prompt(seq: Int64, text: String, attachments: [AttachmentInfo], device: String?, ts: Int64)
     case agentMessage(seq: Int64, text: String)
     case thought(seq: Int64, text: String)
     case tool(ToolRow)
@@ -77,7 +77,7 @@ enum TranscriptRow: Identifiable {
 
     var id: String {
         switch self {
-        case let .prompt(seq, _, _, _): return "e\(seq)"
+        case let .prompt(seq, _, _, _, _): return "e\(seq)"
         case let .agentMessage(seq, _): return "e\(seq)"
         case let .thought(seq, _): return "e\(seq)"
         case let .tool(t): return "t\(t.callId)-\(t.seq)"
@@ -115,7 +115,13 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
         let p = e.payload
         switch e.type {
         case EventKind.prompt:
-            rows.append(.prompt(seq: e.seq, text: p["text"].string ?? "", device: p["device"].string, ts: e.ts))
+            rows.append(.prompt(
+                seq: e.seq,
+                text: p["text"].string ?? "",
+                attachments: AttachmentInfo.list(from: p["attachments"]),
+                device: p["device"].string,
+                ts: e.ts
+            ))
         case EventKind.agentMessage:
             rows.append(.agentMessage(seq: e.seq, text: p["text"].string ?? ""))
         case EventKind.agentThought:
