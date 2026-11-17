@@ -1,0 +1,29 @@
+desktop/Cargo.lock
+  s_72bf7af772c11c::t_3bdb15735e8238 3202-3212,3648,4755-4760
+desktop/Cargo.toml
+  s_72bf7af772c11c::t_785b607f313143 23
+desktop/src/demo.rs
+  s_72bf7af772c11c::t_574737b9b83470 145
+desktop/src/main.rs
+  s_72bf7af772c11c::t_dbab49a6b92d1a 23
+desktop/src/tests.rs
+  s_72bf7af772c11c::t_e30bd85543f8ac 69-80
+desktop/src/view.rs
+  s_72bf7af772c11c::t_76924608d5100d 10,55-74,266,328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e79e15bc8526148d8e85dabcefd48422557eb8a",
+  "prompts": {},
+  "sessions": {
+    "s_72bf7af772c11c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b454351b-38cb-4d80-b377-3af8be941536",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
