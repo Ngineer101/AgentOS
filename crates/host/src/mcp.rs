@@ -819,22 +819,22 @@ impl Gateway {
         let reg_ep = meta["registration_endpoint"]
             .as_str()
             .ok_or_else(|| anyhow!("the server does not support dynamic client registration"))?;
-        let reg: Value = self
+        let reg = self
             .http
             .post(reg_ep)
             .json(&json!({
                 "client_name": "agenthost",
+                // A desktop app with a loopback redirect. Without this, some
+                // servers assume a web client and refuse http://127.0.0.1.
+                "application_type": "native",
                 "redirect_uris": [redirect],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "none"
             }))
             .send()
-            .await?
-            .error_for_status()
-            .context("client registration")?
-            .json()
             .await?;
+        let reg = oauth_json(reg, "client registration").await?;
         let client_id = reg["client_id"]
             .as_str()
             .ok_or_else(|| anyhow!("registration returned no client_id"))?
@@ -906,16 +906,8 @@ impl Gateway {
                 if let Some(cs) = &client_secret {
                     form.push(("client_secret", cs.clone()));
                 }
-                let tok: Value = gw
-                    .http
-                    .post(&token_ep)
-                    .form(&form)
-                    .send()
-                    .await?
-                    .error_for_status()
-                    .context("token exchange")?
-                    .json()
-                    .await?;
+                let tok = gw.http.post(&token_ep).form(&form).send().await?;
+                let tok = oauth_json(tok, "token exchange").await?;
                 gw.store_tokens(
                     &cid,
                     &tok,
@@ -1324,6 +1316,26 @@ impl ConnectorAdmin for Arc<Gateway> {
             )),
         }
     }
+}
+
+/// The JSON body of an OAuth response, or an error carrying the server's own
+/// explanation (`error_description` / `error`) rather than a bare status.
+async fn oauth_json(r: reqwest::Response, what: &str) -> Result<Value> {
+    let status = r.status();
+    let body = r.text().await.unwrap_or_default();
+    if status.is_success() {
+        return serde_json::from_str(&body).with_context(|| format!("{what}: response is not JSON"));
+    }
+    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let why = v["error_description"]
+        .as_str()
+        .or(v["error"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| body.chars().take(200).collect());
+    if why.trim().is_empty() {
+        bail!("{what} failed (HTTP {status})");
+    }
+    bail!("{what} failed: {} (HTTP {status})", why.trim())
 }
 
 #[cfg(test)]

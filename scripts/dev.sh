@@ -5,20 +5,24 @@
 #   scripts/dev.sh --fresh    a throwaway host in .dev/ (empty database; reuses installed tools)
 #   scripts/dev.sh --fake     also offer the scripted fake agent
 #   scripts/dev.sh --release  optimised builds
+#   scripts/dev.sh --relay wss://…  use this relay for phone pairing (remembered in .dev/relay-url)
 #
 # Any running agenthostd is stopped first so the desktop talks to the code you just built.
 # Closing the desktop window (or Ctrl-C) stops the host. Host log: <data dir>/logs/dev-host.log
-# Set AGENTHOST_RELAY_URL to connect the host to a relay for the phone.
+# The relay comes from --relay, else AGENTHOST_RELAY_URL, else the remembered .dev/relay-url.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fresh=0 fake=0 profile=debug cargo_flags=()
-for a in "$@"; do
+fresh=0 fake=0 profile=debug cargo_flags=() relay=""
+while (( $# )); do
+  a="$1"; shift
   case "$a" in
+    --relay) relay="${1:?--relay needs a URL}"; shift ;;
+    --relay=*) relay="${a#--relay=}" ;;
     --fresh) fresh=1 ;;
     --fake) fake=1 ;;
     --release) profile=release cargo_flags=(--release) ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -67,6 +71,21 @@ fi
 mkdir -p "$data/logs"
 log="$data/logs/dev-host.log"
 run_args=(run)
+relay_file="$root/.dev/relay-url"
+if [[ -n "$relay" ]]; then
+  mkdir -p "$root/.dev"; printf '%s\n' "$relay" >"$relay_file"
+elif [[ -n "${AGENTHOST_RELAY_URL:-}" ]]; then
+  relay="$AGENTHOST_RELAY_URL"
+elif [[ -f "$relay_file" ]]; then
+  relay="$(head -n1 "$relay_file")"
+fi
+if [[ -n "$relay" ]]; then
+  [[ "$relay" == https://* ]] && relay="wss://${relay#https://}"
+  run_args+=(--relay-url "$relay")
+  echo "==> relay: $relay"
+else
+  echo "==> no relay set: phone pairing is off (run once with --relay wss://your-relay.workers.dev)"
+fi
 (( fake )) && run_args+=(--enable-fake-agent)
 
 echo "==> starting host (log: $log)"

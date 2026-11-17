@@ -257,7 +257,8 @@ impl App {
                 },
                 (Tag::SignIn(id), Err(e)) => {
                     self.signing_in.remove(&id);
-                    self.error = Some(format!("Sign-in could not start: {}", e.message));
+                    let why = e.message.strip_prefix("sign-in could not start: ").unwrap_or(&e.message);
+                    self.error = Some(format!("Sign-in could not start: {why}"));
                 }
                 (Tag::ConnectorAdded, Err(e)) => self.error = Some(format!("Could not add the server: {}", e.message)),
                 (Tag::Devices, Ok(v)) => self.devices = parse(v).unwrap_or_default(),
