@@ -680,7 +680,7 @@ fn connectors_screen(s: &App, k: &Kit) -> El {
         )
         .child(button("Add", k, ButtonVariant::Contrast, |s: &mut App| s.add_connector()));
     let mut c = page(k, "connectors")
-        .child(muted("Paste a remote MCP server's URL. If it needs an account, your browser opens so you can sign in. For two accounts on one service (work and personal), add it twice and rename each.", k).wrap())
+        .child(muted("Paste a remote MCP server's URL. If it needs an account, your browser opens so you can sign in. New connectors are on in every workspace; switch one off on the Workspaces screen. For two accounts on one service (work and personal), add it twice and rename each.", k).wrap())
         .child(muted("Read tools are allowed and write tools ask you first. Click a tool's setting to cycle Allow, Ask and Off.", k).wrap())
         .child(add);
     if s.connectors.is_empty() {

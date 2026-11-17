@@ -1185,6 +1185,19 @@ impl ConnectorAdmin for Arc<Gateway> {
                     .store
                     .connector_insert(&c)
                     .map_err(|e| RpcError::internal(e.to_string()))?;
+                // On in every workspace; each can switch it off.
+                for mut w in self
+                    .ctx
+                    .store
+                    .workspace_list()
+                    .map_err(|e| RpcError::internal(e.to_string()))?
+                {
+                    w.connectors.push(c.connector_id.clone());
+                    self.ctx
+                        .store
+                        .workspace_update(&w)
+                        .map_err(|e| RpcError::internal(e.to_string()))?;
+                }
                 self.refresh_tools(&mut c).await;
                 self.view(&c)
             }

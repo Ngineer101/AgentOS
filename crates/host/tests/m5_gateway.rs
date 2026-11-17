@@ -37,12 +37,10 @@ async fn setup() -> Setup {
         )
         .await
         .unwrap();
-    c.request(
-        m::WORKSPACE_UPDATE,
-        json!({"workspace_id": ws, "connectors": [conn.connector_id]}),
-    )
-    .await
-    .unwrap();
+    // A new connector is on in every existing workspace without being asked.
+    let list: Vec<Workspace> = c.call(m::WORKSPACE_LIST, json!({})).await.unwrap();
+    let w = list.iter().find(|w| w.workspace_id == ws).unwrap();
+    assert_eq!(w.connectors, vec![conn.connector_id.clone()]);
     let sid = c
         .create_session(&ws, AgentKind::Fake)
         .await

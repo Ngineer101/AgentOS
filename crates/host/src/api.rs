@@ -586,7 +586,15 @@ fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcError>
         path: path_s,
         kind,
         network,
-        connectors: vec![],
+        // Every connector starts on; switch off the ones a project shouldn't use.
+        connectors: h
+            .ctx
+            .store
+            .connector_list()
+            .map_err(internal)?
+            .into_iter()
+            .map(|c| c.connector_id)
+            .collect(),
         created_at: now_ms(),
     };
     h.ctx.store.workspace_insert(&w).map_err(internal)?;
