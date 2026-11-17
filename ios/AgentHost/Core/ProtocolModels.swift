@@ -90,6 +90,8 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var sessionId: String
     var workspaceId: String
     var agent: String
+    /// The agent profile the session runs as (nil: the default login).
+    var profileId: String?
     var state: String
     var stateReason: String?
     var title: String?
@@ -102,6 +104,7 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case workspaceId = "workspace_id"
+        case profileId = "profile_id"
         case agent, state
         case stateReason = "state_reason"
         case title
@@ -136,8 +139,19 @@ struct AgentStatusInfo: Codable, Hashable, Identifiable {
     var available: Bool
     var problem: String?
     var fix: String?
+    /// Which login: the agent's name for its default one, or a profile id
+    /// (absent on hosts before agent profiles).
+    var profileId: String?
+    /// "Work" for a profile; nil for the default login.
+    var profileName: String?
+    var configDir: String?
 
-    var id: String { agent }
+    var id: String { profileId ?? agent }
+
+    /// "Claude Code" or "Claude Code · Work".
+    var label: String {
+        profileName.map { "\(displayName) · \($0)" } ?? displayName
+    }
 
     enum CodingKeys: String, CodingKey {
         case agent
@@ -145,6 +159,9 @@ struct AgentStatusInfo: Codable, Hashable, Identifiable {
         case installed, version
         case loggedIn = "logged_in"
         case available, problem, fix
+        case profileId = "profile_id"
+        case profileName = "profile_name"
+        case configDir = "config_dir"
     }
 }
 

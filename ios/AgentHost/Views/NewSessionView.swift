@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Start a session in an existing workspace with an available agent.
+/// Start a session in an existing workspace with an available agent login
+/// (an agent's default login, or one of its profiles).
 struct NewSessionView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     var onCreated: (SessionInfo) -> Void
 
     @State private var workspaceId: String?
+    /// The chosen login (`AgentStatusInfo.id`).
     @State private var agent: String?
     @State private var starting = false
     @State private var error: String?
@@ -51,12 +53,19 @@ struct NewSessionView: View {
                     }
                     ForEach(agents) { a in
                         Button {
-                            if a.available { agent = a.agent }
+                            if a.available { agent = a.id }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(a.displayName)
+                                    Text(a.label)
                                         .foregroundStyle(a.available ? Color.primary : Color.secondary)
+                                    if let dir = a.configDir {
+                                        Text(dir)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
                                     if !a.available {
                                         Text(a.problem ?? "Unavailable")
                                             .font(.caption)
@@ -71,7 +80,7 @@ struct NewSessionView: View {
                                     }
                                 }
                                 Spacer()
-                                if agent == a.agent {
+                                if agent == a.id {
                                     Image(systemName: "checkmark").foregroundStyle(.tint)
                                 }
                             }
@@ -108,19 +117,21 @@ struct NewSessionView: View {
                     workspaceId = model.workspaces.first?.workspaceId
                 }
                 if agent == nil {
-                    agent = agents.first(where: { $0.available })?.agent
+                    agent = agents.first(where: { $0.available })?.id
                 }
             }
         }
     }
 
     private func start() {
-        guard let wid = workspaceId, let ag = agent else { return }
+        guard let wid = workspaceId, let key = agent,
+              let login = agents.first(where: { $0.id == key }) else { return }
         starting = true
         error = nil
         Task {
             do {
-                let s = try await model.createSession(workspaceId: wid, agent: ag)
+                let s = try await model.createSession(
+                    workspaceId: wid, agent: login.agent, profileId: login.profileId)
                 starting = false
                 onCreated(s)
             } catch {

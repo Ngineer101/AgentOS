@@ -124,7 +124,7 @@ struct SessionRow: View {
                 Spacer(minLength: 8)
                 StateText(state: session.state)
             }
-            Text("\(agentDisplayName(session.agent)) · \(dateFromMillis(session.updatedAt).formatted(.relative(presentation: .named)))")
+            Text("\(model.agentLabel(session)) · \(dateFromMillis(session.updatedAt).formatted(.relative(presentation: .named)))")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -186,6 +186,6 @@ struct ApprovalListView: View {
 
     private func agentLabel(_ a: PendingApprovalModel) -> String {
         guard let s = model.session(a.sessionId) else { return "Session \(a.sessionId)" }
-        return "\(agentDisplayName(s.agent)) in \(model.workspaceName(s.workspaceId))"
+        return "\(model.agentLabel(s)) in \(model.workspaceName(s.workspaceId))"
     }
 }

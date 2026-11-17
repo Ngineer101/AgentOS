@@ -151,6 +151,14 @@ final class AppModel: ObservableObject {
         (hostProtocolVersion ?? hostInfo?.protocolVersion ?? 0) >= RPC.mediaProtocolVersion
     }
 
+    /// "Claude Code", or "Claude Code · Work" for a session on a profile.
+    func agentLabel(_ s: SessionInfo) -> String {
+        guard let pid = s.profileId,
+              let a = hostInfo?.agents.first(where: { $0.profileId == pid })
+        else { return agentDisplayName(s.agent) }
+        return a.label
+    }
+
     func workspaceName(_ id: String) -> String {
         workspaces.first { $0.workspaceId == id }?.name ?? "Workspace"
     }
@@ -498,11 +506,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createSession(workspaceId: String, agent: String) async throws -> SessionInfo {
-        let s: SessionInfo = try await call(
-            RPC.sessionCreate,
-            ["workspace_id": workspaceId, "agent": agent]
-        )
+    /// Start a session as one login of the agent (`profileId` from host info;
+    /// nil on hosts before agent profiles).
+    func createSession(workspaceId: String, agent: String, profileId: String?) async throws -> SessionInfo {
+        var params: [String: Any] = ["workspace_id": workspaceId, "agent": agent]
+        if let profileId { params["profile_id"] = profileId }
+        let s: SessionInfo = try await call(RPC.sessionCreate, params)
         upsert(s)
         open(s.sessionId)
         return s

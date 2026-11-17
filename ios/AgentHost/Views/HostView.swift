@@ -54,13 +54,16 @@ struct HostView: View {
                     ForEach(info.agents) { a in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
-                                Text(a.displayName)
+                                Text(a.label)
                                 Spacer()
                                 Image(systemName: a.available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                                     .foregroundStyle(a.available ? Color.green : Color.orange)
                             }
                             if let v = a.version {
                                 Text(v).font(.caption2).foregroundStyle(.secondary)
+                            }
+                            if let dir = a.configDir {
+                                Text(dir).font(.caption2.monospaced()).foregroundStyle(.secondary)
                             }
                             if !a.available, let p = a.problem {
                                 Text(p).font(.caption).foregroundStyle(.orange)

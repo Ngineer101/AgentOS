@@ -30,7 +30,7 @@ struct ApprovalView: View {
                 }
                 Section("Session") {
                     if let s = model.session(initial.sessionId) {
-                        Text("\(agentDisplayName(s.agent)) in \(model.workspaceName(s.workspaceId))")
+                        Text("\(model.agentLabel(s)) in \(model.workspaceName(s.workspaceId))")
                     } else {
                         Text(initial.sessionId).font(.caption.monospaced())
                     }

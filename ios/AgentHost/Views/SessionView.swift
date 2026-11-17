@@ -105,12 +105,12 @@ struct SessionView: View {
             }
             promptBar
         }
-        .navigationTitle(session.map { agentDisplayName($0.agent) } ?? "Session")
+        .navigationTitle(session.map { model.agentLabel($0) } ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
-                    Text(session.map { agentDisplayName($0.agent) } ?? "Session")
+                    Text(session.map { model.agentLabel($0) } ?? "Session")
                         .font(.headline)
                     if let s = session {
                         Text("\(model.workspaceName(s.workspaceId)) · \(SessionStateName.label(s.state))")
