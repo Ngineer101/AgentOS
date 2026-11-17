@@ -1,0 +1,23 @@
+crates/host/src/mcp.rs
+  s_a80ded15cf799b::t_ecda9241ca5776 822,827-829,837,909-910,1321-1340
+desktop/src/model.rs
+  s_a80ded15cf799b::t_bef6ec10f27495 260-261
+scripts/dev.sh
+  s_a80ded15cf799b::t_2717af5ce7d903 8,12,16-18,20-21,25,74-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "563585fe59e2587332213a52e2051e51366e164b",
+  "prompts": {},
+  "sessions": {
+    "s_a80ded15cf799b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a80ded15cf799b",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
