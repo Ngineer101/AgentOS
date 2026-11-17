@@ -1,0 +1,37 @@
+README.md
+  s_0dddbb77423f5f::t_99865aa34ca8f5 4-5
+crates/cli/src/main.rs
+  s_0dddbb77423f5f::t_9260da54002e96 51,312-314
+crates/host/src/agents.rs
+  s_0dddbb77423f5f::t_dc265731896188 15-16,47-54,57-70,80-83,87-109,333-335,381-383,415-417,443-540,551-555
+crates/host/src/main.rs
+  s_0dddbb77423f5f::t_674c63b1ebdc24 146
+crates/host/src/proxy.rs
+  s_0dddbb77423f5f::t_96a4b59981488f 38-48,358-366
+crates/host/src/sandbox.rs
+  s_0dddbb77423f5f::t_3eac3b88d23096 538-588
+crates/host/src/session.rs
+  s_0dddbb77423f5f::t_3594d36e689c99 523-528,619-635,702-714,1251-1253,1256,1317-1339
+crates/proto/src/types.rs
+  s_0dddbb77423f5f::t_105d3ebf37ae3d 17-18,24-30,37-38,48-49,60-61
+docs/status.md
+  s_0dddbb77423f5f::t_d5128504def5c0 35-36,126-139,173-179
+ios/AgentHost/Core/ProtocolModels.swift
+  s_0dddbb77423f5f::t_bdc18309ee5bf9 68-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4b61b809aeb0f74ff833279a9063960ae32d15c",
+  "prompts": {},
+  "sessions": {
+    "s_0dddbb77423f5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_0dddbb77423f5f",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
