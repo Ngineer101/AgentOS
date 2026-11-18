@@ -564,6 +564,61 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
     c
 }
 
+/// An agent asking to install a tool on this computer (the host's own
+/// `install_tool`): the summary, why, the exact command, and where it runs.
+fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> El {
+    let mac = t.mac();
+    let a = &pending.arguments;
+    let command = a["command"].as_str().unwrap_or_default().to_string();
+    let reason = a["reason"].as_str().unwrap_or_default().trim().to_string();
+    let title = pending.summary.clone().unwrap_or_else(|| format!("Install a tool: {command}"));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let mins = ((pending.expires_at - now) / 60_000).max(0);
+    let expires = if mins >= 1 { format!("expires in {mins} min") } else { "expires soon".into() };
+    let sub = format!("{agent} asks · runs as you, outside the sandbox · {expires}");
+    let aid = pending.approval_id.clone();
+    let (a1, a2) = (aid.clone(), aid);
+    let deny = t.button("Deny", Btn::Default, Some(&keys(s.look, Cmd::Deny)), move |s| s.respond(&a2, false)).key("deny");
+    let approve = t.button("Install", Btn::Primary, Some(&keys(s.look, Cmd::Approve)), move |s| s.respond(&a1, true)).key("approve");
+    let (deny, approve) = if mac { (deny, approve) } else { (deny.radius(17.0).px(18.0), approve.radius(17.0).px(18.0)) };
+    let mut head = row().w_full().gap(10.0).center_y();
+    if mac {
+        head = head.child(row().size(28.0, 28.0).radius(7.0).center().fill(t.warn.alpha(0.18)).child(icon(&ic::TERMINAL, 15.0).color(t.warn)));
+    }
+    head = head.child(
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(if mac { 1.0 } else { 2.0 })
+            .child(text(title).font(TextStyle::new(t.fs, t.w_bold)).color(t.text).wrap())
+            .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap()),
+    );
+    let mut card = col()
+        .key("approval-card")
+        .w_full()
+        .gap(if mac { 10.0 } else { 12.0 })
+        .radius(12.0)
+        .padding(if mac { 14.0 } else { 16.0 })
+        .label(format!("{agent} asks to run {command} on this computer"))
+        .child(head);
+    card = if mac {
+        card.px(16.0).fill(Color::WHITE.alpha(0.05)).border(0.5, t.warn.alpha(0.45)).box_shadow(rune::Shadow { spread: 3.0, color: t.warn.alpha(0.08), ..Default::default() })
+    } else {
+        card.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, inset: true, color: t.warn.alpha(0.6), ..Default::default() })
+    };
+    if !reason.is_empty() {
+        card = card.child(text(format!("“{reason}”")).font(t.font()).color(t.text).wrap());
+    }
+    card = card.child(col().w_full().px(11.0).py(9.0).radius(if mac { 7.0 } else { 8.0 }).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
+    card = card.child(
+        text("The package manager may run the package's install scripts with your permissions. Install only what you expected.")
+            .font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0))
+            .color(t.text2)
+            .wrap(),
+    );
+    card.child(row().w_full().gap(if mac { 8.0 } else { 10.0 }).child(el().grow(1.0)).child(deny).child(approve))
+}
+
 /// An approval waiting inline: what the agent wants, its arguments, Deny and Approve.
 fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
     let mac = t.mac();
@@ -577,6 +632,9 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
     };
     let agent = s.login_label(sess);
     let agent_short = sess.agent.display_name();
+    if pending.connector_id == BUILTIN_CONNECTOR_ID {
+        return Some(install_card(s, &agent, pending, t));
+    }
     // What the connector says about the tool.
     let info = s.connectors.iter().find(|c| c.connector_id == pending.connector_id).and_then(|c| c.tools.iter().find(|x| x.name == tool));
     let kind = match info.map(|x| x.kind) {

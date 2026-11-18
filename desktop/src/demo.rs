@@ -394,6 +394,27 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.settings = Some(Tab::Connectors);
         s.sel_conn = Some("con_gh".into());
     }),
+    ("install-approval", |s| {
+        session(s);
+        // Replace the GitHub approval with an install request.
+        let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
+        let a = &mut s.approvals[0];
+        a.connector_id = BUILTIN_CONNECTOR_ID.into();
+        a.connector_name = "AgentHost".into();
+        a.tool = "install_tool".into();
+        a.summary = Some("Install agent-desktop 1.3.1 with npm, on this computer".into());
+        a.arguments = json!({"command": "npm install --global agent-desktop@1.3.1", "manager": "npm", "package": "agent-desktop", "version": "1.3.1", "reason": "You asked me to set up agent-desktop so you can drive desktop apps from the terminal."});
+        let aid = a.approval_id.clone();
+        if let Some(t) = s.transcripts.get_mut(&sid) {
+            for e in t.events.iter_mut() {
+                if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
+                    e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
+                    e.payload["connector_name"] = json!("AgentHost");
+                    e.payload["tool"] = json!("install_tool");
+                }
+            }
+        }
+    }),
     ("settings-connectors-tools", |s| {
         base(s);
         s.settings = Some(Tab::Connectors);

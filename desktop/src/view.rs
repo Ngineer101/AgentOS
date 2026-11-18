@@ -563,7 +563,15 @@ fn banners(s: &App, t: &Theme) -> El {
             let words = row()
                 .gap(0.0)
                 .child(text(agent).font(TextStyle::new(14.0, 700.0)).color(t.text))
-                .child(text(format!(" wants to {} on {}{more}", crate::session::humanize(&a.tool), a.connector_name)).font(TextStyle::new(14.0, 400.0)).color(t.text));
+                .child(text(match &a.summary {
+                    // "Install agent-desktop 1.3.1 with npm, on this computer"
+                    Some(sum) => {
+                        let mut cs = sum.chars();
+                        let low = cs.next().map(|c| c.to_lowercase().collect::<String>() + cs.as_str()).unwrap_or_default();
+                        format!(" wants to {low}{more}")
+                    }
+                    None => format!(" wants to {} on {}{more}", crate::session::humanize(&a.tool), a.connector_name),
+                }).font(TextStyle::new(14.0, 400.0)).color(t.text));
             c = c.child(
                 strip(words, t.banner).key("approval-banner").child(
                     row()
