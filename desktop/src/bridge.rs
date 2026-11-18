@@ -32,6 +32,8 @@ pub enum Tag {
     Subscribed(String),
     /// `voice.status` or `voice.download`.
     Voice,
+    /// `project.browse` with no path: the project folders.
+    ProjectRoots,
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -44,6 +46,7 @@ pub enum Refresh {
     Devices,
     Approvals,
     HostInfo,
+    ProjectRoots,
 }
 
 pub enum ToHost {

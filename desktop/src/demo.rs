@@ -16,7 +16,17 @@ fn ev(sid: &str, seq: i64, kind: EventType, payload: Value) -> Event {
 fn base(s: &mut App) {
     s.conn = Conn::Connected;
     let t = now();
+    s.project_roots = vec!["/home/nico/Code".into()];
     s.workspaces = vec![
+        Workspace {
+            workspace_id: QUICK_WORKSPACE_ID.into(),
+            name: "Quick tasks".into(),
+            path: "/home/nico/.local/share/agenthost-scratch".into(),
+            kind: WorkspaceKind::Scratch,
+            network: NetworkProfile { presets: vec![NetworkPreset::Web], custom_hosts: vec![] },
+            connectors: vec!["con_gh".into()],
+            created_at: 0,
+        },
         Workspace {
             workspace_id: "ws_relay".into(),
             name: "relay".into(),

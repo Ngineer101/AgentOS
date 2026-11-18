@@ -676,7 +676,11 @@ fn new_session_screen(s: &App, k: &Kit) -> El {
         let id = w.workspace_id.clone();
         c = c.child(choice(
             w.name.clone(),
-            format!("{} · {} · {}", w.path, if w.kind == WorkspaceKind::Repo { "repo" } else { "folder" }, w.network.label()),
+            if w.kind == WorkspaceKind::Scratch {
+                format!("No project folder: a fresh one per session · {}", w.network.label())
+            } else {
+                format!("{} · {} · {}", w.path, workspace_kind_label(w.kind), w.network.label())
+            },
             s.new_ws.as_deref() == Some(w.workspace_id.as_str()),
             true,
             k,
@@ -726,11 +730,60 @@ fn workspaces_screen(s: &App, k: &Kit) -> El {
             ),
         )
         .child(button("Add folder", k, ButtonVariant::Contrast, add_workspace));
-    let mut c = page(k, "workspaces").child(heading("Add a workspace", k)).child(muted("A repo or a plain folder agents may work in. Agents can read and change anything inside it.", k)).child(add);
+    let mut c = page(k, "workspaces").child(heading("Add a workspace", k)).child(muted("A repo or a plain folder agents may work in. Agents can read and change anything inside it.", k)).child(add).child(project_roots_card(s, k));
     for w in &s.workspaces {
         c = c.child(workspace_card(s, w, k));
     }
     scroll_page(c)
+}
+
+/// Where paired phones may pick or create project folders.
+fn project_roots_card(s: &App, k: &Kit) -> El {
+    let mut c = card(k)
+        .key("project-roots")
+        .child(heading("Project folders", k))
+        .child(muted_wrap("Your phone can turn a folder inside these into a workspace, or create a new one there. Anywhere else stays desktop only.", k));
+    for r in &s.project_roots {
+        let rest: Vec<String> = s.project_roots.iter().filter(|x| *x != r).cloned().collect();
+        c = c.child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(mono(r.clone(), k))
+                .child(el().grow(1.0))
+                .child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| s.set_project_roots(rest.clone()))),
+        );
+    }
+    if s.project_roots.is_empty() {
+        c = c.child(muted("None: phones can't create projects.", k));
+    }
+    let add = |s: &mut App| {
+        let r = s.root_input.text.trim().to_string();
+        if r.is_empty() {
+            return;
+        }
+        let mut roots = s.project_roots.clone();
+        roots.push(r);
+        s.set_project_roots(roots);
+        s.root_input.clear();
+    };
+    c.child(
+        row()
+            .w_full()
+            .gap(8.0)
+            .center_y()
+            .child(
+                col().grow(1.0).child(
+                    TextInput::new(&s.root_input).width(None)
+                        .placeholder("~/Code")
+                        .on_edit(|s: &mut App| &mut s.root_input)
+                        .on_submit(move |s: &mut App, _: &mut Tx| add(s))
+                        .build(k),
+                ),
+            )
+            .child(button("Add folder", k, ButtonVariant::Ghost, add)),
+    )
 }
 
 fn add_workspace(s: &mut App) {
@@ -740,6 +793,14 @@ fn add_workspace(s: &mut App) {
     }
     s.act("Add workspace", m::WORKSPACE_ADD, json!({"path": path}), Refresh::Workspaces);
     s.ws_path.clear();
+}
+
+fn workspace_kind_label(kind: WorkspaceKind) -> &'static str {
+    match kind {
+        WorkspaceKind::Repo => "repo",
+        WorkspaceKind::Folder => "folder",
+        WorkspaceKind::Scratch => "built in",
+    }
 }
 
 fn workspace_card(s: &App, w: &Workspace, k: &Kit) -> El {
@@ -845,24 +906,38 @@ fn workspace_card(s: &App, w: &Workspace, k: &Kit) -> El {
         conns = conns.child(muted("No connectors. Add one on the Connectors screen.", k));
     }
     let idr = id.clone();
+    let quick = w.kind == WorkspaceKind::Scratch;
+    let mut title = row()
+        .w_full()
+        .center_y()
+        .gap(8.0)
+        .child(heading(w.name.clone(), k))
+        .child(badge(workspace_kind_label(w.kind), false, k))
+        .child(el().grow(1.0));
+    // Quick tasks is built in.
+    if !quick {
+        title = title.child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| {
+            s.act("Remove workspace", m::WORKSPACE_REMOVE, json!({"workspace_id": idr}), Refresh::Workspaces)
+        }));
+    }
+    let place = if quick {
+        muted_wrap(format!("No project folder: each session gets a fresh, empty folder of its own (in {}). Open web lets agents look things up on any public site.", w.path), k)
+    } else {
+        muted(w.path.clone(), k)
+    };
     card(k)
         .key(format!("ws-{}", w.workspace_id))
-        .child(
-            row()
-                .w_full()
-                .center_y()
-                .gap(8.0)
-                .child(heading(w.name.clone(), k))
-                .child(badge(if w.kind == WorkspaceKind::Repo { "repo" } else { "folder" }, false, k))
-                .child(el().grow(1.0))
-                .child(button("Remove", k, ButtonVariant::Ghost, move |s: &mut App| {
-                    s.act("Remove workspace", m::WORKSPACE_REMOVE, json!({"workspace_id": idr}), Refresh::Workspaces)
-                })),
-        )
-        .child(muted(w.path.clone(), k))
+        .child(title)
+        .child(place)
         .child(text("Network".to_string()).font(k.ty.small_medium).color(k.c.text_muted))
         .child(muted(format!("Profile: {}. The agent's own provider hosts are always allowed.", w.network.label()), k))
-        .child(row().gap(16.0).child(preset(NetworkPreset::Packages, "Package registries")).child(preset(NetworkPreset::Github, "GitHub")))
+        .child(
+            row()
+                .gap(16.0)
+                .child(preset(NetworkPreset::Web, "Open web"))
+                .child(preset(NetworkPreset::Packages, "Package registries"))
+                .child(preset(NetworkPreset::Github, "GitHub")),
+        )
         .child(hosts)
         .child(add_host)
         .child(text("Connectors".to_string()).font(k.ty.small_medium).color(k.c.text_muted))

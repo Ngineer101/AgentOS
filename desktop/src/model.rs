@@ -98,6 +98,9 @@ pub struct App {
     pub profile_agent: Option<AgentKind>,
     pub profile_name: TextEdit,
     pub profile_dir: TextEdit,
+    /// Folders the phone may create projects in (`project.browse`).
+    pub project_roots: Vec<String>,
+    pub root_input: TextEdit,
     pub pairing: Option<Pairing>,
     pub error: Option<String>,
     pub notice: Option<String>,
@@ -150,6 +153,8 @@ pub fn init() -> App {
         profile_agent: None,
         profile_name: TextEdit::new(""),
         profile_dir: TextEdit::new(""),
+        project_roots: vec![],
+        root_input: TextEdit::new(""),
         pairing: None,
         error: None,
         notice: None,
@@ -205,6 +210,11 @@ impl App {
         self.profile_dir.clear();
     }
 
+    /// Replace the project folders (an empty list keeps phones from creating projects).
+    pub fn set_project_roots(&self, roots: Vec<String>) {
+        self.act("Change project folders", m::PROJECT_SET_ROOTS, json!({"roots": roots}), Refresh::ProjectRoots);
+    }
+
     pub fn act(&self, what: &str, method: &'static str, params: Value, refresh: Refresh) {
         self.call(Tag::Action { what: what.into(), refresh }, method, params);
     }
@@ -217,11 +227,12 @@ impl App {
             Refresh::Devices => self.call(Tag::Devices, m::DEVICE_LIST, json!({})),
             Refresh::Approvals => self.call(Tag::Approvals, m::APPROVAL_LIST, json!({})),
             Refresh::HostInfo => self.call(Tag::HostInfo, m::HOST_INFO, json!({})),
+            Refresh::ProjectRoots => self.call(Tag::ProjectRoots, m::PROJECT_BROWSE, json!({})),
         }
     }
 
     pub fn refresh_all(&self) {
-        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals] {
+        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals, Refresh::ProjectRoots] {
             self.refresh(r);
         }
     }
@@ -429,6 +440,11 @@ impl App {
                 // An older host without voice: no microphone button.
                 (Tag::Voice, Err(_)) => self.voice = None,
                 (Tag::Workspaces, Ok(v)) => self.workspaces = parse(v).unwrap_or_default(),
+                (Tag::ProjectRoots, Ok(v)) => {
+                    self.project_roots = parse::<ProjectBrowse>(v).map(|b| b.roots).unwrap_or_default()
+                }
+                // An older host without projects.
+                (Tag::ProjectRoots, Err(_)) => self.project_roots = vec![],
                 (Tag::Sessions, Ok(v)) => {
                     self.sessions = parse(v).unwrap_or_default();
                     if self.screen == Screen::NewSession && self.sessions.is_empty() && self.workspaces.is_empty() {
