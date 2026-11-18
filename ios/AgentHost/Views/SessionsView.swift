@@ -2,51 +2,87 @@ import SwiftUI
 
 enum Route: Hashable {
     case session(String)
-    case host
+    case settings
 }
 
-/// Sessions grouped by workspace, with agent, state and last activity.
+/// Sessions grouped by workspace (Quick tasks first) under a large title with
+/// the host's name; Search and Compose in glass at the bottom, Settings at
+/// the top right.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
     @State private var showNew = false
     @State private var approvalShown: PendingApprovalModel?
     @State private var showApprovalList = false
+    @State private var search = ""
+
+    private var groups: [SessionGroup] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return model.groupedSessions }
+        return model.groupedSessions.compactMap { g in
+            let hits = g.sessions.filter { s in
+                (s.title ?? "").localizedCaseInsensitiveContains(q)
+                    || model.agentLabel(s).localizedCaseInsensitiveContains(q)
+                    || g.workspaceName.localizedCaseInsensitiveContains(q)
+            }
+            return hits.isEmpty ? nil : SessionGroup(workspaceId: g.workspaceId, workspaceName: g.workspaceName, sessions: hits)
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                Section {
+                    HostStatusLine()
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                        .frame(height: 20)
+                }
+                .listSectionSpacing(14)
+
                 if !model.link.isOnline {
                     Section {
                         ConnectionStatusRow()
                     }
                 }
-                if model.anyWaitingApproval || !model.approvals.isEmpty {
+                if model.anyWaitingApproval && search.isEmpty {
                     Section {
-                        ApprovalStatusRow(sessionId: nil) { first in
-                            openApprovals(first)
-                        }
+                        ApprovalBanner { first in openApprovals(first) }
+                            .listRowBackground(
+                                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                    .fill(Palette.orange.opacity(0.16))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                            .strokeBorder(Palette.orange.opacity(0.35), lineWidth: 0.5)
+                                    )
+                            )
                     }
                 }
 
-                ForEach(model.groupedSessions) { group in
-                    Section(group.workspaceName) {
+                ForEach(groups) { group in
+                    Section {
                         ForEach(group.sessions) { s in
                             NavigationLink(value: Route.session(s.sessionId)) {
                                 SessionRow(session: s)
                             }
                         }
+                    } header: {
+                        GroupHeader(model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName)
                     }
                 }
             }
             .listStyle(.insetGrouped)
+            .environment(\.defaultMinListRowHeight, 20)
+            .contentMargins(.top, 0, for: .scrollContent)
             .overlay {
                 if model.sessions.isEmpty {
                     ContentUnavailableView {
                         Label("No Sessions", systemImage: "rectangle.stack")
                     } description: {
-                        Text("Start one in an existing workspace with the + button.")
+                        Text("Start one with the compose button.")
                     }
+                } else if groups.isEmpty {
+                    ContentUnavailableView.search(text: search)
                 }
             }
             .refreshable {
@@ -56,32 +92,24 @@ struct SessionsView: View {
                     model.retryNow()
                 }
             }
-            .navigationTitle(model.credentials?.hostName ?? "Sessions")
+            .navigationTitle(model.hostName)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        path.append(.host)
-                    } label: {
-                        Image(systemName: model.link.isOnline ? "desktopcomputer" : "desktopcomputer.trianglebadge.exclamationmark")
-                    }
-                    .accessibilityLabel("Host")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showNew = true
+                        path.append(.settings)
                     } label: {
-                        Image(systemName: "plus")
+                        ToolbarIcon(systemName: "gearshape")
                     }
-                    .disabled(!model.link.isOnline)
-                    .accessibilityLabel("New session")
+                    .accessibilityLabel("Settings")
                 }
             }
+            .modifier(SessionsBottomBar(search: $search, canCompose: model.link.isOnline) { showNew = true })
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case let .session(id):
                     SessionView(sessionId: id)
-                case .host:
-                    HostView()
+                case .settings:
+                    SettingsView()
                 }
             }
             .sheet(isPresented: $showNew) {
@@ -93,13 +121,16 @@ struct SessionsView: View {
             }
             .sheet(item: $approvalShown) { a in
                 ApprovalView(approvalId: a.approvalId, initial: a)
-                .environmentObject(model)
+                    .environmentObject(model)
             }
             .sheet(isPresented: $showApprovalList) {
                 ApprovalListView()
                     .environmentObject(model)
             }
         }
+        #if DEBUG
+        .task { openDemoScreen() }
+        #endif
     }
 
     private func openApprovals(_ first: PendingApprovalModel?) {
@@ -110,32 +141,248 @@ struct SessionsView: View {
             Task { await model.refreshApprovals() }
         }
     }
+
+    #if DEBUG
+    private func openDemoScreen() {
+        guard model.isDemo, path.isEmpty, let screen = DemoData.requestedScreen else { return }
+        switch screen {
+        case .session: path = [.session(DemoData.flakySession)]
+        case .dictating: path = [.session(DemoData.quickSession)]
+        case .settings: path = [.settings]
+        case .new, .picker: showNew = true
+        case .sessions, .pair: break
+        }
+    }
+    #endif
+}
+
+/// Search and Compose at the bottom: the system search field in the bottom
+/// glass toolbar on iOS 26; a material capsule and a tinted circle before.
+private struct SessionsBottomBar: ViewModifier {
+    @Binding var search: String
+    var canCompose: Bool
+    var compose: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content
+                .searchable(text: $search, prompt: "Search")
+                .toolbar {
+                    DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                    ToolbarSpacer(.fixed, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        Button(action: compose) {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .buttonStyle(.glassProminent)
+                        .disabled(!canCompose)
+                        .accessibilityLabel("New session")
+                    }
+                }
+        } else {
+            content
+                .safeAreaInset(edge: .bottom) {
+                    HStack(spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                            TextField("Search", text: $search)
+                                .submitLabel(.search)
+                            if !search.isEmpty {
+                                Button {
+                                    search = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                }
+                                .accessibilityLabel("Clear search")
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 48)
+                        .glassSurface(Capsule())
+                        Button(action: compose) {
+                            Image(systemName: "square.and.pencil")
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(GlassCircleButtonStyle(size: 48, tint: .accentColor))
+                        .disabled(!canCompose)
+                        .accessibilityLabel("New session")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                }
+        }
+    }
+}
+
+/// "● Connected · 4 sessions" under the large title.
+struct HostStatusLine: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let line = Line(model: model)
+        HStack(spacing: 6) {
+            Circle().fill(line.color).frame(width: 8, height: 8)
+            Text(line.text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @MainActor
+    struct Line {
+        let model: AppModel
+
+    var color: Color {
+        switch model.link {
+        case .online: return Palette.green
+        case .connecting: return .blue
+        case .updateRequired: return Palette.red
+        default: return Palette.orange
+        }
+    }
+
+    var text: String {
+        let live = model.sessions.filter { !SessionStateName.isTerminal($0.state) }.count
+        switch model.link {
+        case .online:
+            return "Connected · \(live) \(live == 1 ? "session" : "sessions")"
+        default:
+            if let at = model.cachedAt {
+                return "\(model.link.label) · cached \(at.formatted(.relative(presentation: .named)))"
+            }
+            return model.link.label
+        }
+    }
+    }
+}
+
+/// A grouped-list section header in the classic style: small capitals.
+struct GroupHeader: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.footnote)
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
+    }
+}
+
+extension Section where Parent == GroupHeader, Footer == EmptyView, Content: View {
+    /// A section with a small-capitals header.
+    init(caps title: String, @ViewBuilder content: () -> Content) {
+        self.init(content: content, header: { GroupHeader(title) })
+    }
+}
+
+/// The prominent "N approvals waiting" row at the top of the list.
+struct ApprovalBanner: View {
+    @EnvironmentObject private var model: AppModel
+    var onTap: (PendingApprovalModel?) -> Void
+
+    var body: some View {
+        Button {
+            onTap(model.approvals.first)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.black)
+                    .frame(width: 34, height: 34)
+                    .background(Palette.orange, in: Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Group {
+                        if let a = model.approvals.first {
+                            Text("\(a.connectorName) · \(a.tool)")
+                        } else {
+                            Text("A session is waiting for a decision")
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text("Review")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 16)
+                    .frame(height: 34)
+                    .background(Palette.orange, in: Capsule())
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the approval")
+    }
+
+    private var title: String {
+        let n = model.approvals.count
+        return n > 1 ? "\(n) approvals waiting" : "1 approval waiting"
+    }
 }
 
 struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
     var session: SessionInfo
 
+    private var quick: Bool { model.isQuickTasks(session.workspaceId) }
+    private var ended: Bool { session.state == SessionStateName.ended }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(session.title ?? agentDisplayName(session.agent))
+        HStack(spacing: 12) {
+            SessionStatusIcon(state: session.state, quickTask: quick)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.title ?? model.agentLabel(session))
+                    .foregroundStyle(ended ? Color.secondary : Color.primary)
                     .lineLimit(1)
-                Spacer(minLength: 8)
-                StateText(state: session.state)
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(subtitleColor)
+                    .lineLimit(1)
+                if let reason = session.stateReason, session.state == SessionStateName.failed {
+                    Text(reason)
+                        .font(.footnote)
+                        .foregroundStyle(Palette.red)
+                        .lineLimit(2)
+                }
             }
-            Text("\(model.agentLabel(session)) · \(dateFromMillis(session.updatedAt).formatted(.relative(presentation: .named)))")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            if let reason = session.stateReason, session.state == SessionStateName.failed {
-                Text(reason)
-                    .font(.subheadline)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            }
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String {
+        let agent = model.agentLabel(session)
+        let age = shortAge(session.updatedAt)
+        switch session.state {
+        case SessionStateName.waitingApproval:
+            return "Needs approval · \(agent)"
+        case SessionStateName.idle where quick:
+            return "\(agent) · \(age)"
+        case SessionStateName.created, SessionStateName.starting:
+            return "Starting · \(agent)"
+        default:
+            return "\(SessionStateName.label(session.state)) · \(agent) · \(age)"
+        }
+    }
+
+    private var subtitleColor: Color {
+        switch session.state {
+        case SessionStateName.waitingApproval: return Palette.orange
+        case SessionStateName.failed: return Palette.red
+        case SessionStateName.ended: return Color(uiColor: .tertiaryLabel)
+        default: return .secondary
+        }
     }
 }
 

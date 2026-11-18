@@ -26,7 +26,7 @@ state and calls `RemoteClient.call(method:paramsJson:)`.
 | `Generated/` | UniFFI output: `agenthost_ffi.swift` (compiled into the app), `agenthost_ffiFFI.h` and `module.modulemap` (packed into the XCFramework). Committed; regenerate after changing `crates/ffi` |
 | `AgentHost/App` | App entry, lock / privacy cover, `AppModel` (connection, sync, cache, outbox) |
 | `AgentHost/Core` | Protocol models, Keychain + Secure Enclave store, transcript model and cache |
-| `AgentHost/Views` | The six screens: Pair, Sessions, Session, New session, Approval, Host. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout; mockups in the project's nano.design file |
+| `AgentHost/Views` | The screens: Pair, Sessions, Session, New session (with the project folder picker), Approval, Settings. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout, with iOS 26 Liquid Glass controls (`Glass.swift`: `.glassEffect`, `.glassProminent`, the bottom search toolbar) and a material look-alike on iOS 17–25; designs in the project's nano.design file |
 
 ## Building on a Mac
 
@@ -59,11 +59,20 @@ agenthost device pair          # shows the QR code; confirm the code here
 The relay URL inside the QR code is the one the host was started with, so it
 must be reachable from the phone.
 
+For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
+transcripts and an approval; no pairing, lock or network) and optionally
+`-AgentHostDemoScreen session|dictating|new|picker|settings|pair`
+(`App/DemoData.swift`; compiled out of Release builds):
+
+```sh
+xcrun simctl launch booted dev.agenthost.ios -AgentHostDemo -AgentHostDemoScreen session
+```
+
 ## Behaviour
 
 | Spec outcome | How |
 | --- | --- |
-| Face ID / passcode: optional, **off by default** | Host screen → Security → "Require Face ID". On: `RootView` shows only `LockView` while `phase == .locked`, the app locks on `scenePhase == .background` (drops the connection and the in-memory keys) and unlocks with `LAContext.evaluatePolicy(.deviceOwnerAuthentication)`. Off: the keys load without a prompt and going to the background only drops the connection. Switching either way asks for Face ID or the passcode first and saves the keys again with the new protection; keys saved by an earlier version (always protected) need one last prompt, then are saved unprotected |
+| Face ID / passcode: optional, **off by default** | Settings → Security → "Require Face ID". On: `RootView` shows only `LockView` while `phase == .locked`, the app locks on `scenePhase == .background` (drops the connection and the in-memory keys) and unlocks with `LAContext.evaluatePolicy(.deviceOwnerAuthentication)`. Off: the keys load without a prompt and going to the background only drops the connection. Switching either way asks for Face ID or the passcode first and saves the keys again with the new protection; keys saved by an earlier version (always protected) need one last prompt, then are saved unprotected |
 | Device keys in the Keychain, this device only | `CredentialStore`: one generic-password item, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` (never backed up or migrated), plus `.userPresence` when Face ID is required. On hardware with a Secure Enclave its contents are also ECIES-encrypted (P-256, AES-GCM) to a Secure Enclave key created with `.privateKeyUsage` (plus `.userPresence` when required); the key never leaves the Enclave. With Face ID on, the lock screen's evaluated `LAContext` is passed to both reads so there is one prompt. Simulator fallback: no Enclave layer (format byte 0) |
 | App-switcher snapshot blanked | `PrivacyCover` over everything whenever `scenePhase != .active` |
 | Last transcript readable offline, prompts disabled with a clear "offline" state | `TranscriptCache` writes JSON to Application Support with `.completeFileProtection` (and excludes it from backup); loaded after unlock. `ConnectionBanner` and the disabled prompt box say "Offline" / "Host offline" |
@@ -76,7 +85,7 @@ must be reachable from the phone.
 | Attachments (protocol 2 hosts) | Composer paperclip menu: Photo Library (`PhotosPicker`; HEIC re-encoded as JPEG) or Files (`.fileImporter`, any type, several at once). Each pick is copied to a temporary file, sent with `RemoteClient.uploadFile` straight away (up to 25 MB, 10 per prompt), then deleted; the ids go in `session.prompt` `attachments`. Chips show progress and failures; Send waits for uploads. Sent attachments are listed under the prompt bubble |
 | Voice input | Mic button uses iOS dictation (the Speech framework, `SFSpeechRecognizer` fed from `AVAudioEngine`, at most 5 minutes): the text appears while you talk and is added to the draft on Stop. Recognition is forced on device where the iPhone supports it, otherwise Apple's dictation service is used. Works with any host; the host's speech model (Nemotron) is only for the desktop, so nothing is downloaded for the phone. Needs speech recognition and microphone permission (`NSSpeechRecognitionUsageDescription`, `NSMicrophoneUsageDescription`); the photo picker needs none |
 
-Unpair (Host screen) deletes this phone's keys and cache. A phone may not
+Unpair (Settings) deletes this phone's keys and cache. A phone may not
 call `device.revoke`, so the desktop should also revoke the device.
 
 Not in v1 (per the spec): push notifications, adding workspaces or

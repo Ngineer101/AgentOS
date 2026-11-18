@@ -379,6 +379,18 @@ final class SpeechDictation: ObservableObject {
         return result
     }
 
+    #if DEBUG
+    /// Screenshots: look as if listening, with `text` heard so far. Uses no
+    /// audio; Discard or Done end it.
+    func showDemo(text: String) {
+        self.text = text
+        elapsed = 7
+        levels = (0..<Self.meterBars).map { i in Float(0.15 + 0.7 * abs(sin(Double(i) * 0.9))) }
+        isListening = true
+        recognitionDone = true
+    }
+    #endif
+
     /// Stop and throw the text away.
     func cancel() {
         guard isListening || isFinishing else { return }
@@ -536,68 +548,81 @@ struct AttachmentChip: View {
     }
 }
 
-/// Replaces the prompt row while dictating: the text so far, a level meter
-/// until there is text, and the time.
-struct DictationStrip: View {
+/// Replaces the prompt row while dictating: the text so far, discard, the
+/// time, a level meter and done, on a glass panel.
+struct DictationPanel: View {
     @ObservedObject var dictation: SpeechDictation
     var onCancel: @MainActor () -> Void
     var onStop: @MainActor () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button(role: .destructive) {
-                onCancel()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.title3)
-            }
-            .disabled(dictation.isFinishing)
-            .accessibilityLabel("Discard dictation")
-
-            HStack(spacing: 8) {
-                if dictation.isFinishing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(timeText)
-                        .font(.body.monospacedDigit())
-                }
+        VStack(spacing: 10) {
+            Group {
                 if dictation.text.isEmpty {
-                    if dictation.isFinishing {
-                        Text("Finishing…").foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                    } else {
-                        LevelMeter(levels: dictation.levels)
-                    }
+                    Text(dictation.isFinishing ? "Finishing…" : "Listening…")
+                        .foregroundStyle(.secondary)
                 } else {
                     // The newest words, cut at the start.
                     Text(dictation.text)
-                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1...3)
                         .truncationMode(.head)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 36)
-            .background(Color(uiColor: .secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
-            )
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(dictation.isFinishing ? "Finishing dictation" : "Dictating, \(timeText)")
+            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+            .padding(.horizontal, 4)
 
-            Button {
-                onStop()
-            } label: {
-                Image(systemName: "checkmark.circle.fill").font(.title)
+            HStack(spacing: 12) {
+                Button(role: .destructive) {
+                    onCancel()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Palette.red)
+                }
+                .buttonStyle(GlassCircleButtonStyle(size: 44, tint: Color.white.opacity(0.08)))
+                .disabled(dictation.isFinishing)
+                .accessibilityLabel("Discard dictation")
+
+                HStack(spacing: 6) {
+                    if dictation.isFinishing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(Palette.red).frame(width: 7, height: 7)
+                    }
+                    Text(timeText)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(Palette.red)
+                }
+                .frame(width: 64, alignment: .leading)
+
+                LevelMeter(levels: Array(dictation.levels.suffix(16)))
+                    .frame(maxWidth: .infinity)
+
+                Spacer().frame(width: 20)
+
+                Button {
+                    onStop()
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(GlassCircleButtonStyle(size: 44, tint: .accentColor))
+                .disabled(dictation.isFinishing)
+                .accessibilityLabel("Done dictating")
             }
-            .disabled(dictation.isFinishing)
-            .accessibilityLabel("Stop dictation")
+
+            Text("iOS dictation · on this iPhone")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+        .glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(dictation.isFinishing ? "Finishing dictation" : "Dictating, \(timeText)")
     }
 
     private var timeText: String {
@@ -606,19 +631,19 @@ struct DictationStrip: View {
     }
 }
 
+/// Bars that follow the input level, centred, newest on the right.
 struct LevelMeter: View {
     let levels: [Float]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(Array(levels.enumerated()), id: \.offset) { i, level in
                 Capsule()
-                    .fill(Color.secondary)
-                    .frame(width: 3, height: 3 + CGFloat(level) * 17)
+                    .fill(Color.white.opacity(i < levels.count - 3 ? 0.9 : 0.45))
+                    .frame(width: 2.5, height: 4 + CGFloat(level) * 20)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: 20, alignment: .trailing)
-        .clipped()
+        .frame(height: 26)
         .animation(.linear(duration: 0.05), value: levels)
         .accessibilityHidden(true)
     }

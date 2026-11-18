@@ -141,8 +141,34 @@ final class AppModel: ObservableObject {
     private var networkInterface: NWInterface.InterfaceType?
     private var unlocking = false
     private let constants = protocolConstants()
+    /// Sample data for screenshots (DEBUG builds, `-AgentHostDemo`): no
+    /// keys, no network.
+    private(set) var isDemo = false
+    private var demoHostName: String?
+
+    init() {
+        #if DEBUG
+        if let demo = DemoData.fromLaunchArguments() {
+            loadDemo(demo)
+        }
+        #endif
+    }
 
     // MARK: Derived
+
+    /// The paired host's name (the large title).
+    var hostName: String {
+        credentials?.hostName ?? demoHostName ?? "Sessions"
+    }
+
+    /// Sessions in a workspace that have not ended.
+    func liveSessionCount(_ workspaceId: String) -> Int {
+        sessions.filter { $0.workspaceId == workspaceId && !SessionStateName.isTerminal($0.state) }.count
+    }
+
+    func isQuickTasks(_ workspaceId: String) -> Bool {
+        workspaces.first { $0.workspaceId == workspaceId }?.isQuickTasks ?? false
+    }
 
     var anyWaitingApproval: Bool {
         sessions.contains { $0.state == SessionStateName.waitingApproval } || !approvals.isEmpty
@@ -170,7 +196,8 @@ final class AppModel: ObservableObject {
         sessions.first { $0.sessionId == id }
     }
 
-    /// Sessions grouped by workspace, most recent activity first.
+    /// Sessions grouped by workspace: Quick tasks first, then most recent
+    /// activity first.
     var groupedSessions: [SessionGroup] {
         let groups = Dictionary(grouping: sessions, by: { $0.workspaceId })
         return groups
@@ -181,7 +208,11 @@ final class AppModel: ObservableObject {
                     sessions: entry.value.sorted { $0.updatedAt > $1.updatedAt }
                 )
             }
-            .sorted { ($0.sessions.first?.updatedAt ?? 0) > ($1.sessions.first?.updatedAt ?? 0) }
+            .sorted {
+                let q0 = isQuickTasks($0.workspaceId), q1 = isQuickTasks($1.workspaceId)
+                if q0 != q1 { return q0 }
+                return ($0.sessions.first?.updatedAt ?? 0) > ($1.sessions.first?.updatedAt ?? 0)
+            }
     }
 
     // MARK: Lock and unlock
@@ -296,6 +327,7 @@ final class AppModel: ObservableObject {
     /// The app went to the background: lock when Face ID is required,
     /// otherwise just drop the connection (it is reopened on return).
     func enterBackground() {
+        if isDemo { return }
         if requireUnlock {
             lock()
         } else if phase == .ready {
@@ -306,6 +338,7 @@ final class AppModel: ObservableObject {
 
     /// Back in the foreground without a lock: reconnect.
     func enterForeground() {
+        if isDemo { return }
         guard phase == .ready else { return }
         connect()
     }
@@ -515,6 +548,9 @@ final class AppModel: ObservableObject {
 
     /// The project folders (`path` nil), or the subfolders of one.
     func browseProjects(_ path: String?) async throws -> ProjectBrowseInfo {
+        #if DEBUG
+        if isDemo { return DemoData.browse(path) }
+        #endif
         var params: [String: Any] = [:]
         if let path { params["path"] = path }
         return try await call(RPC.projectBrowse, params)
@@ -619,6 +655,17 @@ final class AppModel: ObservableObject {
     /// Start a session as one login of the agent (`profileId` from host info;
     /// nil on hosts before agent profiles).
     func createSession(workspaceId: String, agent: String, profileId: String?) async throws -> SessionInfo {
+        #if DEBUG
+        if isDemo {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let s = SessionInfo(sessionId: UUID().uuidString.lowercased(), workspaceId: workspaceId, agent: agent,
+                                profileId: profileId, state: SessionStateName.idle, stateReason: nil, title: nil,
+                                createdAt: now, updatedAt: now, lastSeq: 0)
+            upsert(s)
+            transcripts[s.sessionId] = Transcript(sessionId: s.sessionId)
+            return s
+        }
+        #endif
         var params: [String: Any] = ["workspace_id": workspaceId, "agent": agent]
         if let profileId { params["profile_id"] = profileId }
         let s: SessionInfo = try await call(RPC.sessionCreate, params)
@@ -654,6 +701,16 @@ final class AppModel: ObservableObject {
     /// Send (or resend) one prompt with its fixed prompt id. Transport errors
     /// leave it queued for the next connection; host errors are shown.
     private func deliver(_ p: OutgoingPrompt) async {
+        #if DEBUG
+        if isDemo {
+            let seq = (transcripts[p.sessionId]?.lastSeq ?? 0) + 1
+            ingest(HostEvent(
+                sessionId: p.sessionId, seq: seq, type: EventKind.prompt,
+                payload: .object(["text": .string(p.text), "prompt_id": .string(p.id), "device": .string(deviceName ?? "iPhone")]),
+                ts: Int64(Date().timeIntervalSince1970 * 1000)))
+            return
+        }
+        #endif
         guard link.isOnline else { return }
         var params: [String: Any] = ["session_id": p.sessionId, "prompt_id": p.id, "text": p.text]
         if !p.attachments.isEmpty {
@@ -679,6 +736,12 @@ final class AppModel: ObservableObject {
     }
 
     func respond(_ approvalId: String, approve: Bool) async throws {
+        #if DEBUG
+        if isDemo {
+            approvals.removeAll { $0.approvalId == approvalId }
+            return
+        }
+        #endif
         try await send(
             RPC.approvalRespond,
             ["approval_id": approvalId, "decision": approve ? "approve" : "deny"]
@@ -884,4 +947,22 @@ final class AppModel: ObservableObject {
         pathMonitor?.cancel()
         pathMonitor = nil
     }
+
+    // MARK: Demo (DEBUG only)
+
+    #if DEBUG
+    private func loadDemo(_ d: DemoData) {
+        isDemo = true
+        demoHostName = d.hostName
+        hostInfo = d.hostInfo
+        workspaces = d.workspaces
+        sessions = d.sessions
+        approvals = d.approvals
+        deviceName = d.deviceName
+        transcripts = d.transcripts
+        hostProtocolVersion = RPC.mediaProtocolVersion
+        link = .online
+        phase = d.screen == .pair ? .unpaired : .ready
+    }
+    #endif
 }

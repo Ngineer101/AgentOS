@@ -18,17 +18,17 @@ struct ApprovalView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Connector") {
+                Section(caps: "Connector") {
                     Text(initial.connectorName)
                 }
-                Section("Tool") {
+                Section(caps: "Tool") {
                     Text(initial.tool).font(.body.monospaced())
                 }
-                Section("Arguments") {
+                Section(caps: "Arguments") {
                     CodeBlock(text: initial.arguments.isNull ? "(none)" : initial.arguments.prettyJSON)
                         .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
                 }
-                Section("Session") {
+                Section(caps: "Session") {
                     if let s = model.session(initial.sessionId) {
                         Text("\(model.agentLabel(s)) in \(model.workspaceName(s.workspaceId))")
                     } else {
@@ -53,32 +53,28 @@ struct ApprovalView: View {
                     }
                 }
             }
-            .navigationTitle("Approve tool call?")
+            .navigationTitle("\(ApprovalRequestRow.humanize(initial.tool)) on \(initial.connectorName)?")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        ToolbarIcon(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 12) {
-                    Button(role: .destructive) {
-                        answer(false)
-                    } label: {
-                        Text("Deny").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    Button {
-                        answer(true)
-                    } label: {
-                        Text("Approve").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
+                HStack(spacing: 10) {
+                    Button("Deny") { answer(false) }
+                        .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red, height: 50))
+                    Button("Approve") { answer(true) }
+                        .buttonStyle(CapsuleButtonStyle(fill: .accentColor, height: 50))
                 }
-                .controlSize(.large)
                 .disabled(sending || current == nil || !model.link.isOnline)
-                .padding()
-                .background(.bar)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
         }
     }

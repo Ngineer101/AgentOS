@@ -4,7 +4,9 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// The live transcript of one session, laid out for a narrow screen.
+/// The live transcript of one session, laid out for a narrow screen: glass
+/// back and menu buttons, the title with "agent · login · workspace" under
+/// it, and a glass composer at the bottom.
 struct SessionView: View {
     @EnvironmentObject private var model: AppModel
     let sessionId: String
@@ -29,20 +31,42 @@ struct SessionView: View {
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
     private var pending: [OutgoingPrompt] { model.outbox.filter { $0.sessionId == sessionId } }
     private var isTerminal: Bool { SessionStateName.isTerminal(session?.state ?? "") }
+    private var isBusy: Bool { SessionStateName.isBusy(session?.state ?? "") }
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
-    private var approvalWaiting: Bool {
-        model.approvals.contains { $0.sessionId == sessionId }
-            || session?.state == SessionStateName.waitingApproval
+
+    /// An approval is waiting that the transcript has no card for (the
+    /// request event is not loaded yet): show a banner instead.
+    private func approvalBannerNeeded(_ rows: [TranscriptRow]) -> Bool {
+        let waiting = model.approvals.filter { $0.sessionId == sessionId }
+        if waiting.isEmpty { return session?.state == SessionStateName.waitingApproval && !rows.contains(where: \.isApprovalRequest) }
+        let shown = Set(rows.compactMap(\.approvalId))
+        return waiting.contains { !shown.contains($0.approvalId) }
+    }
+
+    private var title: String {
+        guard let s = session else { return "Session" }
+        return s.title ?? model.agentLabel(s)
+    }
+
+    private var subtitle: String? {
+        guard let s = session else { return nil }
+        let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
+        var parts = [model.agentLabel(s), place]
+        if s.state == SessionStateName.ended || s.state == SessionStateName.failed {
+            parts.append(SessionStateName.label(s.state))
+        }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !model.link.isOnline || approvalWaiting {
-                VStack(spacing: 8) {
+        let rows = self.rows
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     if !model.link.isOnline {
                         ConnectionStatusRow().statusCard()
                     }
-                    if approvalWaiting {
+                    if approvalBannerNeeded(rows) {
                         ApprovalStatusRow(sessionId: sessionId) { first in
                             if let a = first { approvalShown = a } else {
                                 Task { await model.refreshApprovals() }
@@ -50,96 +74,77 @@ struct SessionView: View {
                         }
                         .statusCard()
                     }
-                }
-                .padding(.horizontal)
-                .padding(.top, 8)
-            }
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        if rows.isEmpty && pending.isEmpty {
-                            Group {
-                                if model.link.isOnline {
-                                    ProgressView()
+                    if rows.isEmpty && pending.isEmpty {
+                        Group {
+                            if model.link.isOnline {
+                                if isTerminal || model.isDemo {
+                                    Text("No messages yet")
+                                        .foregroundStyle(.secondary)
                                 } else {
-                                    ContentUnavailableView(
-                                        "No Cached Transcript",
-                                        systemImage: "text.bubble",
-                                        description: Text("It will load when the host is reachable.")
-                                    )
+                                    ProgressView()
                                 }
+                            } else {
+                                ContentUnavailableView(
+                                    "No Cached Transcript",
+                                    systemImage: "text.bubble",
+                                    description: Text("It will load when the host is reachable.")
+                                )
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 40)
                         }
-                        ForEach(rows) { row in
-                            TranscriptRowView(row: row) { a in approvalShown = a }
-                        }
-                        if let s = model.streaming[sessionId] {
-                            StreamingRow(streaming: s)
-                        }
-                        ForEach(pending) { p in
-                            PendingPromptRow(prompt: p)
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
                     }
-                    .padding()
+                    ForEach(rows) { row in
+                        TranscriptRowView(row: row) { a in approvalShown = a }
+                    }
+                    if let s = model.streaming[sessionId] {
+                        StreamingRow(streaming: s)
+                    }
+                    ForEach(pending) { p in
+                        PendingPromptRow(prompt: p)
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: rows.count) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.streaming[sessionId]?.text) { _, _ in
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
             }
-
-            if let err = actionError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: rows.count) { _, _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            promptBar
+            .onChange(of: model.streaming[sessionId]?.text) { _, _ in
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .bottomGlassBar { promptBar }
         }
-        .navigationTitle(session.map { model.agentLabel($0) } ?? "Session")
+        .background(Color.black)
         .navigationBarTitleDisplayMode(.inline)
+        .navTitle(title, subtitle: subtitle)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(session.map { model.agentLabel($0) } ?? "Session")
-                        .font(.headline)
-                    if let s = session {
-                        Text("\(model.workspaceName(s.workspaceId)) · \(SessionStateName.label(s.state))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
                         Task { await run { try await model.cancel(sessionId) } }
                     } label: {
-                        Label("Cancel turn", systemImage: "stop.circle")
+                        Label("Stop Turn", systemImage: "stop.circle")
                     }
-                    .disabled(!model.link.isOnline || !SessionStateName.isBusy(session?.state ?? ""))
+                    .disabled(!model.link.isOnline || !isBusy)
                     Button(role: .destructive) {
                         confirmEnd = true
                     } label: {
-                        Label("End session", systemImage: "xmark.circle")
+                        Label("End Session", systemImage: "xmark.circle")
                     }
                     .disabled(!model.link.isOnline || isTerminal)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    ToolbarIcon(systemName: "ellipsis")
                 }
+                .accessibilityLabel("Session actions")
             }
         }
         .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
-            Button("End session", role: .destructive) {
+            Button("End Session", role: .destructive) {
                 Task { await run { try await model.end(sessionId) } }
             }
         } message: {
@@ -149,7 +154,14 @@ struct SessionView: View {
             ApprovalView(approvalId: a.approvalId, initial: a)
                 .environmentObject(model)
         }
-        .onAppear { model.open(sessionId) }
+        .onAppear {
+            model.open(sessionId)
+            #if DEBUG
+            if model.isDemo, DemoData.requestedScreen == .dictating {
+                dictation.showDemo(text: DemoData.dictationText)
+            }
+            #endif
+        }
         .onDisappear { dictation.cancel() }
         .alert("Voice Input Is Off", isPresented: Binding(
             get: { voiceAccessProblem != nil },
@@ -168,11 +180,17 @@ struct SessionView: View {
 
     private var promptBar: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let err = actionError {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(Palette.red)
+                    .padding(.horizontal, 6)
+            }
             if !composer.attachments.isEmpty {
                 AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
             }
             if dictation.isListening || dictation.isFinishing {
-                DictationStrip(
+                DictationPanel(
                     dictation: dictation,
                     onCancel: { cancelDictation() },
                     onStop: { stopDictation() }
@@ -181,9 +199,9 @@ struct SessionView: View {
                 promptRow
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photoItems,
@@ -211,7 +229,7 @@ struct SessionView: View {
     }
 
     private var promptRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 10) {
             if model.hostSupportsMedia {
                 Menu {
                     Button {
@@ -225,56 +243,74 @@ struct SessionView: View {
                         Label("Files", systemImage: "folder")
                     }
                 } label: {
-                    Image(systemName: "paperclip")
-                        .font(.title3)
-                        .frame(width: 28, height: 36)
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                        .glassSurface(Circle(), interactive: true)
                 }
+                .tint(.primary)
                 .disabled(!canPrompt || composer.remainingSlots == 0)
                 .accessibilityLabel("Attach")
             }
-            // Messages-style field: a rounded capsule on the bar.
-            TextField(placeholder, text: $draft, axis: .vertical)
-                .lineLimit(1...6)
-                .focused($promptFocused)
+            // A glass capsule with the field, the mic, and send or stop.
+            HStack(alignment: .bottom, spacing: 4) {
+                TextField(placeholder, text: $draft, axis: .vertical)
+                    .lineLimit(1...6)
+                    .focused($promptFocused)
+                    .disabled(!canPrompt)
+                    .padding(.vertical, 11)
+                    .padding(.leading, 16)
+                // iOS dictation on the phone: works with any host.
+                Button {
+                    micTapped()
+                } label: {
+                    Image(systemName: "mic")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 44)
+                }
+                .buttonStyle(.plain)
                 .disabled(!canPrompt)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color(uiColor: .secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
-                )
-            // iOS dictation on the phone: works with any host.
-            Button {
-                micTapped()
-            } label: {
-                Image(systemName: "mic")
-                    .font(.title3)
-                    .frame(width: 28, height: 36)
-            }
-            .disabled(!canPrompt)
-            .accessibilityLabel("Dictate")
-            if SessionStateName.isBusy(session?.state ?? "") && draft.isEmpty && composer.attachments.isEmpty {
-                Button {
-                    Task { await run { try await model.cancel(sessionId) } }
-                } label: {
-                    Image(systemName: "stop.circle.fill").font(.title)
+                .accessibilityLabel("Dictate")
+                if session?.state == SessionStateName.running && draft.isEmpty && composer.attachments.isEmpty {
+                    Button {
+                        Task { await run { try await model.cancel(sessionId) } }
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(Color.white.opacity(0.2), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 6)
+                    .disabled(!model.link.isOnline)
+                    .accessibilityLabel("Stop turn")
+                } else if canSend || composer.isUploading {
+                    Button {
+                        model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
+                        draft = ""
+                        composer.clear()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(Color.accentColor, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 6)
+                    .disabled(!canSend)
+                    .accessibilityLabel("Send")
                 }
-                .disabled(!model.link.isOnline)
-                .accessibilityLabel("Cancel turn")
-            } else {
-                Button {
-                    model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
-                    draft = ""
-                    composer.clear()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title)
-                }
-                .disabled(!canSend)
-                .accessibilityLabel("Send prompt")
             }
+            .padding(.trailing, 6)
+            .frame(minHeight: 44)
+            .glassSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
+        .glassGroup()
     }
 
     private var canSend: Bool {
@@ -346,9 +382,9 @@ struct SessionView: View {
     private var placeholder: String {
         if isTerminal { return "This session has ended" }
         switch model.link {
-        case .online: return "Prompt"
-        case .hostOffline: return "Host offline — prompts disabled"
-        default: return "Offline — prompts disabled"
+        case .online: return "Message"
+        case .hostOffline: return "Host offline"
+        default: return "Offline"
         }
     }
 
@@ -362,36 +398,46 @@ struct SessionView: View {
     }
 }
 
+extension TranscriptRow {
+    var isApprovalRequest: Bool {
+        if case .approvalRequested = self { return true }
+        return false
+    }
+
+    var approvalId: String? {
+        if case let .approvalRequested(_, approval, _, _) = self { return approval?.approvalId }
+        return nil
+    }
+}
+
 // MARK: - Rows
 
 struct TranscriptRowView: View {
+    @EnvironmentObject private var model: AppModel
     let row: TranscriptRow
     var onApproval: (PendingApprovalModel) -> Void
 
     var body: some View {
         switch row {
         case let .prompt(_, text, attachments, device, ts):
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: 4) {
                 if !text.isEmpty {
-                    Text(text)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    PromptBubble(text: text)
                 }
                 if !attachments.isEmpty {
                     PromptAttachmentsView(attachments: attachments)
                         .padding(.vertical, 2)
                 }
                 HStack(spacing: 4) {
-                    if let d = device { Text(d) }
+                    // Only name the device when it was another one.
+                    if let d = device, d != model.deviceName { Text(d) }
                     Text(dateFromMillis(ts), style: .time)
                 }
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
+                .padding(.trailing, 4)
             }
-            .padding(.leading, 48)
+            .padding(.leading, 72)
             .frame(maxWidth: .infinity, alignment: .trailing)
 
         case let .agentMessage(_, text):
@@ -455,14 +501,15 @@ struct TranscriptRowView: View {
             }
 
         case let .turnEnd(_, stop, detail):
-            HStack {
-                VStack { Divider() }
-                if stop != "end_turn" {
+            // A normal end of turn needs no marker.
+            if stop != "end_turn" {
+                HStack {
+                    VStack { Divider() }
                     Text(turnEndLabel(stop, detail))
                         .font(.caption2)
                         .foregroundStyle(stop == "error" ? Color.red : Color.secondary)
+                    VStack { Divider() }
                 }
-                VStack { Divider() }
             }
         }
     }
@@ -501,45 +548,112 @@ struct ThoughtRow: View {
     }
 }
 
-/// A tool call: collapsed to name and status; expands to arguments and output.
+/// The user's prompt: a bubble in the tint colour.
+struct PromptBubble: View {
+    let text: String
+    var pending = false
+
+    var body: some View {
+        Text(text)
+            .textSelection(.enabled)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.accentColor.opacity(pending ? 0.5 : 1),
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+/// A tool call as one compact row (icon, command or summary, status);
+/// tap to see the arguments and output.
 struct ToolCallRow: View {
     let tool: ToolRow
     @State private var expanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                if !tool.arguments.isNull {
-                    Text("Arguments").font(.caption2.bold()).foregroundStyle(.secondary)
-                    CodeBlock(text: tool.arguments.displayText)
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: summary.icon)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+                    Text(summary.text)
+                        .font(summary.monospaced ? .footnote.monospaced() : .subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    statusIcon
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
                 }
-                if let out = tool.output, !out.isEmpty {
-                    Text("Output\(tool.exitCode.map { " (exit \($0))" } ?? "")")
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(summary.text), \(statusLabel)")
+            .accessibilityHint(expanded ? "Hides the details" : "Shows the arguments and output")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(tool.connectorName.map { "\($0) · \(tool.name)" } ?? tool.name)
                         .font(.caption2.bold())
                         .foregroundStyle(.secondary)
-                    CodeBlock(text: out + (tool.truncated ? "\n… (truncated)" : ""))
-                }
-                if tool.sandboxDenied {
-                    Label("Blocked by the sandbox", systemImage: "lock.trianglebadge.exclamationmark")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 8) {
-                statusIcon
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(tool.name)
-                        .font(.caption.monospaced())
-                        .lineLimit(1)
-                    if let c = tool.connectorName {
-                        Text(c).font(.caption2).foregroundStyle(.secondary)
+                    if !tool.arguments.isNull {
+                        CodeBlock(text: tool.arguments.displayText)
+                    }
+                    if let out = tool.output, !out.isEmpty {
+                        Text("Output\(tool.exitCode.map { " (exit \($0))" } ?? "")")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        CodeBlock(text: out + (tool.truncated ? "\n… (truncated)" : ""))
+                    }
+                    if tool.sandboxDenied {
+                        Label("Blocked by the sandbox", systemImage: "lock.trianglebadge.exclamationmark")
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
             }
         }
-        .transcriptCard()
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.cell, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var summary: (icon: String, text: String, monospaced: Bool) {
+        let args = tool.arguments
+        if let cmd = args["command"].string ?? args["cmd"].string {
+            return ("apple.terminal", cmd, true)
+        }
+        if case let .array(parts) = args["command"] {
+            return ("apple.terminal", parts.compactMap(\.string).joined(separator: " "), true)
+        }
+        if let url = args["url"].string {
+            let host = URL(string: url)?.host() ?? url
+            return ("globe", tool.status == nil ? "Opening \(host)…" : "Opened \(host)", false)
+        }
+        if let path = args["path"].string ?? args["file_path"].string {
+            return ("doc.text", "\(tool.name) \(URL(fileURLWithPath: path).lastPathComponent)", true)
+        }
+        if let c = tool.connectorName {
+            return ("puzzlepiece.extension", "\(c) · \(tool.name)", false)
+        }
+        return ("wrench.and.screwdriver", tool.name, true)
+    }
+
+    private var statusLabel: String {
+        switch tool.status {
+        case nil: return "running"
+        case "completed"?: return "done"
+        case "denied"?: return "denied"
+        default: return "failed"
+        }
     }
 
     @ViewBuilder
@@ -548,11 +662,12 @@ struct ToolCallRow: View {
         case nil:
             ProgressView().controlSize(.mini)
         case "completed"?:
-            Image(systemName: "checkmark.circle").foregroundStyle(.green)
+            Image(systemName: "checkmark").font(.caption.weight(.semibold)).foregroundStyle(.green)
         case "denied"?:
-            Image(systemName: "hand.raised.slash").foregroundStyle(.orange)
+            Image(systemName: "hand.raised.slash").font(.caption).foregroundStyle(.orange)
         default:
-            Image(systemName: tool.sandboxDenied ? "lock.trianglebadge.exclamationmark" : "xmark.circle")
+            Image(systemName: tool.sandboxDenied ? "lock.trianglebadge.exclamationmark" : "xmark")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.red)
         }
     }
@@ -594,11 +709,12 @@ extension View {
         padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Palette.cell, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
+/// The inline approval card: what the agent wants to do, Deny / Approve
+/// (44 pt), and the full details in a sheet.
 struct ApprovalRequestRow: View {
     @EnvironmentObject private var model: AppModel
     let approval: PendingApprovalModel?
@@ -606,30 +722,103 @@ struct ApprovalRequestRow: View {
     let tool: String
     var onOpen: (PendingApprovalModel) -> Void
 
+    @State private var sending = false
+    @State private var error: String?
+
     private var stillPending: PendingApprovalModel? {
         guard let a = approval else { return nil }
         return model.approvals.first { $0.approvalId == a.approvalId }
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "hand.raised.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Approval requested").font(.footnote.weight(.semibold))
-                Text("\(connector): \(tool)")
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
+        let pending = stillPending
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(connector.prefix(1).uppercased())
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .frame(width: 30, height: 30)
+                    .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(Self.humanize(tool)) on \(connector)?")
+                        .font(.headline)
+                    Text(detailLine(pending))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Spacer(minLength: 0)
-            if let a = stillPending {
-                Button("Review") { onOpen(a) }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
+            if let preview = approval.flatMap({ Self.preview($0.arguments) }) {
+                Text(preview)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            if let pending {
+                HStack(spacing: 10) {
+                    Button("Deny") { answer(pending, approve: false) }
+                        .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red))
+                    Button("Approve") { answer(pending, approve: true) }
+                        .buttonStyle(CapsuleButtonStyle(fill: .accentColor))
+                }
+                .disabled(sending || !model.link.isOnline)
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Palette.red)
+                }
+                Button("Show Details") { onOpen(pending) }
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .transcriptCard()
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.cell, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Palette.orange.opacity(pending == nil ? 0 : 0.6), lineWidth: 0.75)
+        )
+    }
+
+    private func detailLine(_ pending: PendingApprovalModel?) -> String {
+        guard let pending else { return "\(tool) · answered" }
+        let expires = dateFromMillis(pending.expiresAt)
+            .formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+        return "\(tool) · expires \(expires)"
+    }
+
+    private func answer(_ a: PendingApprovalModel, approve: Bool) {
+        sending = true
+        error = nil
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task {
+            do {
+                try await model.respond(a.approvalId, approve: approve)
+            } catch {
+                self.error = userMessage(for: error)
+                await model.refreshApprovals()
+            }
+            sending = false
+        }
+    }
+
+    /// "create_issue" → "Create issue".
+    static func humanize(_ tool: String) -> String {
+        let words = tool.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    /// A one-line gist of the arguments: “title” in owner/repo, or the first
+    /// short text argument.
+    static func preview(_ args: JSONValue) -> String? {
+        guard case let .object(o) = args else { return nil }
+        let place: String? = o["repo"]?.string.map { repo in
+            if let owner = o["owner"]?.string, !repo.contains("/") { return "\(owner)/\(repo)" }
+            return repo
+        }
+        let main = ["title", "name", "subject", "message", "query", "text"]
+            .lazy.compactMap { o[$0]?.string }.first
+            ?? o.keys.sorted().lazy.compactMap { o[$0]?.string }.first { $0.count <= 120 }
+        guard let main else { return place.map { "in \($0)" } }
+        return "“\(main)”" + (place.map { " in \($0)" } ?? "")
     }
 }
 
@@ -657,11 +846,7 @@ struct PendingPromptRow: View {
         VStack(alignment: .trailing, spacing: 4) {
             // Not yet accepted by the host: the same bubble, dimmed.
             if !prompt.text.isEmpty {
-                Text(prompt.text)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 9)
-                    .background(Color.accentColor.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                PromptBubble(text: prompt.text, pending: true)
             }
             if !prompt.attachments.isEmpty {
                 PromptAttachmentsView(attachments: prompt.attachments)
@@ -679,7 +864,7 @@ struct PendingPromptRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.leading, 48)
+        .padding(.leading, 56)
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
