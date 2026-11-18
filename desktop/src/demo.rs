@@ -179,6 +179,11 @@ fn base(s: &mut App) {
         created_at: t,
         icon: None,
     });
+    s.builtins = vec![
+        BuiltinTool { name: "create_pull_request".into(), title: "Open pull requests".into(), description: "Opens a GitHub pull request with your GitHub CLI login.".into(), policy: ToolPolicy::Ask, can_auto: true },
+        BuiltinTool { name: "git_push".into(), title: "Push branches".into(), description: "Pushes with your git credentials. A force-push always asks.".into(), policy: ToolPolicy::Auto, can_auto: true },
+        BuiltinTool { name: "install_tool".into(), title: "Install tools on this computer".into(), description: "Runs a package manager as you, outside the sandbox. Always asks.".into(), policy: ToolPolicy::Ask, can_auto: false },
+    ];
     s.devices = vec![Device {
         device_id: "dev_1".into(),
         name: "Nico's iPhone".into(),
@@ -373,6 +378,48 @@ fn pairing(s: &mut App, confirm: bool) {
 
 /// "Audit the relay worker": two subagents started together, one done with a report, one
 /// still running (4 steps, the last under way, and something it said).
+/// The open session's approval as one of the host's own: a pull request or a push.
+fn builtin_approval(s: &mut App, tool: &str, force: bool) {
+    session(s);
+    let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
+    let a = &mut s.approvals[0];
+    a.connector_id = BUILTIN_CONNECTOR_ID.into();
+    a.connector_name = "AgentHost".into();
+    a.tool = tool.into();
+    if tool == "create_pull_request" {
+        a.summary = Some("Open a pull request \u{201c}Fix the flaky resume test\u{201d} from agenthost/fix-flaky-resume into main".into());
+        a.arguments = json!({
+            "command": "gh pr create --base main --head agenthost/fix-flaky-resume --title 'Fix the flaky resume test'",
+            "title": "Fix the flaky resume test", "base": "main", "head": "agenthost/fix-flaky-resume", "draft": false,
+            "details": "The resume test raced the subscription: it could resume before the host had sent the backlog. It now waits for the backlog first.\n\ncargo test -p agenthost-host resume passes 200 runs in a row.",
+            "reason": "The fix is pushed; opening the pull request you asked for.",
+            "approve_label": "Open Pull Request", "ask_title": "Open a Pull Request?",
+            "note": "Posts to GitHub as you, with your GitHub CLI login. Push the branch first.",
+        });
+    } else {
+        let flag = if force { " --force-with-lease" } else { "" };
+        a.summary = Some(format!("{} agenthost/fix-flaky-resume to origin", if force { "Force-push" } else { "Push" }));
+        a.arguments = json!({
+            "command": format!("git push{flag} origin agenthost/fix-flaky-resume"),
+            "remote": "origin", "branch": "agenthost/fix-flaky-resume", "force": force,
+            "reason": if force { "I rebased the branch on main." } else { "Pushing the fix so I can open the pull request." },
+            "approve_label": if force { "Force-Push" } else { "Push" }, "ask_title": "Push?",
+            "note": if force { "Replaces the remote branch if nobody else pushed to it since your last fetch. Uses your git credentials. Nothing from the repository runs (its hooks are skipped)." } else { "Uses your git credentials. Nothing from the repository runs (its hooks are skipped)." },
+        });
+    }
+    let aid = a.approval_id.clone();
+    if let Some(t) = s.transcripts.get_mut(&sid) {
+        for e in t.events.iter_mut() {
+            if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
+                e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
+                e.payload["connector_name"] = json!("AgentHost");
+                e.payload["tool"] = json!(tool);
+                e.payload["arguments"] = Value::Null;
+            }
+        }
+    }
+}
+
 fn subagents(s: &mut App) {
     base(s);
     let sid = "ses_6";
@@ -592,6 +639,28 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
                 }
             }
         }
+    }),
+    ("pr-approval", |s| builtin_approval(s, "create_pull_request", false)),
+    ("push-approval", |s| {
+        builtin_approval(s, "git_push", false);
+        // Pushes ask in this one, to show the card's offer.
+        s.builtins[1].policy = ToolPolicy::Ask;
+    }),
+    ("force-push-approval", |s| {
+        builtin_approval(s, "git_push", true);
+        s.builtins[1].policy = ToolPolicy::Ask;
+    }),
+    ("pr-no-ask-toast", |s| {
+        builtin_approval(s, "create_pull_request", false);
+        s.approvals.clear();
+        s.builtins[0].policy = ToolPolicy::Auto;
+        let line = s.no_ask_line("create_pull_request");
+        s.push_toast(crate::model::ToastKind::Info, line, Some(crate::model::ToastAction::OpenSettings(Tab::Connectors)), std::time::Instant::now());
+    }),
+    ("settings-builtins", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_gh".into());
     }),
     ("settings-connectors-tools", |s| {
         base(s);

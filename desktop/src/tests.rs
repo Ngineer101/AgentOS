@@ -1037,3 +1037,97 @@ fn markdown_reports_read_as_plain_lines() {
     assert_eq!(model::span_label(38_000), "38s");
     assert_eq!(model::span_label(72_000), "1m 12s");
 }
+
+/// Settings › Connectors › Built-in tools: opening the tab lists the host's own tools, a
+/// change round-trips through the real host, and installing can't be set to run unasked.
+#[test]
+fn built_in_tool_policies_round_trip_through_the_host() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahb").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    app.builtins.clear();
+    app.open_settings(model::Tab::Connectors);
+    pump(&mut app, |a| a.builtins.len() == 3);
+    let pr = app.builtin("create_pull_request").unwrap().clone();
+    assert_eq!((pr.policy, pr.can_auto), (ToolPolicy::Ask, true));
+    assert!(!app.builtin("install_tool").unwrap().can_auto);
+
+    app.set_builtin_policy("create_pull_request", ToolPolicy::Auto);
+    pump(&mut app, |a| a.builtin("create_pull_request").is_some_and(|b| b.policy == ToolPolicy::Auto));
+    assert!(app.toasts.is_empty(), "a change in Settings needs no toast");
+    // Reopening Settings reads it back from the host.
+    app.builtins.clear();
+    app.open_settings(model::Tab::Connectors);
+    pump(&mut app, |a| a.builtin("create_pull_request").is_some_and(|b| b.policy == ToolPolicy::Auto));
+    app.set_builtin_policy("create_pull_request", ToolPolicy::Ask);
+    pump(&mut app, |a| a.builtin("create_pull_request").is_some_and(|b| b.policy == ToolPolicy::Ask));
+
+    // The host refuses installing without asking: an error toast, and the list stays.
+    app.set_builtin_policy("install_tool", ToolPolicy::Auto);
+    pump(&mut app, |a| a.error.is_some());
+    assert!(app.error.as_deref().unwrap().starts_with("Could not change the setting"), "{:?}", app.error);
+    app.error = None;
+    pump(&mut app, |a| a.builtin("install_tool").is_some());
+    assert_eq!(app.builtin("install_tool").unwrap().policy, ToolPolicy::Ask);
+
+    // "Approve and Don't Ask Again"'s call: the reply sets the policy and says where to undo it.
+    app.call(bridge::Tag::BuiltinSet { announce: Some("git_push".into()) }, agenthost_proto::methods::BUILTIN_SET_POLICY, serde_json::json!({"name": "git_push", "policy": "auto"}));
+    pump(&mut app, |a| !a.toasts.is_empty());
+    assert_eq!(app.builtin("git_push").unwrap().policy, ToolPolicy::Auto);
+    assert!(app.toasts[0].text.starts_with("Pushes now run without asking"), "{}", app.toasts[0].text);
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+/// The card offers "Approve and Don't Ask Again" for pull requests and plain pushes that ask,
+/// never for a force-push, installing, or a connector's tool.
+#[test]
+fn dont_ask_again_is_offered_only_where_settings_could_allow_it() {
+    let offered = |scene: &str| {
+        let app = demo(scene);
+        let a = app.approvals[0].clone();
+        app.can_stop_asking(&a)
+    };
+    assert!(offered("pr-approval"));
+    assert!(offered("push-approval"));
+    assert!(!offered("force-push-approval"), "a force-push always asks");
+    assert!(!offered("install-approval"), "installing always asks");
+    assert!(!offered("session"), "a connector's tool has its own policies");
+    // Pushes already run unasked in the base demo: nothing to offer.
+    let mut app = demo("push-approval");
+    app.builtins[1].policy = ToolPolicy::Auto;
+    let a = app.approvals[0].clone();
+    assert!(!app.can_stop_asking(&a));
+    // A host without built-in tool settings: no offer.
+    let mut app = demo("pr-approval");
+    app.builtins.clear();
+    let a = app.approvals[0].clone();
+    assert!(!app.can_stop_asking(&a));
+}
+
+/// After "Approve and Don't Ask Again": the host's reply sets the policy, a toast says pull
+/// requests now open without asking, and its Settings button opens Settings › Connectors.
+#[test]
+fn dont_ask_again_toasts_and_its_button_opens_settings() {
+    let mut app = demo("pr-approval");
+    let mut list = app.builtins.clone();
+    list[0].policy = ToolPolicy::Auto;
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::BuiltinSet { announce: Some("create_pull_request".into()) }, result: Ok(serde_json::to_value(&list).unwrap()) });
+    assert_eq!(app.builtin("create_pull_request").unwrap().policy, ToolPolicy::Auto);
+    assert_eq!(app.toasts.len(), 1);
+    assert!(app.toasts[0].text.starts_with("Pull requests now open without asking — change this in "), "{}", app.toasts[0].text);
+    assert_eq!(app.toasts[0].action, Some(model::ToastAction::OpenSettings(model::Tab::Connectors)));
+    // An approvals refresh keeps it.
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::Approvals, result: Ok(serde_json::json!([])) });
+    assert_eq!(app.toasts.len(), 1);
+    let id = app.toasts[0].id;
+    app.toast_action(id, &mut rune::Tx::default());
+    assert_eq!(app.settings, Some(model::Tab::Connectors));
+    assert!(app.toasts.is_empty());
+    // A refusal: an error, no toast saying it worked.
+    let mut app = demo("pr-approval");
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::BuiltinSet { announce: Some("create_pull_request".into()) }, result: Err(agenthost_proto::jsonrpc::RpcError { code: -32602, message: "nope".into(), data: None }) });
+    assert!(app.toasts.is_empty());
+    assert_eq!(app.error.as_deref(), Some("Could not change the setting: nope"));
+}

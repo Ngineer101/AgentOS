@@ -47,6 +47,11 @@ pub enum Tag {
     /// `session.rename` of this session: the reply is the session; errors are toasts and
     /// the header's field stays open.
     SessionRenamed(String),
+    /// `builtin.list`: the host's own tools and whether each asks first.
+    Builtins,
+    /// `builtin.set_policy`, answered with the updated list. `announce` names the tool
+    /// "Approve and Don't Ask Again" just set, for its toast.
+    BuiltinSet { announce: Option<String> },
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }

@@ -1007,7 +1007,36 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
             .color(t.text2)
             .wrap(),
     );
-    card.child(row().w_full().gap(if mac { 8.0 } else { 10.0 }).child(el().grow(1.0)).child(deny).child(approve))
+    let mut buttons = row().w_full().gap(if mac { 8.0 } else { 10.0 }).center_y();
+    // Settings can let this tool run without asking: offer that here, set apart from the
+    // primary at the leading end, as a plain button (a flat one on GNOME).
+    if s.can_stop_asking(pending) {
+        let a3 = pending.approval_id.clone();
+        let label = "Approve and Don't Ask Again";
+        let help = match pending.tool.as_str() {
+            "create_pull_request" => "Open this pull request, and let agents open pull requests without asking",
+            "git_push" => "Push this branch, and let agents push without asking (a force-push still asks)",
+            _ => "Approve this, and don't ask again",
+        };
+        let b = if mac {
+            t.button(label, Btn::Default, None, move |s| s.approve_and_stop_asking(&a3))
+        } else {
+            row()
+                .h(34.0)
+                .px(14.0)
+                .center_y()
+                .radius(17.0)
+                .role("button")
+                .label(label)
+                .focusable(true)
+                .hover(Color::WHITE.alpha(0.07))
+                .press(Color::WHITE.alpha(0.12))
+                .on_press(move |s: &mut App| s.approve_and_stop_asking(&a3))
+                .child(text(label).font(TextStyle::new(14.0, 700.0)).color(t.text))
+        };
+        buttons = buttons.child(b.key("approve-always").help(help));
+    }
+    card.child(buttons.child(el().grow(1.0)).child(deny).child(approve))
 }
 
 /// An approval waiting inline: what the agent wants, its arguments, Deny and Approve.
