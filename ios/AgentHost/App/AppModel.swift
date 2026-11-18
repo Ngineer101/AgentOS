@@ -124,6 +124,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var cachedAt: Date?
     /// The host's protocol version from `hello` on the last connection.
     @Published private(set) var hostProtocolVersion: UInt32?
+    /// The host's connectors, for their icons (`connector.list`; empty on
+    /// hosts that send none).
+    @Published private(set) var connectors: [ConnectorInfo] = []
+    /// Streaming side answers (`session.delta` with a `side_id`), by side id;
+    /// replaced by the coalesced `side.message` event.
+    @Published private(set) var sideStreaming: [String: String] = [:]
+    /// Side questions sent from this phone that the host has not echoed as
+    /// `side.question` yet, by side id.
+    @Published private(set) var sidePending: [String: [String]] = [:]
+    /// Side conversations the user closed (this run of the app).
+    @Published private(set) var closedSides: Set<String> = []
 
     // MARK: Private state
 
@@ -145,6 +156,10 @@ final class AppModel: ObservableObject {
     private var networkInterface: NWInterface.InterfaceType?
     private var unlocking = false
     private let constants = protocolConstants()
+    /// Decoded connector icons, by connector id.
+    private var iconCache: [String: UIImage] = [:]
+    /// The session of each side id in `sidePending`.
+    private var pendingSession: [String: String] = [:]
     /// Sample data for screenshots (DEBUG builds, `-AgentHostDemo`): no
     /// keys, no network.
     private(set) var isDemo = false
@@ -202,6 +217,49 @@ final class AppModel: ObservableObject {
 
     func workspace(_ id: String) -> WorkspaceInfo? {
         workspaces.first { $0.workspaceId == id }
+    }
+
+    /// A connector's icon, by id (or by name when the id is unknown).
+    func connectorIcon(id: String?, name: String? = nil) -> UIImage? {
+        guard let c = connectors.first(where: { $0.connectorId == id })
+            ?? name.flatMap({ n in connectors.first { $0.name == n } }),
+            let url = c.icon
+        else { return nil }
+        if let cached = iconCache[c.connectorId] { return cached }
+        guard let comma = url.firstIndex(of: ","), url[..<comma].hasSuffix(";base64"),
+              let data = Data(base64Encoded: String(url[url.index(after: comma)...])),
+              let image = UIImage(data: data)
+        else { return nil }
+        iconCache[c.connectorId] = image
+        return image
+    }
+
+    /// A session's side conversations (`/btw`) that are not closed: from its
+    /// events, plus questions on their way and answers still streaming.
+    func sideConversations(_ sessionId: String) -> [SideConversation] {
+        var list = buildSideConversations(transcripts[sessionId]?.events ?? [])
+        let known = Set(list.map(\.id))
+        for (sid, questions) in sidePending where !questions.isEmpty {
+            // Pending side ids are only kept for this session's asks.
+            guard pendingSession[sid] == sessionId else { continue }
+            let turns = questions.map { SideConversation.Turn(question: $0, pending: true) }
+            if let i = list.firstIndex(where: { $0.id == sid }) {
+                list[i].turns += turns
+            } else if !known.contains(sid) {
+                list.append(SideConversation(id: sid, turns: turns))
+            }
+        }
+        for i in list.indices {
+            if let text = sideStreaming[list[i].id], !text.isEmpty,
+               let last = list[i].turns.indices.last, !list[i].turns[last].done {
+                list[i].turns[last].answer += text
+            }
+        }
+        return list.filter { !closedSides.contains($0.id) }
+    }
+
+    func closeSide(_ sideId: String) {
+        closedSides.insert(sideId)
     }
 
     /// Sessions grouped by workspace: Quick tasks first, then most recent
@@ -415,6 +473,12 @@ final class AppModel: ObservableObject {
         transcripts = [:]
         streaming = [:]
         outbox = []
+        connectors = []
+        iconCache = [:]
+        sideStreaming = [:]
+        sidePending = [:]
+        pendingSession = [:]
+        closedSides = []
         hostProtocolVersion = nil
         watched = []
         subscribed = []
@@ -598,6 +662,10 @@ final class AppModel: ObservableObject {
             deviceName = me.name
         }
         await refreshApprovals()
+        if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
+            connectors = list
+            iconCache = [:]
+        }
         scheduleSave()
     }
 
@@ -628,6 +696,14 @@ final class AppModel: ObservableObject {
     /// Send a local file to the host for the next prompt. The file is read
     /// during the call, so a temporary copy can be deleted afterwards.
     func uploadFile(at url: URL, name: String, mime: String?) async throws -> AttachmentInfo {
+        #if DEBUG
+        if isDemo {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            try await Task.sleep(nanoseconds: 300_000_000)
+            return AttachmentInfo(attachmentId: UUID().uuidString, name: name,
+                                  mime: mime ?? "application/octet-stream", size: Int64(size))
+        }
+        #endif
         guard let c = client else { throw AgentHostError.NotConnected }
         let text = try await c.uploadFile(path: url.path(percentEncoded: false), name: name, mime: mime)
         return try JSONDecoder().decode(AttachmentInfo.self, from: Data(text.utf8))
@@ -769,8 +845,55 @@ final class AppModel: ObservableObject {
         try await send(RPC.sessionCancel, ["session_id": sessionId])
     }
 
-    func end(_ sessionId: String) async throws {
-        try await send(RPC.sessionEnd, ["session_id": sessionId])
+    /// Change one of the agent's settings (model, effort). Shown at once;
+    /// put back if the host refuses.
+    func setConfig(sessionId: String, configId: String, value: String) async throws {
+        guard let before = session(sessionId) else { return }
+        var s = before
+        if let i = s.configOptions?.firstIndex(where: { $0.id == configId }) {
+            s.configOptions?[i].currentValue = value
+        }
+        upsert(s)
+        #if DEBUG
+        if isDemo { return }
+        #endif
+        do {
+            let updated: SessionInfo = try await call(
+                RPC.sessionSetConfig,
+                ["session_id": sessionId, "config_id": configId, "value": value]
+            )
+            upsert(updated)
+        } catch {
+            if session(sessionId)?.configOptions == s.configOptions { upsert(before) }
+            throw error
+        }
+    }
+
+    /// Ask a side question (`/btw`), new (`sideId` nil) or a follow-up. The
+    /// session itself is not interrupted. Returns the side id.
+    @discardableResult
+    func sideAsk(sessionId: String, sideId: String?, text: String) async throws -> String {
+        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { throw ComposerError(message: "Type a question after /btw.") }
+        #if DEBUG
+        if isDemo {
+            let sid = sideId ?? "side-\(UUID().uuidString.prefix(8).lowercased())"
+            demoSideAnswer(sessionId: sessionId, sideId: sid, question: question)
+            return sid
+        }
+        #endif
+        var params: [String: Any] = ["session_id": sessionId, "text": question]
+        if let sideId { params["side_id"] = sideId }
+        let r: SideAskResultModel = try await call(RPC.sessionSideAsk, params)
+        closedSides.remove(r.sideId)
+        // The `side.question` event may already be here.
+        let asked = buildSideConversations(transcripts[sessionId]?.events ?? [])
+            .first { $0.id == r.sideId }?.turns.last
+        if asked?.question != question || asked?.done == true {
+            sidePending[r.sideId, default: []].append(question)
+            pendingSession[r.sideId] = sessionId
+        }
+        return r.sideId
     }
 
     /// Archive a session (the host ends it first if it is live). It leaves
@@ -846,6 +969,10 @@ final class AppModel: ObservableObject {
             ingest(e)
         case RPC.nSessionDelta:
             guard let d = try? JSONDecoder().decode(SessionDeltaModel.self, from: data) else { return }
+            if d.kind == EventKind.sideMessage {
+                if let sid = d.sideId { sideStreaming[sid, default: ""] += d.text }
+                return
+            }
             if var s = streaming[d.sessionId], s.kind == d.kind {
                 s.text += d.text
                 streaming[d.sessionId] = s
@@ -920,6 +1047,14 @@ final class AppModel: ObservableObject {
         switch e.type {
         case EventKind.agentMessage, EventKind.agentThought, EventKind.toolCall, EventKind.turnEnd:
             streaming[e.sessionId] = nil
+        case EventKind.sideMessage, EventKind.sideEnd:
+            if let sid = e.payload["side_id"].string { sideStreaming[sid] = nil }
+        case EventKind.sideQuestion:
+            if let sid = e.payload["side_id"].string, var q = sidePending[sid],
+               let i = q.firstIndex(of: e.payload["text"].string ?? "") ?? q.indices.first {
+                q.remove(at: i)
+                sidePending[sid] = q.isEmpty ? nil : q
+            }
         case EventKind.prompt:
             if let pid = e.payload["prompt_id"].string {
                 outbox.removeAll { $0.id == pid }
@@ -1060,9 +1195,32 @@ final class AppModel: ObservableObject {
         approvals = d.approvals
         deviceName = d.deviceName
         transcripts = d.transcripts
+        connectors = d.connectors
         hostProtocolVersion = RPC.mediaProtocolVersion
         link = .online
         phase = d.screen == .pair ? .unpaired : .ready
+    }
+
+    /// Demo: the side question appears, and its answer streams in.
+    private func demoSideAnswer(sessionId: String, sideId: String, question: String) {
+        func next(_ type: String, _ payload: [String: JSONValue]) {
+            let seq = (transcripts[sessionId]?.lastSeq ?? 0) + 1
+            var p = payload
+            p["side_id"] = .string(sideId)
+            ingest(HostEvent(sessionId: sessionId, seq: seq, type: type, payload: .object(p),
+                             ts: Int64(Date().timeIntervalSince1970 * 1000)))
+        }
+        closedSides.remove(sideId)
+        next(EventKind.sideQuestion, ["text": .string(question)])
+        let answer = DemoData.sideAnswer
+        Task {
+            for word in answer.split(separator: " ", omittingEmptySubsequences: false) {
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                sideStreaming[sideId, default: ""] += word + " "
+            }
+            next(EventKind.sideMessage, ["text": .string(answer)])
+            next(EventKind.sideEnd, ["stop_reason": .string("end_turn")])
+        }
     }
     #endif
 }

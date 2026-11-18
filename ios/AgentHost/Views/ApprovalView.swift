@@ -37,7 +37,10 @@ struct ApprovalView: View {
                     }
                 } else {
                     Section(caps: "Connector") {
-                        Text(initial.connectorName)
+                        HStack(spacing: 12) {
+                            ConnectorIcon(id: initial.connectorId, name: initial.connectorName, size: 28)
+                            Text(initial.connectorName)
+                        }
                     }
                     Section(caps: "Tool") {
                         Text(initial.tool).font(.body.monospaced())

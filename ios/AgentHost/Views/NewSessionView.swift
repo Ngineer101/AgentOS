@@ -266,7 +266,9 @@ struct WorkspaceChoiceRow: View {
         if workspace.isQuickTasks {
             Text("No folder · for questions and lookups").foregroundStyle(Color.secondary)
         } else if live > 0 {
-            Text("Busy · \(live) live \(live == 1 ? "session" : "sessions")").foregroundStyle(Palette.orange)
+            // Several sessions can run here at once (in a git workspace, each
+            // on a branch of its own).
+            Text("\(abbreviatedPath(workspace.path)) · \(live) live").foregroundStyle(Color.secondary)
         } else {
             Text(abbreviatedPath(workspace.path)).foregroundStyle(Color.secondary)
         }

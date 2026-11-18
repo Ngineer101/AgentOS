@@ -13,11 +13,15 @@ struct SessionView: View {
 
     @State private var draft = ""
     @State private var actionError: String?
-    @State private var confirmEnd = false
     @State private var archiving: SessionInfo?
     @Environment(\.dismiss) private var dismiss
     @State private var approvalShown: PendingApprovalModel?
-    @FocusState private var promptFocused: Bool
+    @State private var promptFocused = false
+    /// The side questions sheet (`/btw`) and the conversation it shows.
+    @State private var showSides = false
+    @State private var sideSelection: String?
+    /// Something is being dragged over the session (images, files).
+    @State private var dropTargeted = false
     @Environment(\.openURL) private var openURL
 
     // Attachments (protocol 2 hosts) and voice input (iOS dictation).
@@ -36,6 +40,17 @@ struct SessionView: View {
     private var isTerminal: Bool { SessionStateName.isTerminal(session?.state ?? "") }
     private var isBusy: Bool { SessionStateName.isBusy(session?.state ?? "") }
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
+    private var sides: [SideConversation] { model.sideConversations(sessionId) }
+
+    /// The question when the draft is a side question (`/btw …`) and the
+    /// agent takes them.
+    private var sideQuestion: String? {
+        guard session?.canAskSideQuestions == true else { return nil }
+        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = t.lowercased()
+        guard lower == "/btw" || lower.hasPrefix("/btw ") || lower.hasPrefix("/btw\n") else { return nil }
+        return String(t.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// An approval is waiting that the transcript has no card for (the
     /// request event is not loaded yet): show a banner instead.
@@ -51,6 +66,8 @@ struct SessionView: View {
         return s.title ?? model.agentLabel(s)
     }
 
+    /// "Your turn · Claude Code · relay". The session's branch is shown by
+    /// the composer.
     private var subtitle: String? {
         guard let s = session else { return nil }
         let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
@@ -117,6 +134,21 @@ struct SessionView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onDrop(of: [.image, .fileURL, .data], isTargeted: $dropTargeted) { providers in
+                guard canAttach else { return false }
+                reportSkipped(composer.addItemProviders(providers, model: model))
+                return true
+            }
+            .overlay {
+                if dropTargeted && canAttach {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay(Label("Drop to Attach", systemImage: "paperclip").font(.headline))
+                        .padding(12)
+                        .allowsHitTesting(false)
+                }
+            }
             .bottomGlassBar {
                 if isArchived {
                     archivedBar
@@ -129,6 +161,20 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navTitle(title, subtitle: subtitle)
         .toolbar {
+            if !sides.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if sideSelection == nil || !sides.contains(where: { $0.id == sideSelection }) {
+                            sideSelection = sides.last?.id
+                        }
+                        showSides = true
+                    } label: {
+                        ToolbarIcon(systemName: "bubble.left.and.text.bubble.right")
+                    }
+                    .accessibilityLabel("Side questions")
+                    .accessibilityValue("\(sides.count)")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
@@ -137,12 +183,6 @@ struct SessionView: View {
                         Label("Stop Turn", systemImage: "stop.circle")
                     }
                     .disabled(!model.link.isOnline || !isBusy)
-                    Button(role: .destructive) {
-                        confirmEnd = true
-                    } label: {
-                        Label("End Session", systemImage: "xmark.circle")
-                    }
-                    .disabled(!model.link.isOnline || isTerminal)
                     Divider()
                     if isArchived {
                         Button {
@@ -166,12 +206,9 @@ struct SessionView: View {
             }
         }
         .archiveFlow($archiving) { dismiss() }
-        .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
-            Button("End Session", role: .destructive) {
-                Task { await run { try await model.end(sessionId) } }
-            }
-        } message: {
-            Text("The agent stops. The transcript stays available.")
+        .sheet(isPresented: $showSides) {
+            SideQuestionsSheet(sessionId: sessionId, selection: $sideSelection)
+                .environmentObject(model)
         }
         .sheet(item: $approvalShown) { a in
             ApprovalView(approvalId: a.approvalId, initial: a)
@@ -182,6 +219,14 @@ struct SessionView: View {
             #if DEBUG
             if model.isDemo, DemoData.requestedScreen == .dictating {
                 dictation.showDemo(text: DemoData.dictationText)
+            }
+            if model.isDemo, DemoData.requestedScreen == .paste, composer.attachments.isEmpty {
+                composer.showDemoImage(DemoData.pastedImage(), name: "Pasted Image.png")
+                draft = "Why does this layout overflow on the iPhone SE?"
+            }
+            if model.isDemo, DemoData.requestedScreen == .side {
+                sideSelection = sides.first?.id
+                showSides = true
             }
             #endif
         }
@@ -235,6 +280,34 @@ struct SessionView: View {
             }
             if !composer.attachments.isEmpty {
                 AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
+            }
+            if let s = session, !configOptions(s).isEmpty || sideQuestion != nil || s.branch != nil {
+                HStack(spacing: 8) {
+                    ForEach(configOptions(s)) { option in
+                        ConfigMenu(option: option) { value in
+                            Task {
+                                await run {
+                                    try await model.setConfig(sessionId: sessionId, configId: option.id, value: value)
+                                }
+                            }
+                        }
+                        .disabled(!canPrompt)
+                    }
+                    Spacer(minLength: 0)
+                    if sideQuestion != nil {
+                        Label("Side question", systemImage: "bubble.left.and.text.bubble.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .accessibilityHint("Asked in a fork of the conversation; the agent is not interrupted.")
+                    } else if let branch = s.branch {
+                        Label(branch, systemImage: "arrow.triangle.branch")
+                            .labelStyle(BranchLabelStyle())
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Branch \(branch)")
+                    }
+                }
+                .padding(.horizontal, 4)
             }
             if dictation.isListening || dictation.isFinishing {
                 DictationPanel(
@@ -303,12 +376,15 @@ struct SessionView: View {
             }
             // A glass capsule with the field, the mic, and send or stop.
             HStack(alignment: .bottom, spacing: 4) {
-                TextField(placeholder, text: $draft, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($promptFocused)
-                    .disabled(!canPrompt)
-                    .padding(.vertical, 11)
-                    .padding(.leading, 16)
+                ComposerTextView(
+                    text: $draft,
+                    isFocused: $promptFocused,
+                    placeholder: placeholder,
+                    isEnabled: canPrompt,
+                    onPasteItems: canAttach ? { providers in
+                        reportSkipped(composer.addItemProviders(providers, model: model))
+                    } : nil
+                )
                 // iOS dictation on the phone: works with any host.
                 Button {
                     micTapped()
@@ -337,9 +413,7 @@ struct SessionView: View {
                     .accessibilityLabel("Stop turn")
                 } else if canSend || composer.isUploading {
                     Button {
-                        model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
-                        draft = ""
-                        composer.clear()
+                        send()
                     } label: {
                         Image(systemName: "arrow.up")
                             .font(.body.weight(.semibold))
@@ -361,8 +435,44 @@ struct SessionView: View {
     }
 
     private var canSend: Bool {
-        guard canPrompt, !composer.isUploading else { return false }
+        guard canPrompt else { return false }
+        if let q = sideQuestion { return !q.isEmpty }
+        guard !composer.isUploading else { return false }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.ready.isEmpty
+    }
+
+    /// Attachments: hosts on protocol 2, while the session takes prompts.
+    private var canAttach: Bool {
+        model.hostSupportsMedia && canPrompt && composer.remainingSlots > 0
+    }
+
+    /// The model and effort settings shown in the composer.
+    private func configOptions(_ s: SessionInfo) -> [SessionConfigOption] {
+        ["model", "thought_level"].compactMap { s.configOption(category: $0) }
+    }
+
+    /// A prompt, or a side question for `/btw …` (attachments stay for the
+    /// next prompt: side questions take none).
+    private func send() {
+        if let q = sideQuestion {
+            let text = draft
+            draft = ""
+            Task {
+                do {
+                    let sid = try await model.sideAsk(sessionId: sessionId, sideId: nil, text: q)
+                    actionError = nil
+                    sideSelection = sid
+                    showSides = true
+                } catch {
+                    if draft.isEmpty { draft = text }
+                    actionError = userMessage(for: error)
+                }
+            }
+            return
+        }
+        model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
+        draft = ""
+        composer.clear()
     }
 
     @MainActor
@@ -614,6 +724,7 @@ struct PromptBubble: View {
 /// A tool call as one compact row (icon, command or summary, status);
 /// tap to see the arguments and output.
 struct ToolCallRow: View {
+    @EnvironmentObject private var model: AppModel
     let tool: ToolRow
     @State private var expanded = false
 
@@ -623,10 +734,14 @@ struct ToolCallRow: View {
                 withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: summary.icon)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20)
+                    if let c = tool.connectorName, model.connectorIcon(id: nil, name: c) != nil {
+                        ConnectorIcon(id: nil, name: c, size: 20)
+                    } else {
+                        Image(systemName: summary.icon)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                    }
                     Text(summary.text)
                         .font(summary.monospaced ? .footnote.monospaced() : .subheadline)
                         .foregroundStyle(.primary)
@@ -848,11 +963,7 @@ struct ApprovalRequestRow: View {
     private func connectorCard(_ pending: PendingApprovalModel?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                Text(connector.prefix(1).uppercased())
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .frame(width: 30, height: 30)
-                    .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .accessibilityHidden(true)
+                ConnectorIcon(id: approval?.connectorId, name: connector, size: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(Self.humanize(tool)) on \(connector)?")
                         .font(.headline)
@@ -980,5 +1091,280 @@ struct PendingPromptRow: View {
         }
         .padding(.leading, 56)
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+// MARK: - Model and effort
+
+/// One of the agent's settings (model, effort) as a compact menu in the
+/// composer: the current value, and a picker with a checkmark.
+struct ConfigMenu: View {
+    let option: SessionConfigOption
+    var onSelect: (String) -> Void
+
+    private var icon: String {
+        option.category == "thought_level" ? "brain" : "cpu"
+    }
+
+    var body: some View {
+        Menu {
+            Picker(option.name, selection: Binding(
+                get: { option.currentValue },
+                set: { value in
+                    guard value != option.currentValue else { return }
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onSelect(value)
+                }
+            )) {
+                ForEach(option.options) { o in
+                    VStack(alignment: .leading) {
+                        Text(o.name)
+                        if let d = o.description, !d.isEmpty { Text(d) }
+                    }
+                    .tag(o.value)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(option.currentName)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .contentShape(Capsule())
+            .glassSurface(Capsule(), interactive: true)
+        }
+        .menuOrder(.fixed)
+        .tint(.primary)
+        .accessibilityLabel(option.name)
+        .accessibilityValue(option.currentName)
+    }
+}
+
+// MARK: - Side questions
+
+/// Side conversations (`/btw`): one tab each, the question, the streamed
+/// answer and a field for follow-ups. Asked in a fork of the conversation,
+/// so the session itself is not interrupted.
+struct SideQuestionsSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let sessionId: String
+    @Binding var selection: String?
+
+    @State private var followUp = ""
+    @State private var sending = false
+    @State private var error: String?
+
+    private var sides: [SideConversation] { model.sideConversations(sessionId) }
+    private var current: SideConversation? {
+        sides.first { $0.id == selection } ?? sides.last
+    }
+    private var canAsk: Bool {
+        guard let s = model.session(sessionId) else { return false }
+        return model.link.isOnline && !SessionStateName.isTerminal(s.state) && !s.isArchived
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                tabs
+                Divider().opacity(0.5)
+                if let c = current {
+                    conversation(c)
+                } else {
+                    ContentUnavailableView(
+                        "No Side Questions",
+                        systemImage: "bubble.left.and.text.bubble.right",
+                        description: Text("Start one with /btw and your question.")
+                    )
+                }
+            }
+            .navigationTitle("Side Questions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        ToolbarIcon(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if current != nil { followUpBar }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        .onChange(of: sides.map(\.id)) { _, ids in
+            if ids.isEmpty { dismiss() }
+        }
+    }
+
+    /// One pill per conversation; the selected one closes with its ×.
+    private var tabs: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(sides) { side in
+                        let selected = side.id == current?.id
+                        HStack(spacing: 6) {
+                            if side.isAnswering {
+                                ProgressView().controlSize(.mini)
+                            }
+                            Text(side.title)
+                                .font(.subheadline.weight(selected ? .semibold : .regular))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 180, alignment: .leading)
+                                .fixedSize(horizontal: true, vertical: false)
+                            if selected {
+                                Button {
+                                    close(side.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .symbolRenderingMode(.hierarchical)
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Close “\(side.title)”")
+                            }
+                        }
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .padding(.leading, 14)
+                        .padding(.trailing, selected ? 8 : 14)
+                        .frame(height: 34)
+                        .background(selected ? Color.accentColor : Palette.cell, in: Capsule())
+                        .contentShape(Capsule())
+                        .onTapGesture { selection = side.id }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+                        .id(side.id)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+            .onAppear { if let id = current?.id { proxy.scrollTo(id) } }
+            .onChange(of: selection) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id) } }
+            }
+        }
+    }
+
+    private func conversation(_ c: SideConversation) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    Text("Asked in a fork of the conversation. The session carries on undisturbed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                    ForEach(Array(c.turns.enumerated()), id: \.offset) { _, turn in
+                        PromptBubble(text: turn.question, pending: turn.pending)
+                            .padding(.leading, 56)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        if !turn.answer.isEmpty {
+                            MarkdownView(text: turn.answer, streaming: !turn.done)
+                                .equatable()
+                        } else if turn.error == nil && !turn.done {
+                            Label(turn.pending ? "Sending…" : "Thinking…", systemImage: "ellipsis")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .symbolEffect(.variableColor.iterative, options: .repeating)
+                        }
+                        if let err = turn.error {
+                            Label(err, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(Palette.red)
+                        }
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: c) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    private var followUpBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Palette.red).padding(.horizontal, 6)
+            }
+            HStack(alignment: .bottom, spacing: 4) {
+                TextField(canAsk ? "Ask a follow-up" : "Follow-ups need a live session", text: $followUp, axis: .vertical)
+                    .lineLimit(1...4)
+                    .disabled(!canAsk)
+                    .padding(.vertical, 11)
+                    .padding(.leading, 16)
+                    .submitLabel(.send)
+                Button {
+                    ask()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.accentColor, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 6)
+                .disabled(!canSendFollowUp)
+                .opacity(canSendFollowUp ? 1 : 0.4)
+                .accessibilityLabel("Send follow-up")
+            }
+            .padding(.trailing, 6)
+            .frame(minHeight: 44)
+            .glassSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private var canSendFollowUp: Bool {
+        canAsk && !sending && !(current?.isAnswering ?? true)
+            && !followUp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func ask() {
+        guard let c = current, canSendFollowUp else { return }
+        let text = followUp
+        followUp = ""
+        sending = true
+        Task {
+            do {
+                try await model.sideAsk(sessionId: sessionId, sideId: c.id, text: text)
+                error = nil
+            } catch {
+                if followUp.isEmpty { followUp = text }
+                self.error = userMessage(for: error)
+            }
+            sending = false
+        }
+    }
+
+    private func close(_ id: String) {
+        let ids = sides.map(\.id)
+        if let i = ids.firstIndex(of: id) {
+            let rest = ids.filter { $0 != id }
+            selection = rest.isEmpty ? nil : rest[min(i, rest.count - 1)]
+        }
+        withAnimation { model.closeSide(id) }
     }
 }

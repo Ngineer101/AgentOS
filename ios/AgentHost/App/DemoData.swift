@@ -1,12 +1,13 @@
 #if DEBUG
 import Foundation
+import UIKit
 
 /// Sample data for screenshots, matching the designs. DEBUG builds only.
 ///
 ///     -AgentHostDemo                      sessions list, no pairing, no network
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
-///                                         archive-confirm | pair
+///                                         archive-confirm | pair | side | config | paste
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 struct DemoData {
     enum Screen: String {
@@ -17,6 +18,12 @@ struct DemoData {
         case archivedSession = "archived-session"
         /// The list, asking before archiving a live session.
         case archiveConfirm = "archive-confirm"
+        /// The side questions sheet (`/btw`) with two conversations.
+        case side
+        /// A session with model and effort menus in the composer.
+        case config
+        /// An image pasted into the composer (an attachment chip).
+        case paste
     }
 
     var screen: Screen
@@ -28,6 +35,7 @@ struct DemoData {
     var archived: [SessionInfo]
     var approvals: [PendingApprovalModel]
     var transcripts: [String: Transcript]
+    var connectors: [ConnectorInfo] = []
 
     static let flakySession = "demo-flaky"
     static let quickSession = "demo-rust"
@@ -86,15 +94,45 @@ struct DemoData {
                         updatedAt: now - ago * min, lastSeq: lastSeq,
                         archivedAt: archivedAgo.map { now - $0 * min })
         }
+        let claudeConfig = [
+            SessionConfigOption(
+                id: "model", name: "Model", description: nil, category: "model", currentValue: "opus",
+                options: [
+                    SessionConfigValue(value: "opus", name: "Opus 4.5", description: "Most capable for complex work"),
+                    SessionConfigValue(value: "sonnet", name: "Sonnet 4.5", description: "Best for everyday tasks"),
+                    SessionConfigValue(value: "haiku", name: "Haiku 4.5", description: "Fastest for quick answers"),
+                ]),
+            SessionConfigOption(
+                id: "effort", name: "Effort", description: nil, category: "thought_level", currentValue: "high",
+                options: [
+                    SessionConfigValue(value: "low", name: "Low", description: nil),
+                    SessionConfigValue(value: "medium", name: "Medium", description: nil),
+                    SessionConfigValue(value: "high", name: "High", description: nil),
+                ]),
+            SessionConfigOption(
+                id: "mode", name: "Mode", description: nil, category: "mode", currentValue: "default",
+                options: [SessionConfigValue(value: "default", name: "Default", description: nil)]),
+        ]
+        func live(_ s: SessionInfo, branch: String? = nil) -> SessionInfo {
+            var s = s
+            if let branch {
+                s.worktree = SessionWorktree(path: "/home/nico/.agenthost/worktrees/\(branch)", branch: branch)
+            }
+            if s.agent == "claude" {
+                s.configOptions = claudeConfig
+                s.sideQuestions = true
+            }
+            return s
+        }
         sessions = [
-            session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
-                    "What changed in Rust 1.92?", ago: 3, lastSeq: 4),
-            session(Self.flakySession, "ws-relay", "claude", "claude-work", SessionStateName.waitingApproval,
-                    "Fix the flaky resume test", ago: 1, lastSeq: 5),
-            session("demo-oauth", "ws-relay", "codex", "codex", SessionStateName.running,
-                    "Add OAuth refresh", ago: 5),
-            session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
-                    "Review the relay worker", ago: 120),
+            live(session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
+                         "What changed in Rust 1.92?", ago: 3, lastSeq: 4)),
+            live(session(Self.flakySession, "ws-relay", "claude", "claude-work", SessionStateName.waitingApproval,
+                         "Fix the flaky resume test", ago: 1, lastSeq: 5), branch: "agenthost/fix-flaky-resume"),
+            live(session("demo-oauth", "ws-relay", "codex", "codex", SessionStateName.running,
+                         "Add OAuth refresh", ago: 5), branch: "agenthost/oauth-refresh"),
+            live(session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
+                         "Review the relay worker", ago: 120), branch: "agenthost/review-relay-worker"),
             session("demo-import", "ws-notes", "claude", nil, SessionStateName.failed,
                     "Import old notes", ago: 50, reason: "The agent exited (code 1)"),
             session("demo-weekly", "ws-notes", "claude", nil, SessionStateName.ended,
@@ -122,6 +160,7 @@ struct DemoData {
             expiresAt: now + 9 * min + 30_000
         )
         approvals = [approval]
+        connectors = [ConnectorInfo(connectorId: "github", name: "GitHub", icon: Self.demoIcon())]
         // -AgentHostDemoInstall: the agent asks to install a tool instead.
         if ProcessInfo.processInfo.arguments.contains("-AgentHostDemoInstall") {
             approvals = [PendingApprovalModel(
@@ -194,6 +233,30 @@ struct DemoData {
                 "text": .string("Rust 1.92 stabilises `async` closures in traits, adds lints for never-type fallback, and speeds up incremental builds by about 8%."),
             ]),
         ] { _ = rust.ingest(e) }
+        if screen == .side {
+            let side1 = "side-msrv", side2 = "side-editions"
+            for e in [
+                Self.event(Self.quickSession, 5, EventKind.sideQuestion, now - 2 * min, [
+                    "side_id": .string(side1), "text": .string("Does the relay crate's MSRV allow async closures?"),
+                ]),
+                Self.event(Self.quickSession, 6, EventKind.sideMessage, now - 2 * min + 4000, [
+                    "side_id": .string(side1),
+                    "text": .string("Not yet. `crates/relay` declares `rust-version = \"1.85\"`, and async closures need **1.85** for the syntax but **1.92** for use in traits.\n\n- Bump `rust-version` to `1.92`, or\n- keep the boxed futures in `Handler` for now."),
+                ]),
+                Self.event(Self.quickSession, 7, EventKind.sideEnd, now - 2 * min + 5000, [
+                    "side_id": .string(side1), "stop_reason": .string("end_turn"),
+                ]),
+                Self.event(Self.quickSession, 8, EventKind.sideQuestion, now - min, [
+                    "side_id": .string(side2), "text": .string("Which edition are we on?"),
+                ]),
+                Self.event(Self.quickSession, 9, EventKind.sideMessage, now - min + 3000, [
+                    "side_id": .string(side2), "text": .string("All crates use **edition 2024** (set once in the workspace `Cargo.toml`)."),
+                ]),
+                Self.event(Self.quickSession, 10, EventKind.sideEnd, now - min + 3500, [
+                    "side_id": .string(side2), "stop_reason": .string("end_turn"),
+                ]),
+            ] { _ = rust.ingest(e) }
+        }
 
         var quic = Transcript(sessionId: Self.archivedSession)
         let q0 = now - 4 * 24 * 60 * min
@@ -211,6 +274,39 @@ struct DemoData {
         ] { _ = quic.ingest(e) }
 
         transcripts = [Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic]
+    }
+
+    /// The demo's answer to any side question asked.
+    static let sideAnswer = "Short answer: yes. The session keeps going; this answer comes from a fork of the conversation, so nothing you ask here changes what the agent is doing."
+
+    /// A screenshot-like image, as if pasted from the clipboard.
+    static func pastedImage() -> UIImage {
+        let size = CGSize(width: 390, height: 300)
+        return UIGraphicsImageRenderer(size: size).image { ctx in
+            UIColor(red: 0.12, green: 0.14, blue: 0.2, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            UIColor.systemBlue.setFill()
+            ctx.fill(CGRect(x: 24, y: 40, width: 420, height: 60))
+            UIColor.systemOrange.setFill()
+            ctx.fill(CGRect(x: 24, y: 120, width: 200, height: 140))
+        }
+    }
+
+    /// GitHub's mark stand-in, as a PNG data URL (like the host sends).
+    private static func demoIcon() -> String? {
+        let size = CGSize(width: 64, height: 64)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor.black.setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+            let config = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+            if let glyph = UIImage(systemName: "chevron.left.forwardslash.chevron.right", withConfiguration: config)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                let g = glyph.size
+                glyph.draw(in: CGRect(x: (size.width - g.width) / 2, y: (size.height - g.height) / 2,
+                                      width: g.width, height: g.height))
+            }
+        }
+        return image.pngData().map { "data:image/png;base64,\($0.base64EncodedString())" }
     }
 
     /// The text shown while dictating on the `dictating` screen.

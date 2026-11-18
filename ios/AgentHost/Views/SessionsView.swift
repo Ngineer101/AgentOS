@@ -174,6 +174,7 @@ struct SessionsView: View {
         case .archived: path = [.settings, .archived]
         case .archivedSession: path = [.settings, .archived, .session(DemoData.archivedSession)]
         case .archiveConfirm: archiving = model.session(DemoData.flakySession)
+        case .side, .config, .paste: path = [.session(DemoData.quickSession)]
         case .sessions, .pair: break
         }
     }
@@ -372,6 +373,12 @@ struct SessionRow: View {
                     .font(.footnote)
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)
+                if let branch = session.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .labelStyle(BranchLabelStyle())
+                        .foregroundStyle(ended ? Color(uiColor: .tertiaryLabel) : .secondary)
+                        .accessibilityLabel("Branch \(branch)")
+                }
                 if let reason = session.stateReason, session.state == SessionStateName.failed {
                     Text(reason)
                         .font(.footnote)
@@ -401,6 +408,21 @@ struct SessionRow: View {
     }
 }
 
+/// A branch name under a session: a small branch glyph and the name in
+/// monospaced footnote, truncated in the middle.
+struct BranchLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+                .font(.caption2.weight(.semibold))
+            configuration.title
+                .font(.footnote.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
 /// All pending approvals (when more than one is waiting).
 struct ApprovalListView: View {
     @EnvironmentObject private var model: AppModel
@@ -414,11 +436,23 @@ struct ApprovalListView: View {
                     Button {
                         selected = a
                     } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(a.listLine)
-                                .font(.body.weight(.medium))
-                                .foregroundStyle(.primary)
-                            Text(agentLabel(a)).font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            if a.isInstall {
+                                Image(systemName: "terminal")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(Palette.orange)
+                                    .frame(width: 30, height: 30)
+                                    .background(Palette.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .accessibilityHidden(true)
+                            } else {
+                                ConnectorIcon(id: a.connectorId, name: a.connectorName, size: 30)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(a.listLine)
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text(agentLabel(a)).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }

@@ -18,6 +18,8 @@ struct ComposerAttachment: Identifiable, Equatable {
     let id = UUID()
     var name: String
     var state: Status
+    /// A thumbnail, for pasted and dropped images.
+    var preview: UIImage? = nil
 }
 
 struct ComposerError: LocalizedError {
@@ -52,7 +54,7 @@ final class ComposerModel: ObservableObject {
         for url in taken {
             let name = url.lastPathComponent
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-            start(name: name, model: model) {
+            start(name: name, model: model) { _ in
                 try await Task.detached(priority: .userInitiated) {
                     try ComposerFiles.copyToTemporaryFile(url, name: name)
                 }.value
@@ -73,7 +75,7 @@ final class ComposerModel: ObservableObject {
             let types = item.supportedContentTypes
             let ext = ComposerFiles.photoExtension(for: types)
             let name = "\(base).\(ext)"
-            start(name: name, model: model) {
+            start(name: name, model: model) { _ in
                 guard let data = try await item.loadTransferable(type: Data.self) else {
                     throw ComposerError(message: "The photo could not be read.")
                 }
@@ -85,6 +87,62 @@ final class ComposerModel: ObservableObject {
             }
         }
         return items.count - taken.count
+    }
+
+    /// Pasted or dropped items (images and files). Returns how many were
+    /// left out because of the attachment limit.
+    @discardableResult
+    func addItemProviders(_ providers: [NSItemProvider], model: AppModel) -> Int {
+        let taken = Array(providers.prefix(remainingSlots))
+        let stamp = ComposerFiles.photoStamp()
+        for (i, provider) in taken.enumerated() {
+            let types = provider.registeredContentTypes
+            if let imageType = types.first(where: { $0.conforms(to: .image) }) {
+                let ext = ComposerFiles.photoExtension(for: [imageType])
+                let base = provider.suggestedName.flatMap { $0.isEmpty ? nil : ($0 as NSString).deletingPathExtension }
+                    ?? (taken.count > 1 ? "Pasted Image \(stamp) (\(i + 1))" : "Pasted Image \(stamp)")
+                let name = "\(base).\(ext)"
+                start(name: name, model: model) { [weak self] id in
+                    let data = try await ComposerFiles.loadData(provider, type: imageType)
+                    let file = try await Task.detached(priority: .userInitiated) {
+                        try ComposerFiles.writePhoto(data, types: [imageType], name: name)
+                    }.value
+                    let thumb = await UIImage(data: data)?.byPreparingThumbnail(ofSize: CGSize(width: 96, height: 96))
+                    self?.setPreview(id, thumb)
+                    return file
+                } upload: { file, model in
+                    try await model.uploadFile(at: file, name: name, mime: ComposerFiles.photoMime(ext))
+                }
+            } else {
+                let type = types.first(where: { $0.conforms(to: .data) }) ?? types.first ?? .data
+                let ext = type.preferredFilenameExtension
+                var name = provider.suggestedName ?? "Pasted File \(stamp)"
+                if let ext, (name as NSString).pathExtension.isEmpty { name += ".\(ext)" }
+                let fileName = name
+                start(name: fileName, model: model) { _ in
+                    try await ComposerFiles.copyFile(provider, type: type, name: fileName)
+                } upload: { file, model in
+                    try await model.uploadFile(at: file, name: fileName, mime: type.preferredMIMEType)
+                }
+            }
+        }
+        return providers.count - taken.count
+    }
+
+    #if DEBUG
+    /// Demo: an uploaded image chip, as after pasting a screenshot.
+    func showDemoImage(_ image: UIImage, name: String) {
+        let size = Int64(image.pngData()?.count ?? 0)
+        let info = AttachmentInfo(attachmentId: "demo-paste", name: name, mime: "image/png", size: size)
+        attachments.append(ComposerAttachment(
+            name: name, state: .ready(info),
+            preview: image.preparingThumbnail(of: CGSize(width: 96, height: 96))))
+    }
+    #endif
+
+    private func setPreview(_ id: UUID, _ image: UIImage?) {
+        guard let image, let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+        attachments[i].preview = image
     }
 
     func remove(_ id: UUID) {
@@ -103,7 +161,7 @@ final class ComposerModel: ObservableObject {
     private func start(
         name: String,
         model: AppModel,
-        prepare: @escaping () async throws -> URL,
+        prepare: @escaping (UUID) async throws -> URL,
         upload: @escaping (URL, AppModel) async throws -> AttachmentInfo
     ) {
         let chip = ComposerAttachment(name: name, state: .uploading)
@@ -112,7 +170,7 @@ final class ComposerModel: ObservableObject {
         tasks[id] = Task { [weak self, weak model] in
             var file: URL?
             do {
-                let f = try await prepare()
+                let f = try await prepare(id)
                 file = f
                 guard let model else { throw AgentHostError.NotConnected }
                 let info = try await upload(f, model)
@@ -177,6 +235,39 @@ enum ComposerFiles {
             throw e
         }
         return dest
+    }
+
+    /// The bytes of a pasted or dropped item.
+    static func loadData(_ provider: NSItemProvider, type: UTType) async throws -> Data {
+        try await withCheckedThrowingContinuation { c in
+            _ = provider.loadDataRepresentation(for: type) { data, error in
+                if let data { c.resume(returning: data) } else {
+                    c.resume(throwing: error ?? ComposerError(message: "The item could not be read."))
+                }
+            }
+        }
+    }
+
+    /// A pasted or dropped file, copied to a temporary file (the provider's
+    /// own copy is deleted when its callback returns).
+    static func copyFile(_ provider: NSItemProvider, type: UTType, name: String) async throws -> URL {
+        try await withCheckedThrowingContinuation { c in
+            _ = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, error in
+                guard let url else {
+                    c.resume(throwing: error ?? ComposerError(message: "The file could not be read."))
+                    return
+                }
+                do {
+                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    if Int64(size) > RPC.maxUploadBytes { throw tooLarge() }
+                    let dest = try temporaryURL(named: name)
+                    try FileManager.default.copyItem(at: url, to: dest)
+                    c.resume(returning: dest)
+                } catch {
+                    c.resume(throwing: error)
+                }
+            }
+        }
     }
 
     static func photoStamp(_ date: Date = Date()) -> String {
@@ -494,14 +585,23 @@ struct AttachmentChip: View {
                 case .uploading:
                     ProgressView().controlSize(.small)
                 case let .ready(info):
-                    Image(systemName: info.isImage ? "photo" : "doc")
-                        .foregroundStyle(.secondary)
+                    if let preview = attachment.preview {
+                        Image(uiImage: preview)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 32, height: 32)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .accessibilityHidden(true)
+                    } else {
+                        Image(systemName: info.isImage ? "photo" : "doc")
+                            .foregroundStyle(.secondary)
+                    }
                 case .failed:
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(.red)
                 }
             }
-            .frame(width: 20)
+            .frame(width: attachment.preview == nil ? 20 : 32)
             VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.name)
                     .font(.footnote)
@@ -667,6 +767,151 @@ struct PromptAttachmentsView: View {
                 .font(.caption)
                 .accessibilityElement(children: .combine)
             }
+        }
+    }
+}
+
+// MARK: - Prompt field
+
+/// The prompt field: a `UITextView`, so pasting an image or a file (the
+/// edit menu's Paste, or ⌘V) adds it as an attachment, as in Messages.
+/// Grows to `maxLines`, then scrolls. Text pastes, dictation and the
+/// keyboard behave as in any text view.
+struct ComposerTextView: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    var placeholder: String
+    var isEnabled = true
+    var maxLines = 6
+    /// Pasted images and files; nil when the host can't take attachments.
+    var onPasteItems: (([NSItemProvider]) -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> PastingTextView {
+        let v = PastingTextView()
+        v.delegate = context.coordinator
+        v.font = UIFont.preferredFont(forTextStyle: .body)
+        v.adjustsFontForContentSizeCategory = true
+        v.backgroundColor = .clear
+        v.textColor = .label
+        v.textContainerInset = UIEdgeInsets(top: 11, left: 16, bottom: 11, right: 0)
+        v.textContainer.lineFragmentPadding = 0
+        v.isScrollEnabled = false
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        v.accessibilityLabel = placeholder
+        return v
+    }
+
+    func updateUIView(_ v: PastingTextView, context: Context) {
+        context.coordinator.parent = self
+        if v.text != text { v.text = text }
+        v.isEditable = isEnabled
+        v.isSelectable = isEnabled
+        v.placeholder = placeholder
+        v.accessibilityLabel = placeholder
+        v.onPasteItems = isEnabled ? onPasteItems : nil
+        if isFocused, isEnabled, !v.isFirstResponder, v.window != nil {
+            DispatchQueue.main.async { v.becomeFirstResponder() }
+        } else if !isFocused, v.isFirstResponder {
+            DispatchQueue.main.async { v.resignFirstResponder() }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView v: PastingTextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 200
+        let fitting = v.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        let line = v.font?.lineHeight ?? 20
+        let maxHeight = ceil(line * CGFloat(maxLines)) + v.textContainerInset.top + v.textContainerInset.bottom
+        let scrolls = fitting.height > maxHeight
+        if v.isScrollEnabled != scrolls {
+            DispatchQueue.main.async { v.isScrollEnabled = scrolls }
+        }
+        return CGSize(width: width, height: min(fitting.height, maxHeight))
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: ComposerTextView
+        init(_ parent: ComposerTextView) { self.parent = parent }
+
+        func textViewDidChange(_ v: UITextView) {
+            parent.text = v.text
+            (v as? PastingTextView)?.updatePlaceholder()
+        }
+
+        func textViewDidBeginEditing(_ v: UITextView) {
+            if !parent.isFocused { parent.isFocused = true }
+        }
+
+        func textViewDidEndEditing(_ v: UITextView) {
+            if parent.isFocused { parent.isFocused = false }
+        }
+    }
+}
+
+/// A text view that takes pasted images and files as attachments.
+final class PastingTextView: UITextView {
+    var onPasteItems: (([NSItemProvider]) -> Void)?
+    private let placeholderLabel = UILabel()
+
+    var placeholder: String = "" {
+        didSet { placeholderLabel.text = placeholder }
+    }
+
+    override var text: String! {
+        didSet { updatePlaceholder() }
+    }
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        placeholderLabel.font = UIFont.preferredFont(forTextStyle: .body)
+        placeholderLabel.adjustsFontForContentSizeCategory = true
+        placeholderLabel.textColor = .placeholderText
+        placeholderLabel.isAccessibilityElement = false
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(placeholderLabel)
+        NSLayoutConstraint.activate([
+            placeholderLabel.leadingAnchor.constraint(equalTo: frameLayoutGuide.leadingAnchor, constant: 16),
+            placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: frameLayoutGuide.trailingAnchor),
+            placeholderLabel.topAnchor.constraint(equalTo: frameLayoutGuide.topAnchor, constant: 11),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func updatePlaceholder() {
+        placeholderLabel.isHidden = !(text ?? "").isEmpty
+    }
+
+    /// Something on the pasteboard that becomes an attachment: an image, or
+    /// a file with no text form. (Checked without reading the pasteboard,
+    /// so iOS shows no paste notice.)
+    private var pasteboardHasAttachment: Bool {
+        let pb = UIPasteboard.general
+        return pb.hasImages || (pb.numberOfItems > 0 && !pb.hasStrings && !pb.hasURLs)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), onPasteItems != nil, pasteboardHasAttachment {
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let onPasteItems, pasteboardHasAttachment else {
+            super.paste(sender)
+            return
+        }
+        let pb = UIPasteboard.general
+        let providers = pb.itemProviders.filter { p in
+            p.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+                || (!pb.hasImages && !p.hasItemConformingToTypeIdentifier(UTType.text.identifier))
+        }
+        if providers.isEmpty {
+            super.paste(sender)
+        } else {
+            onPasteItems(providers)
         }
     }
 }

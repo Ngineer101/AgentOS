@@ -15,6 +15,12 @@ enum RPC {
     /// Hide a session from the list (ending it first if live), and back.
     static let sessionArchive = "session.archive"
     static let sessionUnarchive = "session.unarchive"
+    /// Change one of the agent's session settings (model, effort, …).
+    static let sessionSetConfig = "session.set_config"
+    /// Ask a side question (`/btw`) in a fork of the conversation.
+    static let sessionSideAsk = "session.side_ask"
+    /// The host's connectors (names and icons, for approvals).
+    static let connectorList = "connector.list"
     /// The login new sessions in a workspace start with.
     static let workspaceSetDefaultAgent = "workspace.set_default_agent"
     static let eventsSubscribe = "events.subscribe"
@@ -53,6 +59,12 @@ enum EventKind {
     static let approvalResolved = "approval.resolved"
     static let netDenied = "net.denied"
     static let turnEnd = "turn.end"
+    /// `{side_id, text}`: a side question (`/btw`) was asked.
+    static let sideQuestion = "side.question"
+    /// `{side_id, text}`: its answer (streamed as `session.delta` with `side_id`).
+    static let sideMessage = "side.message"
+    /// `{side_id, stop_reason, error?}`: the side answer is complete.
+    static let sideEnd = "side.end"
 }
 
 /// `SessionState` values.
@@ -138,9 +150,23 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     /// When it was archived (hidden from the list); archived sessions have
     /// ended. Absent on older hosts.
     var archivedAt: Int64? = nil
+    /// The session's own git worktree (sessions in a git workspace each work
+    /// on a branch of their own). Absent on older hosts.
+    var worktree: SessionWorktree? = nil
+    /// The agent's settings (model, effort, …); nil or empty when it reports none.
+    var configOptions: [SessionConfigOption]? = nil
+    /// The agent answers side questions (`/btw`, `session.side_ask`).
+    var sideQuestions: Bool? = nil
 
     var id: String { sessionId }
     var isArchived: Bool { archivedAt != nil }
+    var branch: String? { worktree.flatMap { $0.branch.isEmpty ? nil : $0.branch } }
+    var canAskSideQuestions: Bool { sideQuestions ?? false }
+
+    /// The setting the composer shows for a category (`model`, `thought_level`).
+    func configOption(category: String) -> SessionConfigOption? {
+        configOptions?.first { $0.category == category && !$0.options.isEmpty }
+    }
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -153,7 +179,122 @@ struct SessionInfo: Codable, Identifiable, Hashable {
         case updatedAt = "updated_at"
         case lastSeq = "last_seq"
         case archivedAt = "archived_at"
+        case worktree
+        case configOptions = "config_options"
+        case sideQuestions = "side_questions"
     }
+}
+
+struct SessionWorktree: Codable, Hashable {
+    var path: String
+    var branch: String
+}
+
+/// One of an agent's session settings (ACP `configOptions`, `select` kind).
+struct SessionConfigOption: Codable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var description: String?
+    /// `model`, `thought_level` (effort), `mode`, …
+    var category: String?
+    var currentValue: String
+    var options: [SessionConfigValue]
+
+    var currentName: String {
+        options.first { $0.value == currentValue }?.name ?? currentValue
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, category, options
+        case currentValue = "current_value"
+    }
+}
+
+struct SessionConfigValue: Codable, Hashable, Identifiable {
+    var value: String
+    var name: String
+    var description: String?
+
+    var id: String { value }
+}
+
+/// What the app needs of a connector (`connector.list`): its name and icon.
+struct ConnectorInfo: Codable, Identifiable, Hashable {
+    var connectorId: String
+    var name: String
+    /// A `data:image/png;base64,…` URL.
+    var icon: String?
+
+    var id: String { connectorId }
+
+    enum CodingKeys: String, CodingKey {
+        case connectorId = "connector_id"
+        case name, icon
+    }
+}
+
+/// `session.side_ask` result.
+struct SideAskResultModel: Codable {
+    var sideId: String
+
+    enum CodingKeys: String, CodingKey {
+        case sideId = "side_id"
+    }
+}
+
+/// One side conversation (`/btw`), built from the session's `side.*` events.
+struct SideConversation: Identifiable, Equatable {
+    struct Turn: Equatable {
+        var question: String
+        var answer = ""
+        /// `side.end` arrived for this question.
+        var done = false
+        var error: String?
+        /// Sent from this phone, not yet seen as `side.question`.
+        var pending = false
+    }
+
+    var id: String
+    var turns: [Turn]
+
+    /// The first question, for the tab.
+    var title: String { turns.first?.question ?? "Side question" }
+    var isAnswering: Bool { turns.last.map { !$0.done && $0.error == nil } ?? false }
+}
+
+/// Side conversations from a session's events, oldest first.
+func buildSideConversations(_ events: [HostEvent]) -> [SideConversation] {
+    var list: [SideConversation] = []
+    var index: [String: Int] = [:]
+    for e in events {
+        guard e.type.hasPrefix("side."), let sid = e.payload["side_id"].string else { continue }
+        let text = e.payload["text"].string ?? ""
+        switch e.type {
+        case EventKind.sideQuestion:
+            if let i = index[sid] {
+                list[i].turns.append(.init(question: text))
+            } else {
+                index[sid] = list.count
+                list.append(SideConversation(id: sid, turns: [.init(question: text)]))
+            }
+        case EventKind.sideMessage:
+            guard let i = index[sid], !list[i].turns.isEmpty else { continue }
+            list[i].turns[list[i].turns.count - 1].answer += text
+        case EventKind.sideEnd:
+            guard let i = index[sid], !list[i].turns.isEmpty else { continue }
+            let last = list[i].turns.count - 1
+            list[i].turns[last].done = true
+            let stop = e.payload["stop_reason"].string ?? "end_turn"
+            if let err = e.payload["error"].string, !err.isEmpty {
+                list[i].turns[last].error = err
+            } else if stop == "error" || stop == "refusal" {
+                list[i].turns[last].error = stop == "error" ? "The answer failed." : "The agent refused."
+            }
+        default:
+            break
+        }
+    }
+    return list
 }
 
 /// One subfolder from `project.browse`.
@@ -296,9 +437,12 @@ struct SessionDeltaModel: Codable {
     var sessionId: String
     var kind: String
     var text: String
+    /// The side conversation a `side.message` chunk belongs to.
+    var sideId: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
+        case sideId = "side_id"
         case kind, text
     }
 }

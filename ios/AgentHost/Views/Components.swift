@@ -175,3 +175,34 @@ struct StateText: View {
         }
     }
 }
+
+/// A connector's icon (from `connector.list`), or its initial on a tile
+/// when the host sent none.
+struct ConnectorIcon: View {
+    @EnvironmentObject private var model: AppModel
+    var id: String?
+    var name: String
+    var size: CGFloat = 30
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+        Group {
+            if let image = model.connectorIcon(id: id, name: name) {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .padding(size * 0.12)
+                    .frame(width: size, height: size)
+                    .background(Color.white, in: shape)
+            } else {
+                Text(name.prefix(1).uppercased())
+                    .font(.system(size: size * 0.5, weight: .bold, design: .rounded))
+                    .frame(width: size, height: size)
+                    .background(Color.white.opacity(0.1), in: shape)
+            }
+        }
+        .clipShape(shape)
+        .accessibilityHidden(true)
+    }
+}
