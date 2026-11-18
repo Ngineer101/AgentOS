@@ -245,6 +245,7 @@ fn transcript(s: &mut App) {
         arguments: json!({"repo": "nico/relay"}),
         requested_at: now(),
         expires_at: now() + 570_000,
+        summary: None,
     }];
     s.expanded.insert("t1".into());
 }

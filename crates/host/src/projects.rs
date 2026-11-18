@@ -259,7 +259,12 @@ pub fn set_roots(h: &Host, p: ProjectRootsParams) -> Result<Vec<String>, RpcErro
                 dir.display()
             )));
         }
-        for protected in [cfg.data_dir.clone(), cfg.runtime_dir.clone(), cfg.scratch_dir()] {
+        for protected in [
+            cfg.data_dir.clone(),
+            cfg.runtime_dir.clone(),
+            cfg.scratch_dir(),
+            cfg.session_tools_dir(),
+        ] {
             if crate::profiles::overlaps(&dir, &real(&protected)) {
                 return Err(RpcError::invalid_params(format!(
                     "{}: may not contain or be inside the host's own data",

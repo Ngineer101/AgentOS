@@ -140,7 +140,12 @@ fn check_folder(h: &Host, agent: AgentKind, dir: &Path) -> Result<(), String> {
             dir.display()
         ));
     }
-    let mut host_data = vec![cfg.data_dir.clone(), cfg.runtime_dir.clone()];
+    let mut host_data = vec![
+        cfg.data_dir.clone(),
+        cfg.runtime_dir.clone(),
+        cfg.scratch_dir(),
+        cfg.session_tools_dir(),
+    ];
     if let Some(p) = cfg.socket_path.parent() {
         host_data.push(p.to_path_buf());
     }

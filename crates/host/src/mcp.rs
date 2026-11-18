@@ -41,6 +41,10 @@ pub const RESULT_LIMIT: usize = 256 * 1024;
 pub const RATE_LIMIT: usize = 120;
 const MCP_PROTOCOL: &str = "2025-06-18";
 
+/// The host's own tool: install a command-line tool on the user's computer
+/// (outside the sandbox), always after the user approves.
+pub const INSTALL_TOOL: &str = "agenthost__install_tool";
+
 struct SessionReg {
     session_id: String,
     workspace_id: String,
@@ -71,6 +75,8 @@ pub struct Gateway {
     http: reqwest::Client,
     /// OAuth flows waiting for their browser redirect.
     oauth: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// One install at a time: package managers don't like running concurrently.
+    install_lock: tokio::sync::Mutex<()>,
 }
 
 fn secret_name(connector_id: &str, kind: &str) -> String {
@@ -126,6 +132,7 @@ impl Gateway {
                 .user_agent(concat!("agenthost/", env!("CARGO_PKG_VERSION")))
                 .build()?,
             oauth: Mutex::new(HashMap::new()),
+            install_lock: tokio::sync::Mutex::new(()),
         });
         let g = gw.clone();
         tokio::spawn(async move {
@@ -254,12 +261,14 @@ impl Gateway {
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(MCP_PROTOCOL),
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "agenthost", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Tools from the connectors enabled for this workspace. Tool names are <connector>__<tool>."
+                "instructions": "Tools from the connectors enabled for this workspace (named <connector>__<tool>), plus agenthost__install_tool, which installs a command-line tool on the user's computer after they approve it."
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(
-                json!({"tools": self.list_tools(workspace_id).into_iter().map(|(_, _, def)| def).collect::<Vec<_>>()}),
-            ),
+            "tools/list" => {
+                let mut tools: Vec<Value> = self.builtin_tools();
+                tools.extend(self.list_tools(workspace_id).into_iter().map(|(_, _, def)| def));
+                Ok(json!({"tools": tools}))
+            }
             "tools/call" => {
                 let name = msg["params"]["name"]
                     .as_str()
@@ -292,7 +301,8 @@ impl Gateway {
                     continue;
                 }
                 let mut s = slug(&c.name);
-                if out.iter().any(|(o, _)| *o == s) {
+                // "agenthost" is the host's own tools.
+                if s == BUILTIN_CONNECTOR_ID || out.iter().any(|(o, _)| *o == s) {
                     s = format!(
                         "{s}_{}",
                         &c.connector_id[c.connector_id.len().saturating_sub(4)..]
@@ -360,6 +370,9 @@ impl Gateway {
         name: &str,
         args: Value,
     ) -> Value {
+        if name == INSTALL_TOOL {
+            return self.install_tool(session_id, args).await;
+        }
         let call_id = new_id("mcp");
         let found = self
             .list_tools(workspace_id)
@@ -406,7 +419,7 @@ impl Gateway {
         }
         if policy == ToolPolicy::Ask {
             let decision = self
-                .await_approval(session_id, &conn, &tool.name, &args)
+                .await_approval(session_id, &conn.connector_id, &conn.name, &tool.name, &args, None)
                 .await;
             if decision != ApprovalDecision::Approve {
                 finish("denied", "the user denied this call");
@@ -455,21 +468,24 @@ impl Gateway {
     async fn await_approval(
         self: &Arc<Self>,
         session_id: &str,
-        conn: &ConnectorRow,
+        connector_id: &str,
+        connector_name: &str,
         tool: &str,
         args: &Value,
+        summary: Option<String>,
     ) -> ApprovalDecision {
         let approval_id = new_id("apr");
         let now = now_ms();
         let info = PendingApproval {
             approval_id: approval_id.clone(),
             session_id: session_id.to_string(),
-            connector_id: conn.connector_id.clone(),
-            connector_name: conn.name.clone(),
+            connector_id: connector_id.to_string(),
+            connector_name: connector_name.to_string(),
             tool: tool.to_string(),
             arguments: args.clone(),
             requested_at: now,
             expires_at: now + APPROVAL_TIMEOUT.as_millis() as i64,
+            summary,
         };
         let (tx, rx) = oneshot::channel();
         self.approvals.lock().unwrap().insert(
@@ -499,6 +515,115 @@ impl Gateway {
         );
         self.set_waiting(session_id, -1);
         decision
+    }
+
+    /// The host's own tools, as listed to agents.
+    fn builtin_tools(&self) -> Vec<Value> {
+        let found = crate::installer::available(self.ctx.cfg.install_bin_dir.as_deref());
+        if found.is_empty() {
+            return vec![];
+        }
+        let names: Vec<&str> = found.iter().map(|m| m.name()).collect();
+        vec![json!({
+            "name": INSTALL_TOOL,
+            "description": format!(
+                "[AgentHost] Install a command-line tool on the user's computer, outside your sandbox, so the user (and later sessions) can run it. \
+                 The user sees the exact command and approves or denies it on their desktop or phone; nothing runs until they approve. \
+                 Use it when the user asks for a tool to be installed for them. For a helper only you need while working, install it yourself \
+                 instead (npm install -g, pipx install, uv tool install, cargo install, go install): inside the sandbox those go to a shared \
+                 tools folder that later sessions can use, without asking. Package managers on this computer: {}.",
+                names.join(", ")
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "manager": {"type": "string", "enum": names, "description": "The package manager to install with."},
+                    "package": {"type": "string", "description": "The package's registry name only, e.g. agent-desktop, @scope/name, ripgrep, github.com/owner/repo/cmd/tool. No URLs, paths or flags."},
+                    "version": {"type": "string", "description": "An exact version, e.g. 1.3.1 (optional; latest when left out)."},
+                    "reason": {"type": "string", "description": "One sentence for the user: why install it."}
+                },
+                "required": ["manager", "package", "reason"]
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true, "title": "Install a tool on this computer"}
+        })]
+    }
+
+    /// `agenthost__install_tool`: check the request, ask the user, run it.
+    async fn install_tool(self: &Arc<Self>, session_id: &str, args: Value) -> Value {
+        let call_id = new_id("mcp");
+        let s = |k: &str| args[k].as_str().unwrap_or_default().to_string();
+        let (manager, package, version, reason) = (s("manager"), s("package"), s("version"), s("reason"));
+        let base = json!({
+            "tool_call_id": call_id, "name": "install_tool", "exposed_name": INSTALL_TOOL, "arguments": args,
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "tool_kind": ToolKind::Write, "policy": ToolPolicy::Ask
+        });
+        let _ = self.ctx.append(session_id, EventType::ToolCall, base);
+        let finish = |status: &str, output: &str| {
+            let (out, truncated) = truncate(output, crate::session::TOOL_OUTPUT_LIMIT);
+            let _ = self.ctx.append(
+                session_id,
+                EventType::ToolResult,
+                json!({"tool_call_id": call_id, "name": "install_tool", "status": status, "output": out, "truncated": truncated, "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID}),
+            );
+        };
+        if self.rate_limited(session_id) {
+            finish("failed", "rate limit reached");
+            return text_result("agenthost: too many calls this minute; try again shortly", true);
+        }
+        let version = Some(version.as_str()).filter(|v| !v.trim().is_empty());
+        let plan = match crate::installer::plan(&manager, &package, version) {
+            Ok(p) => p,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("agenthost: {e}"), true);
+            }
+        };
+        let bin_dir = self.ctx.cfg.install_bin_dir.clone();
+        if !crate::installer::available(bin_dir.as_deref()).contains(&plan.manager) {
+            let e = format!("{} is not installed on this computer", plan.manager.name());
+            finish("failed", &e);
+            return text_result(&format!("agenthost: {e}"), true);
+        }
+        // What the user sees and approves: the exact command, and why.
+        let shown = json!({
+            "command": plan.command(),
+            "manager": plan.manager.name(),
+            "package": plan.package,
+            "version": plan.version,
+            "reason": reason,
+            "runs": "on this computer, as you, outside the sandbox",
+        });
+        let decision = self
+            .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", "install_tool", &shown, Some(plan.summary()))
+            .await;
+        self.ctx.audit.log(
+            "install.decision",
+            json!({"session_id": session_id, "command": plan.command(), "decision": decision}),
+        );
+        if decision != ApprovalDecision::Approve {
+            finish("denied", "the user denied this install");
+            return text_result("The user denied this install.", true);
+        }
+        let _guard = self.install_lock.lock().await;
+        let out = crate::installer::run(&plan, bin_dir.as_deref()).await;
+        self.ctx.audit.log(
+            "install.done",
+            json!({"session_id": session_id, "command": plan.command(), "ok": out.ok}),
+        );
+        let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
+        finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        if out.ok {
+            text_result(
+                &format!(
+                    "Installed with `{}`. It is installed for the user, outside your sandbox. Output:\n{output}",
+                    plan.command()
+                ),
+                false,
+            )
+        } else {
+            text_result(&format!("The install failed (`{}`):\n{output}", plan.command()), true)
+        }
     }
 
     fn set_waiting(&self, session_id: &str, delta: i64) {

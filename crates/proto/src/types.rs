@@ -791,7 +791,15 @@ pub struct PendingApproval {
     pub arguments: Value,
     pub requested_at: i64,
     pub expires_at: i64,
+    /// One line for the approval card, when the host has a clearer one than
+    /// connector + tool ("Install agent-desktop 1.3.1 with npm, on this computer").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
+
+/// The `connector_id` of approvals for the host's own tools (installing a
+/// command-line tool on the user's computer), not a configured connector.
+pub const BUILTIN_CONNECTOR_ID: &str = "agenthost";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectorAddParams {

@@ -103,7 +103,11 @@ pub fn policy_for(
     profile: &NetworkProfile,
 ) -> SandboxPolicy {
     let home = &cfg.home_dir;
-    let mut write = vec![workspace.to_path_buf(), temp_dir.to_path_buf()];
+    let mut write = vec![
+        workspace.to_path_buf(),
+        temp_dir.to_path_buf(),
+        cfg.session_tools_dir(),
+    ];
     write.extend(agent.state_paths.iter().cloned());
 
     let mut deny_read: Vec<PathBuf> = SECRET_DIRS.iter().map(|d| home.join(d)).collect();
@@ -281,11 +285,48 @@ pub fn health(cfg: &HostConfig) -> SandboxHealth {
 }
 
 /// Environment for the agent: a clean slate, never the host's own environment.
+/// Point package managers at the shared session tools folder, so agents can
+/// install what they need (and download dependencies) inside the sandbox,
+/// and put what they install first on PATH. Your home folder stays read-only.
+pub fn session_tools_env(cfg: &HostConfig) -> Vec<(String, String)> {
+    let d = cfg.session_tools_dir();
+    let p = |rel: &str| d.join(rel).display().to_string();
+    let host_path = std::env::var("PATH").unwrap_or_default();
+    let path = [
+        p("bin"),
+        p("npm/bin"),
+        p("cargo/bin"),
+        p("python/bin"),
+    ]
+    .join(":");
+    vec![
+        ("PATH".into(), if host_path.is_empty() { path } else { format!("{path}:{host_path}") }),
+        // npm install -g, and the npm cache
+        ("NPM_CONFIG_PREFIX".into(), p("npm")),
+        ("npm_config_cache".into(), p("cache/npm")),
+        // pip install --user, pipx, uv tool
+        ("PYTHONUSERBASE".into(), p("python")),
+        ("PIP_CACHE_DIR".into(), p("cache/pip")),
+        ("PIPX_HOME".into(), p("pipx")),
+        ("PIPX_BIN_DIR".into(), p("bin")),
+        ("UV_TOOL_DIR".into(), p("uv/tools")),
+        ("UV_TOOL_BIN_DIR".into(), p("bin")),
+        ("UV_CACHE_DIR".into(), p("cache/uv")),
+        ("UV_PYTHON_INSTALL_DIR".into(), p("uv/python")),
+        // cargo install, and crate downloads for builds
+        ("CARGO_HOME".into(), p("cargo")),
+        // go install, modules and the build cache
+        ("GOPATH".into(), p("go")),
+        ("GOBIN".into(), p("bin")),
+        ("GOMODCACHE".into(), p("go/pkg/mod")),
+        ("GOCACHE".into(), p("cache/go-build")),
+    ]
+}
+
 pub fn agent_env(cfg: &HostConfig, agent: &AgentSpec, temp_dir: &Path) -> Vec<(String, String)> {
     let mut env = vec![];
-    for k in [
-        "PATH", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "SHELL", "TZ",
-    ] {
+    // PATH comes from `session_tools_env` (the session tools first, then yours).
+    for k in ["LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "SHELL", "TZ"] {
         if let Ok(v) = std::env::var(k) {
             env.push((k.to_string(), v));
         }
@@ -296,6 +337,7 @@ pub fn agent_env(cfg: &HostConfig, agent: &AgentSpec, temp_dir: &Path) -> Vec<(S
     env.push(("CLAUDE_CODE_TMPDIR".into(), temp_dir.display().to_string()));
     env.push(("CLAUDE_TMPDIR".into(), temp_dir.display().to_string()));
     env.push(("NO_COLOR".into(), "1".into()));
+    env.extend(session_tools_env(cfg));
     env.extend(agent.env.iter().cloned());
     env.extend(cfg.agent_env_overrides.iter().cloned());
     env
@@ -576,6 +618,32 @@ mod tests {
     }
 
     #[test]
+    fn agents_install_their_own_tools_into_the_shared_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let tools = cfg.session_tools_dir();
+        // Next to the data folder, never inside it or your home folder.
+        assert!(!tools.starts_with(&cfg.data_dir) && !tools.starts_with("/home/u"));
+        let spec = crate::agents::spec(AgentKind::Claude, &cfg);
+        let p = policy_for(&cfg, &spec, Path::new("/work/repo"), Path::new("/tmp/ah/s1"), &NetworkProfile::default());
+        assert!(p.write.contains(&tools));
+        assert!(!p.write.iter().any(|w| w == Path::new("/home/u")));
+        let env: std::collections::HashMap<String, String> =
+            agent_env(&cfg, &spec, Path::new("/tmp/ah/s1")).into_iter().collect();
+        let t = |rel: &str| tools.join(rel).display().to_string();
+        assert_eq!(env["NPM_CONFIG_PREFIX"], t("npm"));
+        assert_eq!(env["CARGO_HOME"], t("cargo"));
+        assert_eq!(env["PIPX_BIN_DIR"], t("bin"));
+        assert_eq!(env["GOBIN"], t("bin"));
+        // Their binaries come first on PATH, then yours.
+        assert!(env["PATH"].starts_with(&format!("{}:{}", t("bin"), t("npm/bin"))));
+        if let Ok(host) = std::env::var("PATH") {
+            assert!(env["PATH"].ends_with(&host));
+        }
+    }
+
+    #[test]
     fn open_web_stays_with_the_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = HostConfig::in_dir(dir.path());
@@ -622,6 +690,7 @@ mod tests {
             vec![
                 PathBuf::from("/work/repo"),
                 PathBuf::from("/tmp/ah/s1"),
+                cfg.session_tools_dir(),
                 PathBuf::from("/home/u/.claude-work")
             ]
         );

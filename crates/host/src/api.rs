@@ -596,7 +596,12 @@ pub fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcEr
             "refusing to use / or your home folder as a workspace; pick a project folder",
         ));
     }
-    for protected in [&h.ctx.cfg.data_dir, &h.ctx.cfg.runtime_dir, &h.ctx.cfg.scratch_dir()] {
+    for protected in [
+        &h.ctx.cfg.data_dir,
+        &h.ctx.cfg.runtime_dir,
+        &h.ctx.cfg.scratch_dir(),
+        &h.ctx.cfg.session_tools_dir(),
+    ] {
         let prot = std::fs::canonicalize(protected).unwrap_or(protected.clone());
         if path.starts_with(&prot) || prot.starts_with(&path) {
             return Err(RpcError::invalid_params(

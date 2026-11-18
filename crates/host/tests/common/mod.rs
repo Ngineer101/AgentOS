@@ -47,6 +47,11 @@ pub fn test_config(dir: &Path) -> HostConfig {
     cfg.fake_agent_path = Some(fake_agent());
     cfg.home_dir = dir.join("home");
     std::fs::create_dir_all(&cfg.home_dir).unwrap();
+    // No package managers unless a test brings its own: the built-in install
+    // tool never touches this machine.
+    let none = dir.join("no-package-managers");
+    std::fs::create_dir_all(&none).unwrap();
+    cfg.install_bin_dir = Some(none);
     cfg
 }
 

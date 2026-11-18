@@ -21,6 +21,8 @@ pub struct HostConfig {
     pub enable_fake_agent: bool,
     /// Path to the `agenthost-fake-agent` binary.
     pub fake_agent_path: Option<PathBuf>,
+    /// Test only: look for package managers here instead of on PATH.
+    pub install_bin_dir: Option<PathBuf>,
     /// Test only: run the fake agent without a sandbox. Never applies to real agents.
     pub fake_agent_unsandboxed: bool,
     /// Override the agent's home directory (tests). Real use leaves this unset.
@@ -51,6 +53,7 @@ impl HostConfig {
             runtime_dir,
             enable_fake_agent: false,
             fake_agent_path: None,
+            install_bin_dir: None,
             fake_agent_unsandboxed: false,
             home_dir: home,
             relay_url: None,
@@ -69,6 +72,7 @@ impl HostConfig {
             data_dir,
             enable_fake_agent: false,
             fake_agent_path: None,
+            install_bin_dir: None,
             fake_agent_unsandboxed: false,
             home_dir: home_dir().unwrap_or_else(|_| root.to_path_buf()),
             relay_url: None,
@@ -85,20 +89,37 @@ impl HostConfig {
         self.data_dir.join("logs")
     }
 
-    /// Quick tasks' folders (one per session), next to the data folder rather
-    /// than inside it, which sandboxes may not read.
-    pub fn scratch_dir(&self) -> PathBuf {
+    /// A folder next to the data folder (not inside it, which sandboxes may not read).
+    fn sibling(&self, suffix: &str) -> PathBuf {
         let name = self
             .data_dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "agenthost".into());
-        self.data_dir.with_file_name(format!("{name}-scratch"))
+        self.data_dir.with_file_name(format!("{name}-{suffix}"))
+    }
+
+    /// Quick tasks' folders, one per session.
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.sibling("scratch")
+    }
+
+    /// Tools agents install for themselves (npm -g, pipx, cargo install, …)
+    /// and package caches: writable in every session, shared between them,
+    /// and separate from your own home folder.
+    pub fn session_tools_dir(&self) -> PathBuf {
+        self.sibling("session-tools")
     }
 
     /// Create directories with owner-only permissions and validate path lengths.
     pub fn prepare(&self) -> Result<()> {
-        for d in [&self.data_dir, &self.runtime_dir, &self.logs_dir(), &self.scratch_dir()] {
+        for d in [
+            &self.data_dir,
+            &self.runtime_dir,
+            &self.logs_dir(),
+            &self.scratch_dir(),
+            &self.session_tools_dir(),
+        ] {
             create_private_dir(d)?;
         }
         if let Some(parent) = self.socket_path.parent() {
