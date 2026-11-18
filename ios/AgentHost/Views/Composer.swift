@@ -783,6 +783,8 @@ struct ComposerTextView: UIViewRepresentable {
     var placeholder: String
     var isEnabled = true
     var maxLines = 6
+    /// Space around the text (the placeholder follows).
+    var insets = UIEdgeInsets(top: 11, left: 16, bottom: 11, right: 0)
     /// Pasted images and files; nil when the host can't take attachments.
     var onPasteItems: (([NSItemProvider]) -> Void)?
 
@@ -795,7 +797,7 @@ struct ComposerTextView: UIViewRepresentable {
         v.adjustsFontForContentSizeCategory = true
         v.backgroundColor = .clear
         v.textColor = .label
-        v.textContainerInset = UIEdgeInsets(top: 11, left: 16, bottom: 11, right: 0)
+        v.textContainerInset = insets
         v.textContainer.lineFragmentPadding = 0
         v.isScrollEnabled = false
         v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -808,6 +810,7 @@ struct ComposerTextView: UIViewRepresentable {
         if v.text != text { v.text = text }
         v.isEditable = isEnabled
         v.isSelectable = isEnabled
+        if v.textContainerInset != insets { v.textContainerInset = insets }
         v.placeholder = placeholder
         v.accessibilityLabel = placeholder
         v.onPasteItems = isEnabled ? onPasteItems : nil
@@ -862,6 +865,16 @@ final class PastingTextView: UITextView {
         didSet { updatePlaceholder() }
     }
 
+    private var placeholderLeading: NSLayoutConstraint!
+    private var placeholderTop: NSLayoutConstraint!
+
+    override var textContainerInset: UIEdgeInsets {
+        didSet {
+            placeholderLeading?.constant = textContainerInset.left
+            placeholderTop?.constant = textContainerInset.top
+        }
+    }
+
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         placeholderLabel.font = UIFont.preferredFont(forTextStyle: .body)
@@ -870,10 +883,14 @@ final class PastingTextView: UITextView {
         placeholderLabel.isAccessibilityElement = false
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholderLabel)
+        placeholderLeading = placeholderLabel.leadingAnchor.constraint(
+            equalTo: frameLayoutGuide.leadingAnchor, constant: textContainerInset.left)
+        placeholderTop = placeholderLabel.topAnchor.constraint(
+            equalTo: frameLayoutGuide.topAnchor, constant: textContainerInset.top)
         NSLayoutConstraint.activate([
-            placeholderLabel.leadingAnchor.constraint(equalTo: frameLayoutGuide.leadingAnchor, constant: 16),
+            placeholderLeading,
             placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: frameLayoutGuide.trailingAnchor),
-            placeholderLabel.topAnchor.constraint(equalTo: frameLayoutGuide.topAnchor, constant: 11),
+            placeholderTop,
         ])
     }
 

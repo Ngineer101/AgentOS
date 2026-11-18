@@ -9,6 +9,7 @@ import UIKit
 ///                                         settings | archived | archived-session |
 ///                                         archive-confirm | pair | side | config | paste
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
+///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 struct DemoData {
     enum Screen: String {
         case sessions, session, dictating, new, picker, settings, pair, archived
@@ -20,7 +21,7 @@ struct DemoData {
         case archiveConfirm = "archive-confirm"
         /// The side questions sheet (`/btw`) with two conversations.
         case side
-        /// A session with model and effort menus in the composer.
+        /// A session with model, effort and fast mode in the composer.
         case config
         /// An image pasted into the composer (an attachment chip).
         case paste
@@ -49,6 +50,11 @@ struct DemoData {
             return Screen(rawValue: args[i + 1]) ?? .sessions
         }
         return .sessions
+    }
+
+    /// `-AgentHostDemoModelSheet`: the session screen opens the model sheet.
+    static var opensModelSheet: Bool {
+        requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoModelSheet")
     }
 
     static func fromLaunchArguments() -> DemoData? {
@@ -108,6 +114,14 @@ struct DemoData {
                     SessionConfigValue(value: "low", name: "Low", description: nil),
                     SessionConfigValue(value: "medium", name: "Medium", description: nil),
                     SessionConfigValue(value: "high", name: "High", description: nil),
+                    SessionConfigValue(value: "max", name: "Max", description: nil),
+                ]),
+            SessionConfigOption(
+                id: "fast", name: "Fast mode", description: "Faster output from the same model, at a higher cost.",
+                category: "model_config", currentValue: "on",
+                options: [
+                    SessionConfigValue(value: "on", name: "On", description: nil),
+                    SessionConfigValue(value: "off", name: "Off", description: nil),
                 ]),
             SessionConfigOption(
                 id: "mode", name: "Mode", description: nil, category: "mode", currentValue: "default",

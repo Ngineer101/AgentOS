@@ -32,6 +32,8 @@ struct SessionView: View {
     @State private var showFileImporter = false
     /// Why voice input can't start, for an alert that offers Settings.
     @State private var voiceAccessProblem: String?
+    /// The "Select model" sheet (model, effort, fast mode).
+    @State private var showModelSheet = false
 
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
@@ -229,6 +231,9 @@ struct SessionView: View {
                 composer.showDemoImage(DemoData.pastedImage(), name: "Pasted Image.png")
                 draft = "Why does this layout overflow on the iPhone SE?"
             }
+            if model.isDemo, DemoData.opensModelSheet {
+                showModelSheet = true
+            }
             if model.isDemo, DemoData.requestedScreen == .side {
                 sideSelection = sides.first?.id
                 showSides = true
@@ -283,37 +288,6 @@ struct SessionView: View {
                     .foregroundStyle(Palette.red)
                     .padding(.horizontal, 6)
             }
-            if !composer.attachments.isEmpty {
-                AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
-            }
-            if let s = session, !configOptions(s).isEmpty || sideQuestion != nil || s.branch != nil {
-                HStack(spacing: 8) {
-                    ForEach(configOptions(s)) { option in
-                        ConfigMenu(option: option) { value in
-                            Task {
-                                await run {
-                                    try await model.setConfig(sessionId: sessionId, configId: option.id, value: value)
-                                }
-                            }
-                        }
-                        .disabled(!canPrompt)
-                    }
-                    Spacer(minLength: 0)
-                    if sideQuestion != nil {
-                        Label("Side question", systemImage: "bubble.left.and.text.bubble.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .accessibilityHint("Asked in a fork of the conversation; the agent is not interrupted.")
-                    } else if let branch = s.branch {
-                        Label(branch, systemImage: "arrow.triangle.branch")
-                            .labelStyle(BranchLabelStyle())
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Branch \(branch)")
-                    }
-                }
-                .padding(.horizontal, 4)
-            }
             if dictation.isListening || dictation.isFinishing {
                 DictationPanel(
                     dictation: dictation,
@@ -321,7 +295,7 @@ struct SessionView: View {
                     onStop: { stopDictation() }
                 )
             } else {
-                promptRow
+                composerBox
             }
         }
         .padding(.horizontal, 12)
@@ -351,10 +325,80 @@ struct SessionView: View {
                 actionError = userMessage(for: error)
             }
         }
+        .sheet(isPresented: $showModelSheet) {
+            ModelSheet(sessionId: sessionId, isLive: canPrompt)
+                .environmentObject(model)
+        }
     }
 
-    private var promptRow: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+    /// One rounded box: where the session works, the attachments, the
+    /// field, and a row with attach, dictate, the model and send.
+    private var composerBox: some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        let hasContext = contextLine != nil
+        let hasChips = !composer.attachments.isEmpty
+        return VStack(alignment: .leading, spacing: 0) {
+            if let line = contextLine {
+                line
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+            }
+            if hasChips {
+                AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
+                    .contentMargins(.horizontal, 12, for: .scrollContent)
+                    .padding(.top, hasContext ? 8 : 12)
+            }
+            ComposerTextView(
+                text: $draft,
+                isFocused: $promptFocused,
+                placeholder: placeholder,
+                isEnabled: canPrompt,
+                insets: UIEdgeInsets(top: hasContext || hasChips ? 6 : 13, left: 16, bottom: 6, right: 16),
+                onPasteItems: canAttach ? { providers in
+                    reportSkipped(composer.addItemProviders(providers, model: model))
+                } : nil
+            )
+            composerControls
+                .padding(.leading, 6)
+                .padding(.trailing, 8)
+                .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemBackground), in: shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+        .contentShape(shape)
+        .onTapGesture {
+            if canPrompt { promptFocused = true }
+        }
+    }
+
+    /// "relay  ⎇ agenthost/fix-flaky-resume", or that this is a side question.
+    private var contextLine: AnyView? {
+        guard let s = session else { return nil }
+        let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
+        return AnyView(
+            HStack(spacing: 10) {
+                Text(place)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if sideQuestion != nil {
+                    Label("Side question", systemImage: "bubble.left.and.text.bubble.right")
+                        .labelStyle(ContextLabelStyle())
+                        .accessibilityHint("Asked in a fork of the conversation; the agent is not interrupted.")
+                } else if let branch = s.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .labelStyle(ContextLabelStyle())
+                        .accessibilityLabel("Branch \(branch)")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+        )
+    }
+
+    private var composerControls: some View {
+        HStack(spacing: 2) {
             if model.hostSupportsMedia {
                 Menu {
                     Button {
@@ -369,74 +413,71 @@ struct SessionView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.title3.weight(.medium))
+                        .font(.title3)
                         .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .contentShape(Circle())
-                        .glassSurface(Circle(), interactive: true)
                 }
                 .tint(.primary)
                 .disabled(!canPrompt || composer.remainingSlots == 0)
                 .accessibilityLabel("Attach")
             }
-            // A glass capsule with the field, the mic, and send or stop.
-            HStack(alignment: .bottom, spacing: 4) {
-                ComposerTextView(
-                    text: $draft,
-                    isFocused: $promptFocused,
-                    placeholder: placeholder,
-                    isEnabled: canPrompt,
-                    onPasteItems: canAttach ? { providers in
-                        reportSkipped(composer.addItemProviders(providers, model: model))
-                    } : nil
-                )
-                // iOS dictation on the phone: works with any host.
+            // iOS dictation on the phone: works with any host.
+            Button {
+                micTapped()
+            } label: {
+                Image(systemName: "mic")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPrompt)
+            .accessibilityLabel("Dictate")
+
+            Spacer(minLength: 8)
+
+            if let s = session, let chip = ModelChip(session: s) {
                 Button {
-                    micTapped()
+                    showModelSheet = true
                 } label: {
-                    Image(systemName: "mic")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 44)
+                    chip
                 }
                 .buttonStyle(.plain)
                 .disabled(!canPrompt)
-                .accessibilityLabel("Dictate")
-                if session?.state == SessionStateName.running && draft.isEmpty && composer.attachments.isEmpty {
-                    Button {
-                        Task { await run { try await model.cancel(sessionId) } }
-                    } label: {
-                        Image(systemName: "stop.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.white.opacity(0.2), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 6)
-                    .disabled(!model.link.isOnline)
-                    .accessibilityLabel("Stop turn")
-                } else if canSend || composer.isUploading {
-                    Button {
-                        send()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.accentColor, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 6)
-                    .disabled(!canSend)
-                    .accessibilityLabel("Send")
-                }
+                .padding(.trailing, 6)
             }
-            .padding(.trailing, 6)
-            .frame(minHeight: 44)
-            .glassSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            if session?.state == SessionStateName.running && draft.isEmpty && composer.attachments.isEmpty {
+                Button {
+                    Task { await run { try await model.cancel(sessionId) } }
+                } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.black)
+                        .frame(width: 32, height: 32)
+                        .background(Color.white, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.link.isOnline)
+                .accessibilityLabel("Stop turn")
+            } else {
+                Button {
+                    send()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .frame(width: 32, height: 32)
+                        .background(Color.white, in: Circle())
+                        .opacity(canSend ? 1 : 0.3)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .accessibilityLabel(sideQuestion != nil ? "Ask side question" : "Send")
+            }
         }
-        .glassGroup()
     }
 
     private var canSend: Bool {
@@ -449,11 +490,6 @@ struct SessionView: View {
     /// Attachments: hosts on protocol 2, while the session takes prompts.
     private var canAttach: Bool {
         model.hostSupportsMedia && canPrompt && composer.remainingSlots > 0
-    }
-
-    /// The model and effort settings shown in the composer.
-    private func configOptions(_ s: SessionInfo) -> [SessionConfigOption] {
-        ["model", "thought_level"].compactMap { s.configOption(category: $0) }
     }
 
     /// A prompt, or a side question for `/btw …` (attachments stay for the
@@ -1273,57 +1309,284 @@ struct PendingPromptRow: View {
 
 // MARK: - Model and effort
 
-/// One of the agent's settings (model, effort) as a compact menu in the
-/// composer: the current value, and a picker with a checkmark.
-struct ConfigMenu: View {
-    let option: SessionConfigOption
-    var onSelect: (String) -> Void
+extension SessionInfo {
+    /// The agent's model choice (`model` category).
+    var modelOption: SessionConfigOption? { configOption(category: "model") }
+    /// Effort (`thought_level` category).
+    var effortOption: SessionConfigOption? { configOption(category: "thought_level") }
 
-    private var icon: String {
-        option.category == "thought_level" ? "brain" : "cpu"
+    /// Fast mode: an on/off setting with id `fast` (or category
+    /// `model_config`), as the Claude adapter reports it.
+    var fastOption: SessionConfigOption? {
+        configOptions?.first { o in
+            (o.id == "fast" || o.category == "model_config")
+                && Set(o.options.map(\.value)) == ["on", "off"] && o.options.count == 2
+        }
+    }
+
+    var isFastMode: Bool { fastOption?.currentValue == "on" }
+    var hasModelSettings: Bool { modelOption != nil || effortOption != nil || fastOption != nil }
+}
+
+/// The label of the composer's model button: the agent's glyph, the model
+/// ("Opus 4.5"), and a bolt when fast mode is on.
+struct ModelChip: View {
+    let title: String
+    let fast: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    /// Nil when the session has no model, effort or fast setting.
+    init?(session s: SessionInfo) {
+        guard s.hasModelSettings else { return nil }
+        title = s.modelOption?.currentName ?? s.effortOption.map { "Effort: \($0.currentName)" } ?? "Model"
+        fast = s.isFastMode
     }
 
     var body: some View {
-        Menu {
-            Picker(option.name, selection: Binding(
-                get: { option.currentValue },
-                set: { value in
-                    guard value != option.currentValue else { return }
-                    UISelectionFeedbackGenerator().selectionChanged()
-                    onSelect(value)
-                }
-            )) {
-                ForEach(option.options) { o in
-                    VStack(alignment: .leading) {
-                        Text(o.name)
-                        if let d = o.description, !d.isEmpty { Text(d) }
-                    }
-                    .tag(o.value)
-                }
+        HStack(spacing: 5) {
+            Image(systemName: "cpu")
+                .font(.footnote)
+            Text(title)
+                .font(.subheadline)
+                .lineLimit(1)
+            if fast {
+                Image(systemName: "bolt.fill")
+                    .font(.caption)
             }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(option.currentName)
-                    .font(.footnote.weight(.medium))
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 11)
-            .frame(height: 30)
-            .contentShape(Capsule())
-            .glassSurface(Capsule(), interactive: true)
         }
-        .menuOrder(.fixed)
-        .tint(.primary)
-        .accessibilityLabel(option.name)
-        .accessibilityValue(option.currentName)
+        .foregroundStyle(.secondary)
+        .opacity(isEnabled ? 1 : 0.5)
+        .padding(.horizontal, 6)
+        .frame(minHeight: 36)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Model")
+        .accessibilityValue(fast ? "\(title), fast mode" : title)
+        .accessibilityHint("Choose the model and effort")
+    }
+}
+
+/// The composer's context line: a small glyph and a name, truncated in the
+/// middle (branch names keep their start and end).
+struct ContextLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+                .font(.caption2.weight(.semibold))
+            configuration.title
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+/// "Select model": the agent's models, effort as a stepped slider, and
+/// fast mode. Each change is sent at once; the sheet stays open.
+struct ModelSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let sessionId: String
+    var isLive: Bool
+    @State private var error: String?
+
+    private var session: SessionInfo? { model.session(sessionId) }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(Palette.red)
+                    }
+                }
+                if let m = session?.modelOption {
+                    Section {
+                        ForEach(m.options) { o in
+                            modelRow(o, selected: o.value == m.currentValue) {
+                                guard o.value != m.currentValue else { return }
+                                set(m, o.value)
+                            }
+                        }
+                    }
+                }
+                if let s = session, s.effortOption != nil || s.fastOption != nil {
+                    Section {
+                        if let e = s.effortOption {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Effort")
+                                    Spacer()
+                                    Text(e.currentName)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .accessibilityHidden(true)
+                                EffortSlider(option: e) { value in set(e, value) }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        if let f = s.fastOption {
+                            Toggle("Fast mode", isOn: Binding(
+                                get: { f.currentValue == "on" },
+                                set: { on in set(f, on ? "on" : "off") }
+                            ))
+                        }
+                    } footer: {
+                        if let d = s.fastOption?.description, !d.isEmpty {
+                            Text(d)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(16)
+            .contentMargins(.top, 4, for: .scrollContent)
+            .environment(\.defaultMinListRowHeight, 44)
+            .disabled(!isLive)
+            .navigationTitle("Select model")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        ToolbarIcon(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func modelRow(_ o: SessionConfigValue, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "cpu")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(o.name)
+                        .foregroundStyle(.primary)
+                    if let d = o.description, !d.isEmpty {
+                        Text(d)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func set(_ option: SessionConfigOption, _ value: String) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        Task {
+            do {
+                try await model.setConfig(sessionId: sessionId, configId: option.id, value: value)
+                error = nil
+            } catch {
+                self.error = userMessage(for: error)
+            }
+        }
+    }
+}
+
+/// A stepped slider over an option's values: one stop per value with a
+/// small dot, a white knob, the part before it filled. Sends the value
+/// once, when the finger lifts.
+struct EffortSlider: View {
+    let option: SessionConfigOption
+    var onCommit: (String) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    /// The stop under the finger while dragging.
+    @State private var dragIndex: Int?
+
+    private let height: CGFloat = 30
+    private let inset: CGFloat = 2
+
+    private var values: [SessionConfigValue] { option.options }
+    private var currentIndex: Int { values.firstIndex { $0.value == option.currentValue } ?? 0 }
+    private var index: Int { dragIndex ?? currentIndex }
+
+    var body: some View {
+        GeometryReader { geo in
+            let knob = height - inset * 2
+            let first = inset + knob / 2
+            let last = geo.size.width - inset - knob / 2
+            let count = max(values.count, 1)
+            let step = count > 1 ? (last - first) / CGFloat(count - 1) : 0
+            let x = first + step * CGFloat(index)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color(uiColor: .tertiarySystemFill))
+                Capsule()
+                    .fill(Color(uiColor: .systemGray2))
+                    .frame(width: x + knob / 2 + inset)
+                ForEach(values.indices, id: \.self) { i in
+                    Circle()
+                        .fill(Color.white.opacity(i <= index ? 0.55 : 0.28))
+                        .frame(width: 5, height: 5)
+                        .position(x: first + step * CGFloat(i), y: height / 2)
+                }
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                    .frame(width: knob, height: knob)
+                    .position(x: x, y: height / 2)
+            }
+            .frame(height: height)
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        guard isEnabled, step > 0 || count == 1 else { return }
+                        let i = step > 0 ? Int(((g.location.x - first) / step).rounded()) : 0
+                        let clamped = min(max(i, 0), count - 1)
+                        if clamped != index { UISelectionFeedbackGenerator().selectionChanged() }
+                        withAnimation(.snappy(duration: 0.15)) { dragIndex = clamped }
+                    }
+                    .onEnded { _ in
+                        guard let i = dragIndex else { return }
+                        commit(i)
+                    }
+            )
+            .animation(.snappy(duration: 0.2), value: index)
+        }
+        .frame(height: height)
+        .onChange(of: option.currentValue) { _, _ in dragIndex = nil }
+        .accessibilityElement()
+        .accessibilityLabel("Effort")
+        .accessibilityValue(values.indices.contains(index) ? values[index].name : option.currentName)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: commit(min(currentIndex + 1, values.count - 1))
+            case .decrement: commit(max(currentIndex - 1, 0))
+            @unknown default: break
+            }
+        }
+    }
+
+    /// The knob stays on the new stop until the session reports it (or
+    /// puts the old value back).
+    private func commit(_ i: Int) {
+        guard values.indices.contains(i), values[i].value != option.currentValue else {
+            dragIndex = nil
+            return
+        }
+        dragIndex = i
+        onCommit(values[i].value)
     }
 }
 
