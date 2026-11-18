@@ -27,6 +27,11 @@ struct ApprovalView: View {
                             Text(reason)
                         }
                     }
+                    if let details = initial.details {
+                        Section(caps: "Description") {
+                            MarkdownView(text: details)
+                        }
+                    }
                     Section {
                         CodeBlock(text: "$ " + (initial.command ?? "(no command)"))
                             .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))

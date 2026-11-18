@@ -1230,6 +1230,13 @@ struct ApprovalRequestRow: View {
             if let reason = a.reason {
                 Text("“\(reason)”").font(.subheadline)
             }
+            if let details = a.details {
+                MarkdownView(text: details)
+                    .lineLimit(8)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
+            }
             if let command = a.command {
                 Text("$ \(command)")
                     .font(.footnote.monospaced())

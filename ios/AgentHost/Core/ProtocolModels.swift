@@ -496,6 +496,8 @@ struct PendingApprovalModel: Codable, Identifiable, Hashable {
     var note: String {
         argument("note") ?? "The package manager may run the package's install scripts with your permissions. Install only what you expected."
     }
+    /// What will be posted, e.g. a pull request's description.
+    var details: String? { argument("details").flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
     /// The sheet's title ("Install a Tool?", "Push to GitHub?").
     var askTitle: String { argument("ask_title") ?? "Install a Tool?" }
 
