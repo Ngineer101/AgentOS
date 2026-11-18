@@ -11,6 +11,7 @@ struct NewSessionView: View {
     /// The chosen login (`AgentStatusInfo.id`).
     @State private var agent: String?
     @State private var starting = false
+    @State private var pickingProject = false
     @State private var error: String?
 
     private var agents: [AgentStatusInfo] {
@@ -25,18 +26,27 @@ struct NewSessionView: View {
                         Text("No workspaces. Add one on the desktop (`agenthost workspace add`).")
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(model.workspaces) { w in
+                    // Quick tasks first.
+                    ForEach(model.workspaces.sorted { $0.isQuickTasks && !$1.isQuickTasks }) { w in
                         Button {
                             workspaceId = w.workspaceId
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(w.name).foregroundStyle(.primary)
-                                    Text(w.path)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
+                                    if w.isQuickTasks {
+                                        Label(w.name, systemImage: "bolt")
+                                            .foregroundStyle(.primary)
+                                        Text("No project folder: for questions and lookups")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text(w.name).foregroundStyle(.primary)
+                                        Text(w.path)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
                                 }
                                 Spacer()
                                 if workspaceId == w.workspaceId {
@@ -45,6 +55,12 @@ struct NewSessionView: View {
                             }
                         }
                     }
+                    Button {
+                        pickingProject = true
+                    } label: {
+                        Label("New Project…", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(!model.link.isOnline)
                 }
 
                 Section("Agent") {
@@ -94,6 +110,10 @@ struct NewSessionView: View {
                         Text(error).foregroundStyle(.red)
                     }
                 }
+            }
+            .sheet(isPresented: $pickingProject) {
+                ProjectPickerView { w in workspaceId = w.workspaceId }
+                    .environmentObject(model)
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)

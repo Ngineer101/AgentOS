@@ -17,6 +17,9 @@ enum RPC {
     static let approvalList = "approval.list"
     static let approvalRespond = "approval.respond"
     static let deviceList = "device.list"
+    /// New workspaces inside the project folders the desktop allows.
+    static let projectBrowse = "project.browse"
+    static let projectCreate = "project.create"
 
     // Notifications (host -> client)
     static let nEvent = "event"
@@ -114,6 +117,29 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     }
 }
 
+/// One subfolder from `project.browse`.
+struct ProjectFolderInfo: Codable, Identifiable, Hashable {
+    var name: String
+    var path: String
+    /// Set when the folder is already a workspace.
+    var workspaceId: String?
+
+    var id: String { path }
+
+    enum CodingKeys: String, CodingKey {
+        case name, path
+        case workspaceId = "workspace_id"
+    }
+}
+
+/// `project.browse`: the project folders (no `path`), or one folder's subfolders.
+struct ProjectBrowseInfo: Codable, Hashable {
+    var roots: [String]
+    var path: String?
+    var parent: String?
+    var folders: [ProjectFolderInfo]
+}
+
 struct WorkspaceInfo: Codable, Identifiable, Hashable {
     var workspaceId: String
     var name: String
@@ -122,6 +148,9 @@ struct WorkspaceInfo: Codable, Identifiable, Hashable {
     var createdAt: Int64
 
     var id: String { workspaceId }
+
+    /// The built-in "Quick tasks": no project folder (a fresh one per session).
+    var isQuickTasks: Bool { kind == "scratch" }
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"

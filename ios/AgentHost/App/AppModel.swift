@@ -424,6 +424,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Projects
+
+    /// The project folders (`path` nil), or the subfolders of one.
+    func browseProjects(_ path: String?) async throws -> ProjectBrowseInfo {
+        var params: [String: Any] = [:]
+        if let path { params["path"] = path }
+        return try await call(RPC.projectBrowse, params)
+    }
+
+    /// Make a folder inside a project folder a workspace (`path`), or create
+    /// the new folder `name` in `parent` first.
+    func createProject(path: String? = nil, parent: String? = nil, name: String? = nil) async throws -> WorkspaceInfo {
+        var params: [String: Any] = [:]
+        if let path { params["path"] = path }
+        if let parent { params["parent"] = parent }
+        if let name { params["name"] = name }
+        let w: WorkspaceInfo = try await call(RPC.projectCreate, params)
+        if let list: [WorkspaceInfo] = try? await call(RPC.workspaceList, [:]) {
+            workspaces = list
+        }
+        return w
+    }
+
     func refreshAll() async {
         guard link.isOnline else { return }
         if let info: HostInfoModel = try? await call(RPC.hostInfo, [:]) {
