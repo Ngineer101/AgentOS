@@ -1,0 +1,14 @@
+ios/AgentHost/Views/SessionView.swift
+  h_e31f15a7c97762 77-79,83,95,247-251,253-255,257-262,562,1724
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7c0460058be90b1566972660754ee06ea5d9a4d",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
