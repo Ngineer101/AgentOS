@@ -204,7 +204,14 @@ pub struct HostInfo {
 pub enum WorkspaceKind {
     Repo,
     Folder,
+    /// The built-in "Quick tasks" workspace ([`QUICK_WORKSPACE_ID`]): no
+    /// folder of yours. Each session gets a fresh empty folder of its own, so
+    /// any number can run at once.
+    Scratch,
 }
+
+/// The built-in workspace for tasks that need no project folder.
+pub const QUICK_WORKSPACE_ID: &str = "ws_quick";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -213,6 +220,9 @@ pub enum NetworkPreset {
     Packages,
     /// github.com and its API and content hosts.
     Github,
+    /// Any public website. Local and private addresses stay refused, and
+    /// every connection still goes through (and is logged by) the egress proxy.
+    Web,
 }
 
 /// Hosts a workspace adds on top of the agent's own hosts.
@@ -239,6 +249,7 @@ impl NetworkProfile {
             .map(|p| match p {
                 NetworkPreset::Packages => "packages".to_string(),
                 NetworkPreset::Github => "github".to_string(),
+                NetworkPreset::Web => "web".to_string(),
             })
             .collect();
         if !self.custom_hosts.is_empty() {
@@ -576,6 +587,59 @@ pub struct HelloResult {
     /// Set when the connection comes from a paired device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Projects: new workspaces inside the folders the desktop allows
+// ---------------------------------------------------------------------------
+
+/// `project.browse`: the subfolders of `path`, which must be one of the
+/// project folders or inside one. Without `path`: the project folders themselves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ProjectBrowseParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectFolder {
+    pub name: String,
+    pub path: String,
+    /// Set when the folder is already a workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectBrowse {
+    /// The folders projects may be created in (absolute).
+    pub roots: Vec<String>,
+    /// The folder listed; `None` when listing the roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// One level up, while that is still a root or inside one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Subfolders, by name; hidden folders are left out.
+    pub folders: Vec<ProjectFolder>,
+}
+
+/// `project.create`: make `path` (inside a project folder) a workspace, or
+/// first create the new folder `name` in `parent` (a project folder or inside one).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ProjectCreateParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `project.set_roots`: the folders phones may create projects in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRootsParams {
+    pub roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

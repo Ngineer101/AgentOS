@@ -111,7 +111,8 @@ impl TestHost {
             .call(methods::WORKSPACE_LIST, serde_json::json!({}))
             .await
             .unwrap();
-        if let Some(w) = list.first() {
+        // The built-in Quick tasks workspace is always listed; use a real one.
+        if let Some(w) = list.iter().find(|w| w.kind != WorkspaceKind::Scratch) {
             return w.workspace_id.clone();
         }
         c.add_workspace(self.workspace.to_str().unwrap(), None)

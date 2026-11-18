@@ -46,12 +46,35 @@ pub fn os_name() -> &'static str {
     }
 }
 
+/// The built-in "Quick tasks" workspace: open web on, every connector on, at
+/// first; both can be changed like any workspace's.
+fn ensure_quick_workspace(store: &Store, cfg: &HostConfig) -> Result<()> {
+    let connectors = store
+        .connector_list()?
+        .into_iter()
+        .map(|c| c.connector_id)
+        .collect();
+    store.workspace_ensure(&Workspace {
+        workspace_id: QUICK_WORKSPACE_ID.into(),
+        name: "Quick tasks".into(),
+        path: cfg.scratch_dir().display().to_string(),
+        kind: WorkspaceKind::Scratch,
+        network: NetworkProfile {
+            presets: vec![NetworkPreset::Web],
+            custom_hosts: vec![],
+        },
+        connectors,
+        created_at: 0,
+    })
+}
+
 impl Host {
     /// Open storage and build the host. Does not start listening.
     pub fn open(cfg: HostConfig) -> Result<Arc<Host>> {
         cfg.prepare()?;
         let store = Arc::new(Store::open(&cfg.db_path())?);
         let host_id = store.ensure_host(os_name(), env!("CARGO_PKG_VERSION"))?;
+        ensure_quick_workspace(&store, &cfg)?;
         let secrets: Arc<dyn SecretStore> = Arc::from(crate::secrets::open(
             &store,
             &cfg.data_dir,

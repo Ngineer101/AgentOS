@@ -35,6 +35,12 @@ pub const CONNECTOR_REMOVE: &str = "connector.remove";
 pub const CONNECTOR_SIGN_IN: &str = "connector.sign_in";
 pub const CONNECTOR_REFRESH: &str = "connector.refresh";
 
+/// New workspaces from any client (phones too), but only inside the project
+/// folders chosen on the desktop (`project.set_roots`, admin only).
+pub const PROJECT_BROWSE: &str = "project.browse";
+pub const PROJECT_CREATE: &str = "project.create";
+pub const PROJECT_SET_ROOTS: &str = "project.set_roots";
+
 /// Agent profiles: extra logins of an agent, each with its own config folder.
 /// `host.info` lists them too (one `agents` entry per login).
 pub const AGENT_PROFILE_LIST: &str = "agent.profile_list";
@@ -123,13 +129,16 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
-        | VOICE_TRANSCRIBE => Sessions,
+        | VOICE_TRANSCRIBE
+        // Bounded by the project folders, which only an admin sets.
+        | PROJECT_BROWSE | PROJECT_CREATE => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
         | DEVICE_PAIR_START | DEVICE_PAIR_CONFIRM | DEVICE_RENAME | DEVICE_REVOKE
         // A profile's folder becomes writable inside every session that uses it.
-        | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE => Admin,
+        | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE
+        | PROJECT_SET_ROOTS => Admin,
         _ => return None,
     })
 }
@@ -152,6 +161,7 @@ mod tests {
             DEVICE_REVOKE,
             AGENT_PROFILE_ADD,
             AGENT_PROFILE_REMOVE,
+            PROJECT_SET_ROOTS,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }
@@ -168,6 +178,8 @@ mod tests {
             VOICE_DOWNLOAD,
             VOICE_TRANSCRIBE,
             AGENT_PROFILE_LIST,
+            PROJECT_BROWSE,
+            PROJECT_CREATE,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

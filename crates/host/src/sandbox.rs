@@ -86,6 +86,7 @@ pub fn profile_hosts(profile: &NetworkProfile) -> Vec<String> {
         let list = match p {
             NetworkPreset::Packages => PACKAGE_HOSTS,
             NetworkPreset::Github => GITHUB_HOSTS,
+            NetworkPreset::Web => &[crate::proxy::ANY_PUBLIC_HOST],
         };
         hosts.extend(list.iter().map(|s| s.to_string()));
     }
@@ -124,6 +125,8 @@ pub fn policy_for(
     // MCP gateway socket and every other session's temp folder.
     deny_read.push(cfg.data_dir.clone());
     deny_read.push(cfg.runtime_dir.clone());
+    // Other quick tasks' folders (this session's own is bound back in when it is one).
+    deny_read.push(cfg.scratch_dir());
     if let Some(p) = cfg.socket_path.parent() {
         deny_read.push(p.to_path_buf());
     }
@@ -141,7 +144,13 @@ pub fn policy_for(
     ];
 
     let mut allowed_hosts = agent.hosts.clone();
-    allowed_hosts.extend(profile_hosts(profile));
+    // The runtime only needs a list to turn proxying on; the egress proxy
+    // decides, so "any public host" stays out of it.
+    allowed_hosts.extend(
+        profile_hosts(profile)
+            .into_iter()
+            .filter(|h| h != crate::proxy::ANY_PUBLIC_HOST),
+    );
     allowed_hosts.sort();
     allowed_hosts.dedup();
 
@@ -564,6 +573,21 @@ mod tests {
             config_dir: dir.into(),
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn open_web_stays_with_the_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let spec = crate::agents::spec(AgentKind::Claude, &cfg);
+        let web = NetworkProfile { presets: vec![NetworkPreset::Web], custom_hosts: vec![] };
+        let p = policy_for(&cfg, &spec, Path::new("/work/repo"), Path::new("/tmp/ah/s1"), &web);
+        // The runtime gets the agent's own hosts only; the proxy gets "*".
+        assert!(!p.allowed_hosts.iter().any(|h| h == crate::proxy::ANY_PUBLIC_HOST));
+        assert!(profile_hosts(&web).contains(&crate::proxy::ANY_PUBLIC_HOST.to_string()));
+        // Quick tasks' folders are hidden from every session.
+        assert!(p.deny_read.contains(&cfg.scratch_dir()));
     }
 
     #[test]

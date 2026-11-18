@@ -271,6 +271,10 @@ impl Conn {
             }
             m::HOST_INFO | m::HOST_CHECK => to_value(h.info()),
 
+            m::PROJECT_BROWSE => to_value(crate::projects::browse(&h, params(p)?)?),
+            m::PROJECT_CREATE => to_value(crate::projects::create(&h, params(p)?)?),
+            m::PROJECT_SET_ROOTS => to_value(crate::projects::set_roots(&h, params(p)?)?),
+
             m::AGENT_PROFILE_LIST => to_value(h.ctx.store.profile_list().map_err(internal)?),
             m::AGENT_PROFILE_ADD => to_value(crate::profiles::add(&h, params(p)?)?),
             m::AGENT_PROFILE_REMOVE => {
@@ -284,6 +288,11 @@ impl Conn {
             m::WORKSPACE_UPDATE => to_value(workspace_update(&h, params(p)?)?),
             m::WORKSPACE_REMOVE => {
                 let id: IdParams = params(p)?;
+                if id.id == QUICK_WORKSPACE_ID {
+                    return Err(RpcError::invalid_params(
+                        "Quick tasks is built in; turn its open web or connectors off instead",
+                    ));
+                }
                 let live = h
                     .ctx
                     .store
@@ -555,7 +564,8 @@ fn validate_hosts(hosts: &[String]) -> Result<(), RpcError> {
     Ok(())
 }
 
-fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcError> {
+/// Add a folder as a workspace, after every check (also used by `project.create`).
+pub fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcError> {
     let raw = PathBuf::from(&p.path);
     if !raw.is_absolute() {
         return Err(RpcError::invalid_params("path must be absolute"));
@@ -571,7 +581,7 @@ fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcError>
             "refusing to use / or your home folder as a workspace; pick a project folder",
         ));
     }
-    for protected in [&h.ctx.cfg.data_dir, &h.ctx.cfg.runtime_dir] {
+    for protected in [&h.ctx.cfg.data_dir, &h.ctx.cfg.runtime_dir, &h.ctx.cfg.scratch_dir()] {
         let prot = std::fs::canonicalize(protected).unwrap_or(protected.clone());
         if path.starts_with(&prot) || prot.starts_with(&path) {
             return Err(RpcError::invalid_params(

@@ -39,6 +39,21 @@ agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
 agenthost voice download                      # local speech model for voice input (once)
 ```
 
+No project needed? Use the built-in **Quick tasks** workspace: each session
+gets a fresh, empty folder of its own, and open web lets the agent look things
+up on any public site (local and private addresses stay refused). Switch open
+web off on the desktop's Workspaces screen, or with
+`agenthost workspace set quick --profile agent-only`.
+
+```sh
+agenthost run quick claude "What changed in the latest Rust release?"
+```
+
+New projects from the phone: the phone can turn a folder inside your project
+folders (default `~/Code`) into a workspace, or create a new one there. Only
+the desktop chooses those folders (`agenthost project roots --set ~/Code,~/Work`);
+`agenthost project ls|use|new` does the same from the CLI.
+
 Several subscriptions of one agent (a work and a personal Claude account,
 say)? Give each its own config folder, as you would with `CLAUDE_CONFIG_DIR`,
 `CODEX_HOME`, `GEMINI_CLI_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux

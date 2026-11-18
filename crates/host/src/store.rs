@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS connectors (
     oauth_meta TEXT,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agent_profiles (
     profile_id TEXT PRIMARY KEY,
     agent TEXT NOT NULL,
@@ -381,6 +385,50 @@ impl Store {
                 serde_json::to_string(&w.connectors)?,
                 w.created_at
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Insert a built-in workspace once; bring it back if it was removed.
+    pub fn workspace_ensure(&self, w: &Workspace) -> Result<()> {
+        let db = self.db();
+        db.execute(
+            &format!("INSERT OR IGNORE INTO workspaces ({WS_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
+            params![
+                w.workspace_id,
+                w.name,
+                w.path,
+                enum_str(&w.kind),
+                serde_json::to_string(&w.network)?,
+                serde_json::to_string(&w.connectors)?,
+                w.created_at
+            ],
+        )?;
+        // The folder follows the data folder if that moved.
+        db.execute(
+            "UPDATE workspaces SET removed_at = NULL, path = ?2, kind = ?3 WHERE workspace_id = ?1",
+            params![w.workspace_id, w.path, enum_str(&w.kind)],
+        )?;
+        Ok(())
+    }
+
+    // ---- settings ----
+
+    pub fn setting_get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        let v: Option<String> = self
+            .db()
+            .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0))
+            .optional()?;
+        Ok(match v {
+            Some(s) => Some(serde_json::from_str(&s)?),
+            None => None,
+        })
+    }
+
+    pub fn setting_set<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, serde_json::to_string(value)?],
         )?;
         Ok(())
     }

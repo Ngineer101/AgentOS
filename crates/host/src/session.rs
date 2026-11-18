@@ -109,14 +109,19 @@ impl SessionManager {
             .map_err(|e| RpcError::internal(e.to_string()))?
             .ok_or_else(|| RpcError::not_found(format!("no workspace {}", p.workspace_id)))?;
         // One live session per workspace: two sandboxes in one folder would
-        // remove each other's protective mount points.
-        let busy = self
+        // remove each other's protective mount points. Quick tasks each have
+        // a folder of their own.
+        let busy = if ws.kind == WorkspaceKind::Scratch {
+            None
+        } else {
+            self
             .ctx
             .store
             .session_list(Some(&ws.workspace_id))
             .map_err(|e| RpcError::internal(e.to_string()))?
             .into_iter()
-            .find(|s| !s.state.is_terminal());
+            .find(|s| !s.state.is_terminal())
+        };
         if let Some(b) = busy {
             return Err(RpcError::invalid_state(format!(
                 "workspace {} already has a live session ({}, {}); end it first",
@@ -361,7 +366,8 @@ impl SessionManager {
             return; // still running: their placeholders are still mounted
         }
         if let Ok(list) = self.ctx.store.workspace_list() {
-            for w in list {
+            // Quick tasks' folders are swept by their own sessions.
+            for w in list.into_iter().filter(|w| w.kind != WorkspaceKind::Scratch) {
                 sandbox::sweep_mount_points(Path::new(&w.path), self.started_at);
             }
         }
@@ -503,6 +509,12 @@ enum Exit {
     Shutdown,
 }
 
+/// A quick task's own folder. Kept after the session ends, with whatever the
+/// agent left there.
+pub fn scratch_folder(ctx: &Ctx, session_id: &str) -> PathBuf {
+    ctx.cfg.scratch_dir().join(session_id)
+}
+
 /// The session's agent spec: its profile's login (if it has one and the
 /// profile still exists), with every other profile's folder to hide.
 fn session_spec(ctx: &Ctx, session: &Session) -> AgentSpec {
@@ -528,6 +540,12 @@ impl Actor {
         rx: mpsc::UnboundedReceiver<Cmd>,
     ) -> Self {
         let spec = session_spec(&ctx, &session);
+        let mut workspace = workspace;
+        if workspace.kind == WorkspaceKind::Scratch {
+            workspace.path = scratch_folder(&ctx, &session.session_id)
+                .display()
+                .to_string();
+        }
         let short = session
             .session_id
             .trim_start_matches("ses_")
@@ -698,6 +716,9 @@ impl Actor {
                 .push(("CODEX_CONFIG".into(), thread_cfg.to_string()));
         }
         let workspace_path = PathBuf::from(&self.workspace.path);
+        if self.workspace.kind == WorkspaceKind::Scratch {
+            crate::config::create_private_dir(&workspace_path)?;
+        }
         if !workspace_path.is_dir() {
             return Err(StartFailure::new(
                 format!("workspace folder {} does not exist", self.workspace.path),
@@ -1429,7 +1450,8 @@ impl Actor {
         }
         sandbox::kill_group(&mut a.child);
         if !self.ctx.cfg.fake_agent_unsandboxed || self.spec.kind != AgentKind::Fake {
-            let others = self
+            let others = self.workspace.kind != WorkspaceKind::Scratch
+                && self
                 .ctx
                 .store
                 .session_list(Some(&self.workspace.workspace_id))

@@ -85,9 +85,20 @@ impl HostConfig {
         self.data_dir.join("logs")
     }
 
+    /// Quick tasks' folders (one per session), next to the data folder rather
+    /// than inside it, which sandboxes may not read.
+    pub fn scratch_dir(&self) -> PathBuf {
+        let name = self
+            .data_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "agenthost".into());
+        self.data_dir.with_file_name(format!("{name}-scratch"))
+    }
+
     /// Create directories with owner-only permissions and validate path lengths.
     pub fn prepare(&self) -> Result<()> {
-        for d in [&self.data_dir, &self.runtime_dir, &self.logs_dir()] {
+        for d in [&self.data_dir, &self.runtime_dir, &self.logs_dir(), &self.scratch_dir()] {
             create_private_dir(d)?;
         }
         if let Some(parent) = self.socket_path.parent() {

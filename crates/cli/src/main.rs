@@ -41,6 +41,9 @@ enum Cmd {
     /// Manage workspaces.
     #[command(subcommand, alias = "ws")]
     Workspace(WsCmd),
+    /// Projects: new workspaces inside the project folders (as a phone can).
+    #[command(subcommand)]
+    Project(ProjectCmd),
     /// Agent logins: add a profile per subscription (its own config folder).
     #[command(subcommand)]
     Agent(AgentCmd),
@@ -95,6 +98,22 @@ enum Cmd {
     /// Pair this CLI as a remote device (like a phone).
     #[command(subcommand)]
     Remote(RemoteCmd),
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// The project folders, or the subfolders of one (or of a folder inside one).
+    Ls { path: Option<String> },
+    /// Make a folder inside a project folder a workspace.
+    Use { path: String },
+    /// Create a new folder in a project folder (or inside one) as a workspace.
+    New { parent: String, name: String },
+    /// Show or replace the project folders (desktop only; default ~/Code).
+    Roots {
+        /// Replace them (comma separated).
+        #[arg(long, value_delimiter = ',')]
+        set: Option<Vec<String>>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -153,7 +172,7 @@ enum WsCmd {
         path: PathBuf,
         #[arg(long)]
         name: Option<String>,
-        /// Network presets: packages, github (comma separated).
+        /// Network presets: packages, github, web (any public site) (comma separated).
         #[arg(long, value_delimiter = ',')]
         profile: Vec<String>,
         /// Extra allowed hosts.
@@ -165,7 +184,7 @@ enum WsCmd {
         workspace: String,
         #[arg(long)]
         name: Option<String>,
-        /// Replace the network presets ("agent-only" for none).
+        /// Replace the network presets: packages, github, web ("agent-only" for none).
         #[arg(long, value_delimiter = ',')]
         profile: Option<Vec<String>>,
         /// Add one host to the custom profile.
@@ -340,6 +359,8 @@ fn print_json(v: &Value) {
 
 async fn resolve_workspace(c: &Client, s: &str) -> Result<Workspace> {
     let list: Vec<Workspace> = c.call(m::WORKSPACE_LIST, json!({})).await?;
+    // "quick": a quick task, in a fresh folder of its own.
+    let s = if s == "quick" { QUICK_WORKSPACE_ID } else { s };
     if let Some(w) = list.iter().find(|w| w.workspace_id == s || w.name == s) {
         return Ok(w.clone());
     }
@@ -406,9 +427,10 @@ fn parse_presets(v: &[String]) -> Result<Vec<NetworkPreset>> {
     for p in v {
         match p.trim() {
             "packages" => out.push(NetworkPreset::Packages),
+            "web" => out.push(NetworkPreset::Web),
             "github" => out.push(NetworkPreset::Github),
             "agent-only" | "" => {}
-            other => bail!("unknown profile {other:?}; use packages, github or agent-only"),
+            other => bail!("unknown profile {other:?}; use packages, github, web or agent-only"),
         }
     }
     Ok(out)
@@ -457,6 +479,62 @@ async fn run(cli: Cli) -> Result<()> {
                 print_status(&info);
             }
         }
+        Cmd::Project(p) => match p {
+            ProjectCmd::Ls { path } => {
+                let path = path.map(|p| {
+                    std::fs::canonicalize(&p)
+                        .map(|c| c.display().to_string())
+                        .unwrap_or(p)
+                });
+                let b: ProjectBrowse = c.call(m::PROJECT_BROWSE, json!({"path": path})).await?;
+                if json_out {
+                    print_json(&serde_json::to_value(&b)?);
+                } else {
+                    if b.path.is_none() {
+                        println!("project folders:");
+                    }
+                    for f in &b.folders {
+                        let mark = if f.workspace_id.is_some() { "  (workspace)" } else { "" };
+                        println!("  {}{mark}", if b.path.is_none() { &f.path } else { &f.name });
+                    }
+                    if b.path.is_some() && b.folders.is_empty() {
+                        println!("  (no folders)");
+                    }
+                }
+            }
+            ProjectCmd::Use { path } => {
+                let path = std::fs::canonicalize(&path)
+                    .map(|c| c.display().to_string())
+                    .unwrap_or(path);
+                let w: Workspace = c.call(m::PROJECT_CREATE, json!({"path": path})).await?;
+                print_workspace_added(&w, json_out)?;
+            }
+            ProjectCmd::New { parent, name } => {
+                let parent = std::fs::canonicalize(&parent)
+                    .map(|c| c.display().to_string())
+                    .unwrap_or(parent);
+                let w: Workspace = c
+                    .call(m::PROJECT_CREATE, json!({"parent": parent, "name": name}))
+                    .await?;
+                print_workspace_added(&w, json_out)?;
+            }
+            ProjectCmd::Roots { set } => {
+                let roots: Vec<String> = match set {
+                    Some(r) => c.call(m::PROJECT_SET_ROOTS, json!({"roots": r})).await?,
+                    None => {
+                        let b: ProjectBrowse = c.call(m::PROJECT_BROWSE, json!({})).await?;
+                        b.roots
+                    }
+                };
+                if json_out {
+                    print_json(&serde_json::to_value(&roots)?);
+                } else {
+                    for r in roots {
+                        println!("{r}");
+                    }
+                }
+            }
+        },
         Cmd::Agent(a) => match a {
             AgentCmd::List => {
                 let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
@@ -1182,6 +1260,15 @@ fn ago(ts: i64) -> String {
         s if s < 86400 => format!("{}h ago", s / 3600),
         s => format!("{}d ago", s / 86400),
     }
+}
+
+fn print_workspace_added(w: &Workspace, json_out: bool) -> Result<()> {
+    if json_out {
+        print_json(&serde_json::to_value(w)?);
+    } else {
+        println!("{}  {}  {}", w.workspace_id, w.name, w.path);
+    }
+    Ok(())
 }
 
 /// One line per login; profiles show their name (use it as agent:name) and folder.

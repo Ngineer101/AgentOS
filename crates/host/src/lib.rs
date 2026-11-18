@@ -13,6 +13,7 @@ pub mod ctx;
 pub mod host;
 pub mod mcp;
 pub mod profiles;
+pub mod projects;
 pub mod proxy;
 pub mod relay_dev;
 pub mod remote;

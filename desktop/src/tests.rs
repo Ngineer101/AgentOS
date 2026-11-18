@@ -53,8 +53,9 @@ fn desktop_model_runs_a_session_against_a_real_host() {
     // Add a workspace, start a session, send a prompt: all through the UI's own actions.
     app.ws_path.replace_text(work.to_str().unwrap());
     app.act("Add workspace", agenthost_proto::methods::WORKSPACE_ADD, serde_json::json!({"path": work}), bridge::Refresh::Workspaces);
-    pump(&mut app, |a| !a.workspaces.is_empty());
-    app.new_ws = Some(app.workspaces[0].workspace_id.clone());
+    // Quick tasks is always listed; wait for the folder just added.
+    pump(&mut app, |a| a.workspaces.iter().any(|w| w.kind != WorkspaceKind::Scratch));
+    app.new_ws = app.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).map(|w| w.workspace_id.clone());
     app.new_agent = Some("fake".into());
     app.call(bridge::Tag::SessionCreated, agenthost_proto::methods::SESSION_CREATE, serde_json::json!({"workspace_id": app.new_ws, "agent": "fake"}));
     pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).map(|s| s.state == SessionState::Idle).unwrap_or(false)));
@@ -158,14 +159,14 @@ fn replies_show_live_in_the_window() {
         r.get()
     };
     let t0 = Instant::now();
-    while !check(&mut ui, &|s| !s.workspaces.is_empty() && s.conn == Conn::Connected) {
+    while !check(&mut ui, &|s| s.workspaces.iter().any(|w| w.kind != WorkspaceKind::Scratch) && s.conn == Conn::Connected) {
         ui.frame(0.016);
         std::thread::sleep(Duration::from_millis(16));
         assert!(t0.elapsed() < Duration::from_secs(20), "workspace");
     }
     ready.set(true);
     ui.update(|s, _| {
-        let ws = s.workspaces[0].workspace_id.clone();
+        let ws = s.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).unwrap().workspace_id.clone();
         s.call(bridge::Tag::SessionCreated, agenthost_proto::methods::SESSION_CREATE, serde_json::json!({"workspace_id": ws, "agent": "fake"}));
     });
     let t0 = Instant::now();
@@ -280,8 +281,8 @@ fn a_lost_event_stream_heals_without_reopening() {
     };
     wait(&mut app, &|a| a.conn == Conn::Connected);
     app.act("Add workspace", agenthost_proto::methods::WORKSPACE_ADD, serde_json::json!({"path": work}), bridge::Refresh::Workspaces);
-    wait(&mut app, &|a| !a.workspaces.is_empty());
-    let ws = app.workspaces[0].workspace_id.clone();
+    wait(&mut app, &|a| a.workspaces.iter().any(|w| w.kind != WorkspaceKind::Scratch));
+    let ws = app.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).unwrap().workspace_id.clone();
     app.call(bridge::Tag::SessionCreated, agenthost_proto::methods::SESSION_CREATE, serde_json::json!({"workspace_id": ws, "agent": "fake"}));
     wait(&mut app, &|a| matches!(&a.screen, Screen::Session(id) if a.session(id).map(|s| s.state == SessionState::Idle).unwrap_or(false) && a.sub_ids.contains_key(id)));
     let Screen::Session(sid) = app.screen.clone() else { unreachable!() };

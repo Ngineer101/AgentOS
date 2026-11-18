@@ -137,10 +137,18 @@ impl EgressProxy {
 // Policy
 // ---------------------------------------------------------------------------
 
-/// Whether `host:port` matches an allowlist entry (`name`, `*.suffix`, optional `:port`).
+/// The allowlist entry for "any public host" (the `web` preset). Users can't
+/// type it as a custom host; addresses are still checked by [`ip_is_denied`].
+pub const ANY_PUBLIC_HOST: &str = "*";
+
+/// Whether `host:port` matches an allowlist entry (`name`, `*.suffix`, optional
+/// `:port`, or [`ANY_PUBLIC_HOST`]).
 pub fn host_allowed(allowed: &[String], host: &str, port: u16) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     allowed.iter().any(|entry| {
+        if entry == ANY_PUBLIC_HOST {
+            return true;
+        }
         let entry = entry.trim().to_ascii_lowercase();
         let (pat, pport) = match entry.rsplit_once(':') {
             Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) && !h.contains(':') => {
@@ -534,6 +542,17 @@ mod tests {
         assert!(!host_allowed(&a, "evilgithub.com", 443));
         assert!(host_allowed(&a, "example.org", 8443));
         assert!(!host_allowed(&a, "example.org", 443));
+    }
+
+    #[test]
+    fn open_web_allows_any_name_but_no_private_address() {
+        let open = vec![ANY_PUBLIC_HOST.to_string()];
+        assert!(host_allowed(&open, "example.org", 443));
+        assert!(host_allowed(&open, "en.wikipedia.org", 80));
+        // Names are allowed; where they resolve is checked separately.
+        assert!(ip_is_denied("10.0.0.1".parse().unwrap()));
+        assert!(ip_is_denied("127.0.0.1".parse().unwrap()));
+        assert!(!host_allowed(&["example.org".to_string()], "other.org", 443));
     }
 
     #[test]
