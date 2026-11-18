@@ -454,6 +454,84 @@ async fn tool(
     Some((ok, output))
 }
 
+/// `_meta` the Claude ACP adapter puts on a tool report: the tool's name
+/// and, inside a subagent, the subagent's `Agent` call.
+fn claude_meta(tool_name: Option<&str>, parent: Option<&str>) -> Value {
+    let mut cc = serde_json::Map::new();
+    if let Some(n) = tool_name {
+        cc.insert("toolName".into(), json!(n));
+    }
+    if let Some(p) = parent {
+        cc.insert("parentToolUseId".into(), json!(p));
+    }
+    json!({"claudeCode": cc})
+}
+
+/// Two parallel subagents, the way the Claude ACP adapter reports them to a
+/// client without the `subagents` capability: each starts as an `Agent`
+/// tool call, and everything it does is stamped with that call's id.
+async fn subagents(agent: &Agent, sid: &str) {
+    let (a, b) = ("toolu_sub_a", "toolu_sub_b");
+    let up = |v: Value| agent.update(sid, v);
+    let chunk = |parent: &str, kind: &str, text: &str| {
+        json!({"sessionUpdate": kind, "content": {"type":"text","text": text},
+               "_meta": claude_meta(None, Some(parent))})
+    };
+    let call = |id: &str, parent: &str, cmd: &str| {
+        json!({"sessionUpdate":"tool_call","toolCallId": id, "title": format!("`{cmd}`"),
+               "kind":"execute","status":"pending","rawInput":{"command": cmd},
+               "_meta": claude_meta(Some("Bash"), Some(parent))})
+    };
+    let done = |id: &str, parent: Option<&str>, ok: bool, out: &str| {
+        let mut v = json!({"sessionUpdate":"tool_call_update","toolCallId": id,
+               "status": if ok {"completed"} else {"failed"},
+               "content":[{"type":"content","content":{"type":"text","text": out}}]});
+        if parent.is_some() {
+            v["_meta"] = claude_meta(Some("Bash"), parent);
+        }
+        v
+    };
+    let input_a = json!({"description":"Review the parser","subagent_type":"general-purpose","prompt":"Read src/parser.rs and report problems."});
+    let input_b = json!({"description":"Review the lexer","subagent_type":"Explore","prompt":"Read src/lexer.rs and report problems."});
+
+    say(agent, sid, "I'll split this between two subagents.").await;
+    // A streams in: its input arrives in a later update, as with a streamed
+    // tool_use. B arrives whole.
+    up(json!({"sessionUpdate":"tool_call","toolCallId": a,"title":"Agent","kind":"think","status":"pending","rawInput":{},"_meta": claude_meta(Some("Agent"), None)})).await;
+    up(json!({"sessionUpdate":"tool_call","toolCallId": b,"title":"Review the lexer","kind":"think","status":"pending","rawInput": input_b,"_meta": claude_meta(Some("Agent"), None)})).await;
+    up(json!({"sessionUpdate":"tool_call_update","toolCallId": a,"title":"Review the parser","rawInput": input_a,"status":"in_progress","_meta": claude_meta(Some("Agent"), None)})).await;
+    up(json!({"sessionUpdate":"tool_call_update","toolCallId": b,"status":"in_progress","_meta": claude_meta(Some("Agent"), None)})).await;
+
+    up(chunk(a, "agent_message_chunk", "Looking at the ")).await;
+    up(chunk(b, "agent_message_chunk", "Checking ")).await;
+    up(chunk(a, "agent_message_chunk", "parser.")).await;
+    up(chunk(b, "agent_thought_chunk", "the lexer is probably fine")).await;
+    up(chunk(b, "agent_message_chunk", "the lexer.")).await;
+
+    up(call("toolu_a1", a, "ls src")).await;
+    up(call("toolu_b1", b, "false")).await;
+    up(done("toolu_b1", Some(b), false, "exit 1")).await;
+    // A later update that lost the parent stamp.
+    up(done("toolu_a1", None, true, "lexer.rs\nparser.rs")).await;
+    // The same failing call twice in each subagent: four in all, two each.
+    up(call("toolu_b2", b, "false")).await;
+    up(call("toolu_a2", a, "false")).await;
+    up(done("toolu_a2", Some(a), false, "exit 1")).await;
+    up(done("toolu_b2", Some(b), false, "exit 1")).await;
+    up(call("toolu_a3", a, "false")).await;
+    up(done("toolu_a3", Some(a), false, "exit 1")).await;
+
+    up(chunk(b, "agent_message_chunk", "Lexer is fine.")).await;
+    up(chunk(a, "agent_message_chunk", "Parser is fine.")).await;
+
+    for (id, report) in [(b, "Report B: the lexer has no problems."), (a, "Report A: the parser has no problems.")] {
+        up(json!({"sessionUpdate":"tool_call_update","toolCallId": id,"status":"completed",
+                  "content":[{"type":"content","content":{"type":"text","text": report}}],
+                  "_meta": claude_meta(Some("Agent"), None)})).await;
+    }
+    say(agent, sid, "Both subagents are done.").await;
+}
+
 async fn run_sh(cmd: &str, cwd: &str) -> (bool, String) {
     match tokio::process::Command::new("sh")
         .arg("-c")
@@ -552,6 +630,7 @@ async fn run_prompt(
             .await;
             tokio::time::sleep(Duration::from_millis(50)).await;
         },
+        "subagents" => subagents(agent, sid).await,
         "crash" => {
             say(agent, sid, "about to crash").await;
             tokio::time::sleep(Duration::from_millis(50)).await;

@@ -1663,6 +1663,12 @@ impl Renderer {
                 println!("\x1b[2m(btw) {}\x1b[0m", p["text"].as_str().unwrap_or(""));
             }
             EventType::SideEnd => {}
+            EventType::SubagentMessage => {
+                // A subagent's words, under its call (one level: subagents
+                // don't start subagents).
+                let t = first_lines(p["text"].as_str().unwrap_or(""), 3);
+                println!("\x1b[2m    │ {}\x1b[0m", t.replace('\n', "\n    │ "));
+            }
             EventType::AgentThought => {
                 let t = p["text"].as_str().unwrap_or("");
                 println!("\x1b[2m(thinking) {}\x1b[0m", first_lines(t, 3));
@@ -1673,11 +1679,26 @@ impl Renderer {
                     v => first_lines(&v.to_string(), 1),
                 };
                 let src = if p["source"] == "mcp" { " [mcp]" } else { "" };
-                println!(
-                    "\x1b[36m⚙ {}{src}\x1b[0m {}",
-                    p["name"].as_str().unwrap_or("tool"),
-                    truncate_str(&args, 160)
-                );
+                let indent = if p["parent_tool_call_id"].is_string() { "    " } else { "" };
+                if let Some(sub) = p["subagent"].as_object() {
+                    let what = sub
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .or(p["name"].as_str())
+                        .unwrap_or("subagent");
+                    let kind = sub
+                        .get("agent_type")
+                        .and_then(Value::as_str)
+                        .map(|t| format!(" ({t})"))
+                        .unwrap_or_default();
+                    println!("{indent}\x1b[35m⤷ subagent: {what}{kind}\x1b[0m");
+                } else {
+                    println!(
+                        "{indent}\x1b[36m⚙ {}{src}\x1b[0m {}",
+                        p["name"].as_str().unwrap_or("tool"),
+                        truncate_str(&args, 160)
+                    );
+                }
             }
             EventType::ToolResult => {
                 let out = p["output"].as_str().unwrap_or("");
@@ -1691,9 +1712,10 @@ impl Renderer {
                 } else {
                     ""
                 };
+                let indent = if p["parent_tool_call_id"].is_string() { "    " } else { "" };
                 println!(
-                    "  {mark} {}{denied}",
-                    truncate_str(&first_lines(out, 4), 400).replace('\n', "\n    ")
+                    "{indent}  {mark} {}{denied}",
+                    truncate_str(&first_lines(out, 4), 400).replace('\n', &format!("\n{indent}    "))
                 );
             }
             EventType::NetDenied => {

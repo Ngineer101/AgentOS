@@ -665,6 +665,41 @@ struct ToolInfo {
     kind: Value,
     raw_input: Value,
     locations: Value,
+    /// The agent's own name for the tool (Claude: `_meta.claudeCode.toolName`).
+    tool_name: Option<String>,
+    /// The subagent call this call was made inside
+    /// (Claude: `_meta.claudeCode.parentToolUseId`); later updates of a call
+    /// can lose it, so the first one seen is kept.
+    parent: Option<String>,
+}
+
+/// `_meta.claudeCode.parentToolUseId` of an update: the subagent's
+/// `Agent`/`Task` call that produced it, if a subagent did.
+fn parent_tool_use_id(u: &Value) -> Option<String> {
+    u["_meta"]["claudeCode"]["parentToolUseId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Whether a tool starts a subagent (Claude Code's `Agent`, formerly `Task`).
+fn is_subagent_tool(name: Option<&str>) -> bool {
+    matches!(name, Some("Agent" | "Task"))
+}
+
+/// `{description, agent_type, prompt}` of a subagent call, from its input.
+fn subagent_info(raw_input: &Value) -> Value {
+    let mut o = serde_json::Map::new();
+    for (from, to) in [
+        ("description", "description"),
+        ("subagent_type", "agent_type"),
+        ("prompt", "prompt"),
+    ] {
+        if let Some(v) = raw_input[from].as_str() {
+            o.insert(to.into(), json!(v));
+        }
+    }
+    Value::Object(o)
 }
 
 struct Running {
@@ -733,6 +768,10 @@ struct Actor {
     host_cancel_reason: Option<String>,
     /// Text being streamed: (event kind, accumulated text).
     buf: Option<(EventType, String)>,
+    /// What each running subagent is saying, by its parent tool call id, in
+    /// the order the subagents first spoke; kept apart from `buf`, since
+    /// parallel subagents interleave with each other and the main agent.
+    sub_bufs: Vec<(String, String)>,
     tools: HashMap<String, ToolInfo>,
     failures: HashMap<String, usize>,
     /// Ignore `session/update` while the agent replays history on load.
@@ -846,6 +885,7 @@ impl Actor {
             cancel_requested: false,
             host_cancel_reason: None,
             buf: None,
+            sub_bufs: Vec::new(),
             tools: HashMap::new(),
             failures: HashMap::new(),
             loading: false,
@@ -1464,7 +1504,7 @@ impl Actor {
                         _ => "still running".into(),
                     };
                     if self.turn.is_some() {
-                        self.flush();
+                        self.flush_all();
                         self.append(EventType::TurnEnd, json!({"stop_reason": "error", "host_reason": "the agent exited", "prompt_seq": self.turn_prompt_seq}));
                         self.turn = None;
                     }
@@ -1482,7 +1522,7 @@ impl Actor {
                     // The agent ignored session/cancel: restart it and resume.
                     self.cancel_deadline = None;
                     self.turn = None;
-                    self.flush();
+                    self.flush_all();
                     let reason = self.host_cancel_reason.take();
                     self.append(EventType::TurnEnd, json!({
                         "stop_reason": "cancelled",
@@ -1693,8 +1733,10 @@ impl Actor {
 
     /// An update from a side conversation's fork: only its answer counts.
     fn on_side_update(&mut self, side_id: &str, u: &Value) {
-        if u["sessionUpdate"].as_str() != Some("agent_message_chunk") {
-            return; // tool calls, thoughts, plans: not part of the answer
+        if u["sessionUpdate"].as_str() != Some("agent_message_chunk")
+            || parent_tool_use_id(u).is_some()
+        {
+            return; // tool calls, thoughts, plans, subagents: not the answer
         }
         let text = acp::content_text(&u["content"]);
         let Some(side) = self.sides.get_mut(side_id) else {
@@ -1818,7 +1860,7 @@ impl Actor {
 
     fn finish_turn(&mut self, r: Result<Value, RpcError>) {
         self.record_pending_calls();
-        self.flush();
+        self.flush_all();
         self.cancel_deadline = None;
         let mut payload = match &r {
             Ok(v) => json!({
@@ -1854,11 +1896,49 @@ impl Actor {
         }
     }
 
+    /// Write out the main agent's streamed text and every subagent's.
+    fn flush_all(&mut self) {
+        self.flush();
+        for (parent, text) in std::mem::take(&mut self.sub_bufs) {
+            self.append_subagent_text(&parent, text);
+        }
+    }
+
+    /// Write out what one subagent has said since its last step.
+    fn flush_subagent(&mut self, parent: &str) {
+        if let Some(i) = self.sub_bufs.iter().position(|(p, _)| p == parent) {
+            let (parent, text) = self.sub_bufs.remove(i);
+            self.append_subagent_text(&parent, text);
+        }
+    }
+
+    fn append_subagent_text(&self, parent: &str, text: String) {
+        if !text.trim().is_empty() {
+            self.append(
+                EventType::SubagentMessage,
+                json!({"parent_tool_call_id": parent, "text": text}),
+            );
+        }
+    }
+
+    /// A subagent's message chunk: coalesced per subagent, never part of the
+    /// main reply (and not streamed as deltas).
+    fn stream_subagent(&mut self, parent: &str, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.record_pending_calls_of(Some(parent));
+        match self.sub_bufs.iter_mut().find(|(p, _)| p == parent) {
+            Some((_, buf)) => buf.push_str(text),
+            None => self.sub_bufs.push((parent.to_string(), text.to_string())),
+        }
+    }
+
     fn stream(&mut self, kind: EventType, text: &str) {
         if text.is_empty() {
             return;
         }
-        self.record_pending_calls();
+        self.record_pending_calls_of(None);
         match &mut self.buf {
             Some((k, buf)) if *k == kind => buf.push_str(text),
             _ => {
@@ -1918,10 +1998,14 @@ impl Actor {
 
     async fn on_update(&mut self, u: &Value) {
         let kind = u["sessionUpdate"].as_str().unwrap_or_default();
+        let parent = parent_tool_use_id(u);
         match kind {
-            "agent_message_chunk" => {
-                self.stream(EventType::AgentMessage, &acp::content_text(&u["content"]))
-            }
+            "agent_message_chunk" => match parent {
+                Some(p) => self.stream_subagent(&p, &acp::content_text(&u["content"])),
+                None => self.stream(EventType::AgentMessage, &acp::content_text(&u["content"])),
+            },
+            // A subagent's thinking is dropped: its steps and words are shown.
+            "agent_thought_chunk" if parent.is_some() => {}
             "agent_thought_chunk" => {
                 self.stream(EventType::AgentThought, &acp::content_text(&u["content"]))
             }
@@ -1945,7 +2029,7 @@ impl Actor {
             return;
         }
         t.recorded = true;
-        let payload = json!({
+        let mut payload = json!({
             "tool_call_id": id,
             "name": t.title,
             "kind": t.kind,
@@ -1953,6 +2037,20 @@ impl Actor {
             "source": "sandbox",
             "locations": t.locations,
         });
+        if let Some(n) = &t.tool_name {
+            payload["tool_name"] = json!(n);
+        }
+        if is_subagent_tool(t.tool_name.as_deref()) {
+            payload["subagent"] = subagent_info(&t.raw_input);
+        }
+        let parent = t.parent.clone().filter(|p| p != id);
+        if let Some(p) = &parent {
+            payload["parent_tool_call_id"] = json!(p);
+            // The subagent's call comes first, then what it said before
+            // this step.
+            self.record_call(p);
+            self.flush_subagent(p);
+        }
         self.append(EventType::ToolCall, payload);
     }
 
@@ -1962,6 +2060,20 @@ impl Actor {
             .tools
             .iter()
             .filter(|(_, t)| !t.recorded)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for id in ids {
+            self.record_call(&id);
+        }
+    }
+
+    /// Record the pending calls of one agent (`None`: the main agent's)
+    /// before its text, leaving parallel subagents' calls to their input.
+    fn record_pending_calls_of(&mut self, parent: Option<&str>) {
+        let ids: Vec<String> = self
+            .tools
+            .iter()
+            .filter(|(_, t)| !t.recorded && t.parent.as_deref() == parent)
             .map(|(k, _)| k.clone())
             .collect();
         for id in ids {
@@ -1979,13 +2091,22 @@ impl Actor {
             Value::Object(o) => !o.is_empty(),
             _ => true,
         };
+        let parent = parent_tool_use_id(u);
+        let tool_name = u["_meta"]["claudeCode"]["toolName"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         if is_new || !self.tools.contains_key(&id) {
-            self.flush();
+            // A main-agent call ends the main agent's text; a subagent's
+            // call ends only that subagent's (in `record_call`).
+            if parent.is_none() {
+                self.flush();
+            }
             let title = u["title"].as_str().unwrap_or("tool").to_string();
             let raw_input = u.get("rawInput").cloned().unwrap_or(Value::Null);
             // Calls to our own MCP gateway are recorded by the gateway itself.
             let is_mcp = is_gateway_tool(&title, u);
-            let signature = format!("{title}\u{0}{raw_input}");
+            let signature = call_signature(parent.as_deref(), &title, &raw_input);
             self.tools.insert(
                 id.clone(),
                 ToolInfo {
@@ -1998,6 +2119,8 @@ impl Actor {
                     kind: u.get("kind").cloned().unwrap_or(Value::Null),
                     raw_input: raw_input.clone(),
                     locations: u.get("locations").cloned().unwrap_or(Value::Null),
+                    tool_name,
+                    parent,
                 },
             );
             if has_input(&raw_input) {
@@ -2010,9 +2133,15 @@ impl Actor {
                     t.is_mcp = is_gateway_tool(title, u);
                 }
             }
+            if t.parent.is_none() {
+                t.parent = parent;
+            }
+            if tool_name.is_some() {
+                t.tool_name = tool_name;
+            }
             if let Some(ri) = u.get("rawInput").filter(|v| has_input(v)) {
                 t.raw_input = ri.clone();
-                t.signature = format!("{}\u{0}{ri}", t.title);
+                t.signature = call_signature(t.parent.as_deref(), &t.title, ri);
             }
             if let Some(k) = u.get("kind") {
                 t.kind = k.clone();
@@ -2053,6 +2182,7 @@ impl Actor {
         let is_mcp = info.is_mcp;
         let signature = info.signature.clone();
         let title = info.title.clone();
+        let parent = info.parent.clone();
         let streamed = std::mem::take(&mut info.streamed);
         let mut output = acp::content_text(&u["content"]);
         if output.is_empty() {
@@ -2072,11 +2202,17 @@ impl Actor {
         }
         let (output, truncated) = truncate(&output, TOOL_OUTPUT_LIMIT);
         let sandbox_denied = looks_like_sandbox_denial(&output);
+        // A finished subagent's last words come before its report.
+        self.flush_subagent(&id);
+        if let Some(p) = &parent {
+            self.flush_subagent(p);
+        }
         if !is_mcp {
-            self.append(
-                EventType::ToolResult,
-                json!({"tool_call_id": id, "name": title, "status": status, "output": output, "truncated": truncated, "sandbox_denied": sandbox_denied, "exit_code": exit_code}),
-            );
+            let mut payload = json!({"tool_call_id": id, "name": title, "status": status, "output": output, "truncated": truncated, "sandbox_denied": sandbox_denied, "exit_code": exit_code});
+            if let Some(p) = &parent {
+                payload["parent_tool_call_id"] = json!(p);
+            }
+            self.append(EventType::ToolResult, payload);
         }
         if status == "failed" {
             let n = self.failures.entry(signature).or_insert(0);
@@ -2128,6 +2264,12 @@ impl Actor {
             );
         }
     }
+}
+
+/// What the repeat-failure guard counts: the same call by the same agent
+/// (parallel subagents doing the same thing are counted apart).
+fn call_signature(parent: Option<&str>, title: &str, raw_input: &Value) -> String {
+    format!("{}\u{0}{title}\u{0}{raw_input}", parent.unwrap_or(""))
 }
 
 /// Whether an ACP tool call is a call to our MCP gateway (named `agenthost`),

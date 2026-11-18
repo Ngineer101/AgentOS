@@ -479,6 +479,11 @@ pub enum EventType {
     AgentMessage,
     #[serde(rename = "agent.thought")]
     AgentThought,
+    /// `{tool_call_id, name, kind, arguments, source, locations}`, and
+    /// optionally `tool_name` (the agent's own name: `Agent`, `Bash`, …),
+    /// `parent_tool_call_id` (the subagent call it was made inside) and
+    /// `subagent` `{description, agent_type, prompt}` on a call that starts
+    /// a subagent.
     #[serde(rename = "tool.call")]
     ToolCall,
     #[serde(rename = "tool.result")]
@@ -500,7 +505,13 @@ pub enum EventType {
     /// `{side_id, stop_reason, error?}`: the side answer is complete.
     #[serde(rename = "side.end")]
     SideEnd,
+    /// `{parent_tool_call_id, text}`: what a subagent said, kept out of the
+    /// main reply. Its tool calls are ordinary `tool.call` / `tool.result`
+    /// events whose `parent_tool_call_id` names the subagent's call.
+    #[serde(rename = "subagent.message")]
+    SubagentMessage,
 }
+
 
 impl EventType {
     pub fn as_str(&self) -> &'static str {
@@ -518,6 +529,7 @@ impl EventType {
             EventType::SideQuestion => "side.question",
             EventType::SideMessage => "side.message",
             EventType::SideEnd => "side.end",
+            EventType::SubagentMessage => "subagent.message",
         }
     }
 
