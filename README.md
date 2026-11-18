@@ -86,14 +86,20 @@ command through the relay.
 
 Every session runs in a sandbox (bubblewrap + seccomp on Linux, Seatbelt on
 macOS, via Anthropic's `sandbox-runtime` at a pinned version) that can write
-only its workspace, its temp folder and its agent's own state, cannot read
+only its workspace, its temp folder, its agent's own state and a shared
+session tools folder (where agents install helpers for themselves with npm,
+pipx, uv, cargo or go, never into your home folder), cannot read
 secrets folders, other agents' credentials or the host's data, and has no
 network except the host's per-session egress proxy, which allows only the
 agent's provider hosts plus the workspace's profile, resolves names itself
 and refuses private addresses. Each agent gets a host-controlled
 configuration (no personal MCP servers, hooks or plugins). MCP connectors are
 reached only through the host's gateway, which holds the credentials and asks
-before write tools by default. The host listens on no network port. See
+before write tools by default. Installing a tool on your computer goes only
+through the gateway's built-in `agenthost__install_tool`: you see the exact
+command and the agent's reason, and it runs as you, outside the sandbox, only
+after you approve (a registry package name and plain version only, no shell,
+one at a time, logged to the audit log). The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development
