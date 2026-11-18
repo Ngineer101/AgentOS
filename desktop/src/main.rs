@@ -3,8 +3,14 @@
 mod audio;
 mod brand;
 mod bridge;
+mod commands;
 mod demo;
+mod icons;
+mod look;
 mod model;
+mod session;
+mod settings;
+mod sheet;
 mod view;
 #[cfg(test)]
 mod tests;
@@ -15,7 +21,14 @@ use rune::{AppSpec, Chrome, KeyEvent, Tx, Waker};
 fn setup(s: &mut App, waker: Waker) {
     if std::env::var_os("AGENTHOST_DESKTOP_OFFLINE").is_none() {
         s.bridge = Some(bridge::start(waker));
+        s.hostname = hostname();
     }
+}
+
+/// This computer's name for the sidebar's host line ("workstation").
+fn hostname() -> String {
+    let out = std::process::Command::new("hostname").arg("-s").output().or_else(|_| std::process::Command::new("hostname").output());
+    out.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|h| !h.is_empty()).unwrap_or_default()
 }
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
@@ -42,26 +55,33 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     changed
 }
 
-fn on_key(s: &mut App, ev: &KeyEvent, _: &mut Tx) -> bool {
-    if rune_kit::shell::is_sidebar_toggle(ev) {
-        s.sidebar.toggle();
-        return true;
-    }
-    false
+fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    commands::on_key(s, ev, tx)
 }
 
 pub(crate) fn app() -> rune::App<App> {
-    let chrome = Chrome { full_size_content: true, traffic_lights: Some((16.0, 25.0)), drag_regions: true };
-    rune::App::new(AppSpec {
+    let look = look::Look::current();
+    // macOS: content under a transparent titlebar, the traffic lights centred in the 52 pt
+    // toolbar band. GNOME keeps the window manager's frame.
+    let chrome = if look.mac() { Chrome { full_size_content: true, traffic_lights: Some((20.0, 20.0)), drag_regions: true } } else { Chrome::DEFAULT };
+    let families = if look.mac() { (".SF NS, SF Pro Text, Inter", "ui-monospace, SF Mono, Menlo") } else { ("Adwaita Sans, Cantarell, Inter", "Adwaita Mono, ui-monospace, monospace") };
+    let mut app = rune::App::new(AppSpec {
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: demo::SCENES,
         min_size: Some((760.0, 520.0)),
-        families: ("Inter", "ui-monospace"),
-        ..AppSpec::new("agenthost", (1180.0, 760.0), model::init, view::view)
+        families,
+        ..AppSpec::new("AgentHost", (1280.0, 800.0), model::init, view::view)
     })
     .chrome(chrome)
+    .standard_menus();
+    if look.mac() {
+        for item in commands::menu_bar() {
+            app = app.menu_item(item);
+        }
+    }
+    app
 }
 
 fn main() {

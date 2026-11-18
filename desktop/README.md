@@ -4,17 +4,40 @@ The full control surface, built with [Rune](https://github.com/anomalyco/rune)
 (pinned to rev `e7f3ad9`). It runs on the same machine as the host and talks
 to it over the Unix socket; if no host is running it starts `agenthostd run`.
 
-Screens: Sessions (sidebar, grouped by workspace), Session (live transcript,
-collapsible tool calls, inline denied hosts with one-click allow, approvals),
-New session, Workspaces, Connectors, Devices (pairing QR and code
-confirmation, rename, revoke), Host status.
+Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
+patterns, Linux gets GNOME / libadwaita. The look follows the OS;
+`AGENTHOST_DESKTOP_LOOK=macos|gnome` picks one, so both render on one machine.
+
+- **Sidebar**: sessions only, grouped by workspace with Quick tasks first, a
+  search field (⌘F / Ctrl+F) and the host line at the bottom (click it for
+  status). Live sessions are numbered ⌘1…⌘9 (Alt+1…9).
+- **Session**: the transcript in a 700 pt (GNOME 720 px) column: prompts,
+  Markdown replies (streaming), thoughts, tool calls (expand for output),
+  blocked hosts with "Allow for <workspace>", approvals inline with
+  Deny ⌥⌘D / Approve ⌥⌘A (Alt+D / Alt+A). The toolbar has a status capsule
+  (macOS) or the window an approval banner (GNOME), Stop turn and a session
+  menu. The composer attaches files, dictates, and shows its keys; ↑ in an
+  empty composer brings back your last message.
+- **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):
+  workspace, login ("Claude Code · Work"), optional first message, ⌘↩ starts.
+- **Settings** (⌘, / Ctrl+,): General (host, sandbox, voice, relay, Re-run
+  checks), Agents (logins and profiles), Workspaces (network rules, extra
+  hosts, connectors, project folders), Connectors (add with URL and token,
+  sign in, defaults and per-tool policy), Devices (pair with QR and code,
+  rename, revoke). Drawn over the main window rather than in a window of its
+  own: Rune's windows each own their state.
+- **Keys**: the macOS menu bar (File, Session, View, Settings…) lists every
+  shortcut; on GNOME, Ctrl+? opens the shortcuts window and F10 the main menu.
 
 ```sh
 cd desktop
 cargo run --release
 # Headless snapshots of every screen with sample data (no host needed):
-AGENTHOST_DESKTOP_OFFLINE=1 cargo run -- --snap session.png --scene session --size 1180x760
-#   scenes: session new workspaces connectors devices pairing pairing-confirm host offline
+AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.png --scene session --size 1280x800
+#   scenes: session session-compose session-voice-download session-no-sidebar session-menu main-menu
+#           home new new-login-menu settings-general settings-agents settings-agents-add
+#           settings-workspaces settings-connectors settings-connectors-add settings-devices
+#           pairing pairing-confirm shortcuts offline offline-home
 cargo test      # drives a real in-process host through the app's model and bridge
 ```
 
@@ -22,5 +45,6 @@ It is a separate Cargo workspace because Rune is a large GPU stack and patches
 several crates.io dependencies (winit, wgpu-hal, parley_engine, accesskit),
 which the host and CLI should not carry.
 
-Verified on Linux (headless rendering of every screen; the model and bridge
-against a real host). Not run as a window on macOS or Windows yet.
+Verified headless in both looks on macOS, and the model and bridge against a
+real host (sessions, the new-session sheet, approvals through a test MCP
+server, pairing through the dev relay).

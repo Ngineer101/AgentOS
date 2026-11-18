@@ -1,7 +1,8 @@
-//! Named scenes with sample data, for headless snapshots of every screen
-//! (`agenthost-desktop --snap out.png --scene session`).
+//! Named scenes with sample data, for headless snapshots of every screen and state
+//! (`agenthost-desktop --snap out.png --scene session`). Each renders in the look
+//! `AGENTHOST_DESKTOP_LOOK` picks (macos or gnome).
 
-use crate::model::{App, Conn, Pairing, Screen};
+use crate::model::{App, Conn, Menu, Pairing, Screen, Tab};
 use agenthost_proto::*;
 use serde_json::{json, Value};
 
@@ -9,12 +10,14 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn ev(sid: &str, seq: i64, kind: EventType, payload: Value) -> Event {
-    Event { session_id: sid.into(), seq, kind, payload, ts: now() - 60_000 + seq * 1000 }
+/// An event `at` ms after the session's first one (two minutes ago).
+fn ev(sid: &str, seq: i64, at: i64, kind: EventType, payload: Value) -> Event {
+    Event { session_id: sid.into(), seq, kind, payload, ts: now() - 120_000 + at }
 }
 
 fn base(s: &mut App) {
     s.conn = Conn::Connected;
+    s.hostname = "workstation".into();
     let t = now();
     s.project_roots = vec!["/home/nico/Code".into()];
     s.workspaces = vec![
@@ -45,12 +48,21 @@ fn base(s: &mut App) {
             connectors: vec![],
             created_at: t,
         },
+        Workspace {
+            workspace_id: "ws_demo".into(),
+            name: "demo".into(),
+            path: "/home/nico/Code/demo".into(),
+            kind: WorkspaceKind::Folder,
+            network: NetworkProfile::default(),
+            connectors: vec![],
+            created_at: t,
+        },
     ];
-    let sess = |id: &str, ws: &str, agent, state, title: &str, ago_ms: i64| Session {
+    let sess = |id: &str, ws: &str, agent, profile: Option<&str>, state, title: &str, ago_ms: i64| Session {
         session_id: id.into(),
         workspace_id: ws.into(),
         agent,
-        profile_id: None,
+        profile_id: profile.map(String::from),
         state,
         state_reason: None,
         acp_session_id: Some("x".into()),
@@ -60,10 +72,11 @@ fn base(s: &mut App) {
         last_seq: 0,
     };
     s.sessions = vec![
-        sess("ses_1", "ws_relay", AgentKind::Claude, SessionState::WaitingApproval, "Fix the flaky resume test", 40_000),
-        sess("ses_2", "ws_relay", AgentKind::Codex, SessionState::Running, "Add OAuth refresh", 300_000),
-        sess("ses_3", "ws_relay", AgentKind::Opencode, SessionState::Idle, "Review the relay worker", 7_200_000),
-        sess("ses_4", "ws_notes", AgentKind::Claude, SessionState::Ended, "Weekly summary", 90_000_000),
+        sess("ses_q", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), SessionState::Idle, "What changed in Rust 1.92?", 180_000),
+        sess("ses_1", "ws_relay", AgentKind::Claude, Some("prof_work"), SessionState::WaitingApproval, "Fix the flaky resume test", 40_000),
+        sess("ses_2", "ws_relay", AgentKind::Codex, None, SessionState::Running, "Add OAuth refresh", 300_000),
+        sess("ses_3", "ws_relay", AgentKind::Opencode, None, SessionState::Idle, "Review the relay worker", 7_200_000),
+        sess("ses_4", "ws_notes", AgentKind::Claude, None, SessionState::Ended, "Weekly summary", 90_000_000),
     ];
     s.connectors = vec![Connector {
         connector_id: "con_gh".into(),
@@ -79,6 +92,7 @@ fn base(s: &mut App) {
             ConnectorTool { name: "search_issues".into(), description: Some("Search issues and pull requests".into()), kind: ToolKind::Read, policy: ToolPolicy::Auto, policy_override: None },
             ConnectorTool { name: "get_file_contents".into(), description: Some("Read a file from a repository".into()), kind: ToolKind::Read, policy: ToolPolicy::Auto, policy_override: None },
             ConnectorTool { name: "create_issue".into(), description: Some("Open a new issue".into()), kind: ToolKind::Write, policy: ToolPolicy::Ask, policy_override: None },
+            ConnectorTool { name: "create_pull_request".into(), description: Some("Open a pull request".into()), kind: ToolKind::Write, policy: ToolPolicy::Auto, policy_override: Some(ToolPolicy::Auto) },
             ConnectorTool { name: "merge_pull_request".into(), description: Some("Merge a pull request".into()), kind: ToolKind::Write, policy: ToolPolicy::Disabled, policy_override: Some(ToolPolicy::Disabled) },
         ],
         created_at: t,
@@ -105,7 +119,22 @@ fn base(s: &mut App) {
     };
     s.connectors.push(sentry("con_sw", "Sentry (work)", "ok"));
     s.connectors.push(sentry("con_sp", "Sentry (personal)", "needs_sign_in"));
-    s.signing_in.insert("con_sp".into(), "https://mcp.sentry.dev/oauth/authorize?response_type=code&client_id=…".into());
+    s.connectors.push(Connector {
+        connector_id: "con_dw".into(),
+        name: "DeepWiki".into(),
+        url: "https://mcp.deepwiki.com/mcp".into(),
+        auth: ConnectorAuth::None,
+        enabled: true,
+        status: "ok".into(),
+        status_detail: None,
+        write_policy: ToolPolicy::Ask,
+        read_policy: ToolPolicy::Auto,
+        tools: ["read_wiki_structure", "read_wiki_contents", "ask_question"]
+            .iter()
+            .map(|n| ConnectorTool { name: n.to_string(), description: None, kind: ToolKind::Read, policy: ToolPolicy::Auto, policy_override: None })
+            .collect(),
+        created_at: t,
+    });
     s.devices = vec![Device {
         device_id: "dev_1".into(),
         name: "Nico's iPhone".into(),
@@ -120,31 +149,21 @@ fn base(s: &mut App) {
         os: "linux".into(),
         protocol_version: 2,
         agents: vec![
-            AgentStatus { agent: AgentKind::Codex, display_name: "Codex".into(), installed: true, version: Some("2.6.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("codex".into()), profile_name: None, config_dir: None },
-            AgentStatus { agent: AgentKind::Claude, display_name: "Claude Code".into(), installed: true, version: Some("0.107.0".into()), logged_in: true, available: true, problem: None, fix: None, profile_id: Some("claude".into()), profile_name: None, config_dir: None },
+            agent(AgentKind::Claude, "Claude Code", "2.1.323", Some("claude"), None, None, true),
+            agent(AgentKind::Claude, "Claude Code", "2.1.323", Some("prof_work"), Some("Work"), Some("/home/nico/.claude-work"), true),
+            agent(AgentKind::Claude, "Claude Code", "2.1.323", Some("prof_personal"), Some("Personal"), Some("/home/nico/.claude-p"), true),
+            agent(AgentKind::Codex, "Codex", "2.6.0", Some("codex"), None, None, true),
+            agent(AgentKind::Opencode, "OpenCode", "2.3.0", Some("opencode"), None, None, true),
             AgentStatus {
-                agent: AgentKind::Claude,
-                display_name: "Claude Code".into(),
+                agent: AgentKind::Gemini,
+                display_name: "Gemini CLI".into(),
                 installed: true,
-                version: Some("0.107.0".into()),
-                logged_in: true,
-                available: true,
-                problem: None,
-                fix: None,
-                profile_id: Some("prof_work".into()),
-                profile_name: Some("Work".into()),
-                config_dir: Some("/home/nico/.claude-work".into()),
-            },
-            AgentStatus {
-                agent: AgentKind::Opencode,
-                display_name: "OpenCode".into(),
-                installed: true,
-                version: Some("2.3.0".into()),
+                version: Some("0.9.1".into()),
                 logged_in: false,
                 available: false,
                 problem: Some("not logged in".into()),
-                fix: Some("opencode auth login".into()),
-                profile_id: Some("opencode".into()),
+                fix: Some("gemini auth login".into()),
+                profile_id: Some("gemini".into()),
                 profile_name: None,
                 config_dir: None,
             },
@@ -161,20 +180,35 @@ fn base(s: &mut App) {
     s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, progress: None, error: None });
 }
 
+fn agent(kind: AgentKind, name: &str, version: &str, id: Option<&str>, profile: Option<&str>, dir: Option<&str>, ok: bool) -> AgentStatus {
+    AgentStatus {
+        agent: kind,
+        display_name: name.into(),
+        installed: true,
+        version: Some(version.into()),
+        logged_in: ok,
+        available: ok,
+        problem: None,
+        fix: None,
+        profile_id: id.map(String::from),
+        profile_name: profile.map(String::from),
+        config_dir: dir.map(String::from),
+    }
+}
+
 fn transcript(s: &mut App) {
     let sid = "ses_1";
     let events = vec![
-        ev(sid, 1, EventType::SessionState, json!({"state": "created"})),
-        ev(sid, 2, EventType::Prompt, json!({"text": "The resume test fails about one run in ten. Find out why and fix it, then open an issue describing the root cause.", "attachments": [{"attachment_id": "att_1", "name": "ci-failure.log", "mime": "text/plain", "size": 48_213}, {"attachment_id": "att_2", "name": "screenshot.png", "mime": "image/png", "size": 1_204_311}]})),
-        ev(sid, 3, EventType::AgentThought, json!({"text": "Look at the test first, then the actor's restart path."})),
-        ev(sid, 4, EventType::ToolCall, json!({"tool_call_id": "t1", "name": "cargo test -p agenthost-host resume", "arguments": {"command": "cargo test -p agenthost-host resume"}, "source": "sandbox"})),
-        ev(sid, 5, EventType::ToolResult, json!({"tool_call_id": "t1", "status": "completed", "output": "running 1 test\ntest resume_after_host_restart_keeps_history ... ok\n\ntest result: ok. 1 passed"})),
-        ev(sid, 6, EventType::NetDenied, json!({"host": "index.crates.io", "port": 443, "reason": "host is not on the allow list"})),
-        ev(sid, 7, EventType::AgentMessage, json!({"text": "The test passes locally. The flake comes from the session list being read **before** the actor has written the resumed state:\n\n- `wait_state` polls every 25 ms\n- the restart can take longer under load\n\nI'll make the wait follow the event instead:\n\n```rust\nlet ev = bus.next_matching(|e| e.kind == EventType::State).await?;\n```\n\nThen I'll file the issue."})),
-        ev(sid, 8, EventType::ToolCall, json!({"tool_call_id": "t2", "name": "edit crates/host/tests/common/mod.rs", "arguments": {"path": "crates/host/tests/common/mod.rs"}, "source": "sandbox"})),
-        ev(sid, 9, EventType::ToolResult, json!({"tool_call_id": "t2", "status": "completed", "output": "1 file changed"})),
-        ev(sid, 10, EventType::ToolCall, json!({"tool_call_id": "t3", "name": "create_issue", "connector_name": "GitHub", "arguments": {"repo": "nico/relay", "title": "Resume test reads state before the actor writes it"}, "source": "mcp"})),
-        ev(sid, 11, EventType::ApprovalRequested, json!({"approval_id": "apr_1", "connector_name": "GitHub", "tool": "create_issue", "arguments": {"repo": "nico/relay", "title": "Resume test reads state before the actor writes it"}})),
+        ev(sid, 1, 0, EventType::SessionState, json!({"state": "created"})),
+        ev(sid, 2, 1_000, EventType::Prompt, json!({"text": "The resume test fails about one run in ten on CI. Find out why and fix it.", "device": "iPhone"})),
+        ev(sid, 3, 2_000, EventType::AgentThought, json!({"text": "Look at the test first, then the actor's restart path."})),
+        ev(sid, 4, 14_000, EventType::ToolCall, json!({"tool_call_id": "t1", "name": "cargo test -p agenthost-host resume", "kind": "execute", "arguments": {"command": "cargo test -p agenthost-host resume"}, "source": "sandbox"})),
+        ev(sid, 5, 22_400, EventType::ToolResult, json!({"tool_call_id": "t1", "status": "completed", "output": "running 1 test\ntest resume_after_host_restart_keeps_history ... ok\n\ntest result: ok. 1 passed; 0 failed; finished in 3.21s"})),
+        ev(sid, 6, 23_000, EventType::NetDenied, json!({"host": "index.crates.io", "port": 443, "reason": "host is not on the allow list"})),
+        ev(sid, 7, 30_000, EventType::AgentMessage, json!({"text": "The test passes locally. The flake comes from a race: `wait_state` polls before the resumed session writes its first event, so a slow CI runner sees the old state. I made the helper wait for the event instead and opened an issue to track the timeout."})),
+        ev(sid, 8, 31_000, EventType::ToolCall, json!({"tool_call_id": "t2", "name": "Edited crates/host/tests/common/mod.rs", "kind": "edit", "arguments": {"path": "crates/host/tests/common/mod.rs"}, "source": "sandbox"})),
+        ev(sid, 9, 31_600, EventType::ToolResult, json!({"tool_call_id": "t2", "status": "completed", "output": "1 file changed, 12 insertions(+), 3 deletions(-)"})),
+        ev(sid, 10, 33_000, EventType::ApprovalRequested, json!({"approval_id": "apr_1", "connector_name": "GitHub", "tool": "create_issue", "arguments": {"repo": "nico/relay", "title": "Resume test: wait for the first event, not the state", "body": "Flake seen in 1 of 10 CI runs …"}})),
     ];
     let t = s.transcripts.entry(sid.into()).or_default();
     t.last_seq = events.len() as i64;
@@ -187,21 +221,45 @@ fn transcript(s: &mut App) {
         tool: "create_issue".into(),
         arguments: json!({"repo": "nico/relay"}),
         requested_at: now(),
-        expires_at: now() + 600_000,
+        expires_at: now() + 570_000,
     }];
     s.expanded.insert("t1".into());
 }
 
+fn chip(s: &mut App) {
+    use crate::model::{FileState, PendingFile};
+    s.files.insert(
+        "ses_1".into(),
+        vec![PendingFile { local_id: 1, name: "ci-run-4812.log".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "ci-run-4812.log".into(), mime: "text/plain".into(), size: 49_152 }) }],
+    );
+}
+
+fn session(s: &mut App) {
+    base(s);
+    transcript(s);
+    s.screen = Screen::Session("ses_1".into());
+}
+
+fn pairing(s: &mut App, confirm: bool) {
+    base(s);
+    s.settings = Some(Tab::Devices);
+    s.pairing = Some(Pairing {
+        pairing_id: "pair_1".into(),
+        qr: "agenthost://pair?v=1&r=wss%3A%2F%2Frelay.example.workers.dev&id=ab7dbd0000000000000000000000000&hk=AAAA&s=BBBB&n=box".into(),
+        expires_at: now() + 120_000,
+        pending: confirm.then(|| PairingPending { pairing_id: "pair_1".into(), device_name: "Nico's iPhone".into(), short_code: "197 372".into() }),
+        done: None,
+    });
+}
+
 pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("session", |s| {
-        base(s);
-        transcript(s);
-        s.screen = Screen::Session("ses_1".into());
+        session(s);
+        chip(s);
     }),
     ("session-compose", |s| {
         use crate::model::{FileState, PendingFile};
-        base(s);
-        transcript(s);
+        session(s);
         s.approvals.clear();
         s.voice.as_mut().unwrap().ready = false;
         s.ask_voice_download = true;
@@ -213,64 +271,94 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
                 PendingFile { local_id: 2, name: "recording of the bug.mov".into(), state: FileState::Uploading },
             ],
         );
-        s.screen = Screen::Session("ses_1".into());
     }),
     ("session-voice-download", |s| {
-        base(s);
-        transcript(s);
+        session(s);
         s.approvals.clear();
         let v = s.voice.as_mut().unwrap();
         v.ready = false;
         v.progress = Some(VoiceProgress { received: 190_000_000, total: 475_271_763 });
         s.mic = crate::model::Mic::Transcribing;
-        s.screen = Screen::Session("ses_1".into());
+    }),
+    ("session-no-sidebar", |s| {
+        session(s);
+        s.sidebar_open = false;
+    }),
+    ("session-menu", |s| {
+        session(s);
+        s.menu = Some(Menu::Session);
+    }),
+    ("main-menu", |s| {
+        session(s);
+        s.menu = Some(Menu::Main);
+    }),
+    ("home", |s| {
+        base(s);
+        s.screen = Screen::Home;
     }),
     ("new", |s| {
-        base(s);
-        s.screen = Screen::NewSession;
+        session(s);
         s.new_ws = Some("ws_relay".into());
         s.new_agent = Some("prof_work".into());
+        s.new_open = true;
+        s.first_prompt.focused = true;
     }),
-    ("workspaces", |s| {
-        base(s);
-        s.screen = Screen::Workspaces;
+    ("new-login-menu", |s| {
+        session(s);
+        s.new_ws = Some("ws_relay".into());
+        s.new_agent = Some("prof_work".into());
+        s.new_open = true;
+        s.first_prompt.focused = true;
+        s.menu = Some(Menu::Login);
     }),
-    ("connectors", |s| {
+    ("settings-general", |s| {
         base(s);
-        s.screen = Screen::Connectors;
+        s.settings = Some(Tab::General);
     }),
-    ("devices", |s| {
+    ("settings-agents", |s| {
         base(s);
-        s.screen = Screen::Devices;
+        s.settings = Some(Tab::Agents);
+        s.sel_agent = Some("prof_work".into());
     }),
-    ("pairing", |s| {
+    ("settings-agents-add", |s| {
         base(s);
-        s.screen = Screen::Devices;
-        s.pairing = Some(Pairing {
-            pairing_id: "pair_1".into(),
-            qr: "agenthost://pair?v=1&r=wss%3A%2F%2Frelay.example.workers.dev&id=ab7dbd0000000000000000000000000&hk=AAAA&s=BBBB&n=box".into(),
-            expires_at: now() + 120_000,
-            pending: None,
-            done: None,
-        });
+        s.settings = Some(Tab::Agents);
+        s.adding_profile = true;
+        s.profile_agent = Some(AgentKind::Claude);
     }),
-    ("pairing-confirm", |s| {
+    ("settings-workspaces", |s| {
         base(s);
-        s.screen = Screen::Devices;
-        s.pairing = Some(Pairing {
-            pairing_id: "pair_1".into(),
-            pending: Some(PairingPending { pairing_id: "pair_1".into(), device_name: "Nico's iPhone".into(), short_code: "197 372".into() }),
-            ..Default::default()
-        });
+        s.settings = Some(Tab::Workspaces);
+        s.sel_ws = Some("ws_relay".into());
     }),
-    ("host", |s| {
+    ("settings-connectors", |s| {
         base(s);
-        s.screen = Screen::Host;
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_gh".into());
+    }),
+    ("settings-connectors-add", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.adding_connector = true;
+        s.signing_in.insert("con_sp".into(), "https://mcp.sentry.dev/oauth/authorize?response_type=code&client_id=…".into());
+    }),
+    ("settings-devices", |s| {
+        base(s);
+        s.settings = Some(Tab::Devices);
+    }),
+    ("pairing", |s| pairing(s, false)),
+    ("pairing-confirm", |s| pairing(s, true)),
+    ("shortcuts", |s| {
+        session(s);
+        s.shortcuts_open = true;
     }),
     ("offline", |s| {
-        base(s);
-        transcript(s);
+        session(s);
         s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
-        s.screen = Screen::Session("ses_1".into());
+    }),
+    ("offline-home", |s| {
+        base(s);
+        s.screen = Screen::Home;
+        s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
     }),
 ];

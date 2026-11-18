@@ -1,6 +1,7 @@
 //! The desktop's model and bridge against a real host (in process, fake agent).
 
 use crate::bridge;
+use crate::commands::{self, Cmd};
 use crate::model::{self, Conn, Screen};
 use agenthost_proto::*;
 use std::sync::Arc;
@@ -12,6 +13,10 @@ fn fake_agent() -> std::path::PathBuf {
     assert!(st.success());
     root.join("target/debug/agenthost-fake-agent").canonicalize().unwrap()
 }
+
+#[path = "../../crates/host/tests/common/mcp_server.rs"]
+#[allow(dead_code)]
+mod mcp_server;
 
 /// Tests that start a host share AGENTHOST_SOCKET, so they take turns.
 static HOST_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -143,7 +148,7 @@ fn replies_show_live_in_the_window() {
             std::thread::sleep(Duration::from_millis(16));
         }
     };
-    frames(&mut ui, &|u| u.find("nav-workspaces").is_some(), "first frame");
+    frames(&mut ui, &|u| u.find("nav-new").is_some() && u.find("sidebar-search").is_some(), "first frame");
     // Drive the app through its own state, as its handlers do.
     let ws = work.clone();
     ui.update(move |s, _| s.act("Add workspace", agenthost_proto::methods::WORKSPACE_ADD, serde_json::json!({"path": ws}), bridge::Refresh::Workspaces));
@@ -297,4 +302,172 @@ fn a_lost_event_stream_heals_without_reopening() {
     });
     let seqs: Vec<i64> = app.transcripts[&sid].events.iter().map(|e| e.seq).collect();
     assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "{seqs:?}");
+}
+
+/// A host on a temp dir with the fake agent; returns it with its socket path.
+fn start_host(rt: &tokio::runtime::Runtime, dir: &std::path::Path, relay: Option<String>) -> (Arc<agenthost_host::Host>, std::path::PathBuf) {
+    let mut cfg = agenthost_host::HostConfig::in_dir(dir);
+    cfg.enable_fake_agent = true;
+    cfg.fake_agent_unsandboxed = true;
+    cfg.fake_agent_path = Some(fake_agent());
+    cfg.home_dir = dir.join("home");
+    cfg.relay_url = relay;
+    std::fs::create_dir_all(&cfg.home_dir).unwrap();
+    let socket = cfg.socket_path.clone();
+    let h = rt.block_on(async {
+        let h = agenthost_host::Host::open(cfg).unwrap();
+        agenthost_host::start(h.clone()).await.unwrap();
+        h
+    });
+    (h, socket)
+}
+
+fn connect(socket: &std::path::Path) -> model::App {
+    std::env::set_var("AGENTHOST_SOCKET", socket);
+    let mut app = model::init();
+    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    pump(&mut app, |a| a.conn == Conn::Connected && a.info.is_some() && !a.workspaces.is_empty());
+    app
+}
+
+/// ⌘N's sheet: pick a workspace and a login, type a first message, Start. The session opens
+/// and the message goes as its first prompt.
+#[test]
+fn the_new_session_sheet_starts_a_session_with_its_first_message() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahs").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+
+    // ⇧⌘N preselects Quick tasks, which needs no folder.
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    assert!(app.new_open);
+    assert_eq!(app.new_ws.as_deref(), Some(QUICK_WORKSPACE_ID));
+    app.new_agent = Some("fake".into());
+    app.first_prompt.replace_text("hello from the sheet");
+    app.start_from_sheet();
+    assert!(!app.new_open, "the sheet closes on Start");
+    pump(&mut app, |a| {
+        let Screen::Session(id) = &a.screen else { return false };
+        a.transcripts.get(id).is_some_and(|t| t.events.iter().any(|e| e.kind == EventType::AgentMessage && e.payload["text"] == "echo: hello from the sheet"))
+    });
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    assert_eq!(app.session(&sid).unwrap().workspace_id, QUICK_WORKSPACE_ID);
+    // Listed under Quick tasks, first in the sidebar, and ⌘1 jumps to it.
+    let groups = app.sidebar_groups();
+    assert_eq!(groups[0].0.kind, WorkspaceKind::Scratch);
+    app.screen = Screen::Home;
+    commands::run(&mut app, Cmd::Jump(1), &mut tx);
+    assert_eq!(app.screen, Screen::Session(sid));
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+/// A write tool waits for approval; the inline card's Approve (⌥⌘A / Alt+A) lets it run.
+#[test]
+fn an_approval_waits_inline_and_the_approve_shortcut_runs_the_tool() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("aha").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(mcp_server::start(Some("s3cret-desktop-token")));
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+
+    // Add the server as Settings › Connectors does: URL and a bearer token.
+    app.conn_url.replace_text(&server.url);
+    app.conn_token.replace_text("s3cret-desktop-token");
+    app.add_connector();
+    pump(&mut app, |a| a.connectors.iter().any(|c| c.status == "ok" && !c.tools.is_empty()));
+    let conn = app.connectors[0].clone();
+    assert_eq!(app.sel_conn.as_deref(), Some(conn.connector_id.as_str()));
+
+    app.open_new_session(true);
+    app.new_agent = Some("fake".into());
+    app.first_prompt.replace_text(&format!(r#"mcp {}__create_note {{"text":"buy milk"}}"#, connector_slug(&conn.name)));
+    app.start_from_sheet();
+    pump(&mut app, |a| a.current_approval().is_some());
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    assert!(server.state.calls.lock().unwrap().is_empty(), "called before approval");
+    // The toolbar and sidebar say it needs you.
+    pump(&mut app, |a| a.session(&sid).is_some_and(|s| s.state == SessionState::WaitingApproval));
+
+    commands::run(&mut app, Cmd::Approve, &mut tx);
+    pump(&mut app, |a| {
+        a.transcripts.get(&sid).is_some_and(|t| t.events.iter().any(|e| e.kind == EventType::ToolResult && e.payload["status"] == "completed"))
+    });
+    pump(&mut app, |a| a.approvals.is_empty());
+    assert_eq!(server.state.calls.lock().unwrap().len(), 1);
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+/// Settings › Devices: Pair iPhone… shows the QR, the phone's code appears to compare, and
+/// "Codes Match, Pair" adds the device.
+#[test]
+fn pairing_shows_the_code_and_pairs_the_phone() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahp").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let relay = rt.block_on(agenthost_host::relay_dev::DevRelay::start("127.0.0.1:0")).unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), Some(relay.url()));
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+    pump(&mut app, |a| {
+        if !a.info.as_ref().is_some_and(|i| i.relay.connected) {
+            a.refresh(bridge::Refresh::HostInfo);
+            std::thread::sleep(Duration::from_millis(50));
+            return false;
+        }
+        true
+    });
+
+    commands::run(&mut app, Cmd::PairPhone, &mut tx);
+    assert_eq!(app.settings, Some(model::Tab::Devices));
+    pump(&mut app, |a| a.pairing.is_some());
+    let qr = app.pairing.as_ref().unwrap().qr.clone();
+    let (code_tx, code_rx) = std::sync::mpsc::channel::<String>();
+    let phone = rt.spawn(async move {
+        agenthost_cli::remote::pair(&qr, "Test phone", move |c| {
+            let _ = code_tx.send(c.to_string());
+        })
+        .await
+    });
+    pump(&mut app, |a| a.pairing.as_ref().is_some_and(|p| p.pending.is_some()));
+    let pending = app.pairing.as_ref().unwrap().pending.clone().unwrap();
+    assert_eq!(pending.device_name, "Test phone");
+    assert_eq!(code_rx.recv_timeout(Duration::from_secs(20)).unwrap(), pending.short_code, "both screens show the same code");
+
+    app.confirm_pairing(true);
+    pump(&mut app, |a| a.devices.iter().any(|d| d.name == "Test phone") && a.pairing.as_ref().is_some_and(|p| p.done.is_some()));
+    assert!(rt.block_on(phone).unwrap().is_ok());
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+/// The sidebar's order, numbering and search, and the keys that walk it.
+#[test]
+fn sidebar_groups_numbers_and_search() {
+    let mut app = model::init();
+    let scene = crate::demo::SCENES.iter().find(|(n, _)| *n == "home").unwrap().1;
+    scene(&mut app);
+    let mut tx = rune::Tx::default();
+    let names: Vec<&str> = app.sidebar_groups().iter().map(|(w, _)| w.name.as_str()).collect();
+    assert_eq!(names, ["Quick tasks", "relay", "notes"], "Quick tasks first; empty workspaces left out");
+    // Ended sessions get no number.
+    assert_eq!(app.numbered(), ["ses_q", "ses_1", "ses_2", "ses_3"]);
+    commands::run(&mut app, Cmd::Jump(2), &mut tx);
+    assert_eq!(app.screen, Screen::Session("ses_1".into()));
+    commands::run(&mut app, Cmd::NextSession, &mut tx);
+    assert_eq!(app.screen, Screen::Session("ses_2".into()));
+    commands::run(&mut app, Cmd::PrevSession, &mut tx);
+    assert_eq!(app.screen, Screen::Session("ses_1".into()));
+    // Logins are always labelled.
+    assert_eq!(app.login_label(app.session("ses_1").unwrap()), "Claude Code · Work");
+    app.search.replace_text("oauth");
+    assert_eq!(app.sidebar_order(), ["ses_2"]);
+    // Escape-free overlays: ⌘, opens Settings, ⌘N swaps it for the sheet.
+    commands::run(&mut app, Cmd::Settings, &mut tx);
+    assert_eq!(app.settings, Some(model::Tab::General));
+    commands::run(&mut app, Cmd::NewSession, &mut tx);
+    assert!(app.new_open && app.settings.is_none());
 }

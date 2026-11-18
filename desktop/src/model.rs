@@ -4,18 +4,48 @@ use crate::bridge::{Bridge, FromHost, Refresh, Tag};
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use rune::TextEdit;
-use rune_kit::shell::PaneState;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Screen {
+    /// No session open: the empty state.
+    Home,
     Session(String),
-    NewSession,
+}
+
+/// A Settings tab (macOS) or Preferences page (GNOME).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    General,
+    Agents,
     Workspaces,
     Connectors,
     Devices,
-    Host,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 5] = [Tab::General, Tab::Agents, Tab::Workspaces, Tab::Connectors, Tab::Devices];
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::General => "General",
+            Tab::Agents => "Agents",
+            Tab::Workspaces => "Workspaces",
+            Tab::Connectors => "Connectors",
+            Tab::Devices => "Devices",
+        }
+    }
+}
+
+/// An in-app pop-up menu (where the platform has no native one, and on GNOME).
+#[derive(Clone, PartialEq, Debug)]
+pub enum Menu {
+    /// The toolbar's session menu.
+    Session,
+    /// GNOME's main menu (F10).
+    Main,
+    /// The New session dialog's login drop-down (GNOME).
+    Login,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -67,7 +97,34 @@ pub struct App {
     pub bridge: Option<Bridge>,
     pub conn: Conn,
     pub screen: Screen,
-    pub sidebar: PaneState,
+    pub look: crate::look::Look,
+    pub sidebar_open: bool,
+    /// The New session sheet (macOS) or dialog (GNOME) is open.
+    pub new_open: bool,
+    /// Settings (macOS) or Preferences (GNOME) is open, on this tab.
+    pub settings: Option<Tab>,
+    /// GNOME's keyboard shortcuts window.
+    pub shortcuts_open: bool,
+    pub menu: Option<Menu>,
+    /// Filters the sidebar.
+    pub search: TextEdit,
+    /// The optional first message in the New session sheet.
+    pub first_prompt: TextEdit,
+    /// Sent as soon as the session it was typed for exists.
+    pub pending_first: Option<String>,
+    /// This computer's name, for the sidebar's host line.
+    pub hostname: String,
+    /// Settings selections.
+    pub sel_agent: Option<String>,
+    pub sel_ws: Option<String>,
+    pub sel_conn: Option<String>,
+    pub sel_root: Option<String>,
+    pub adding_profile: bool,
+    pub adding_connector: bool,
+    pub adding_workspace: bool,
+    pub conn_token: TextEdit,
+    /// A folder just added from the New session sheet: select it once it's listed.
+    pub pick_added: Option<String>,
     pub info: Option<HostInfo>,
     pub workspaces: Vec<Workspace>,
     pub sessions: Vec<Session>,
@@ -100,7 +157,6 @@ pub struct App {
     pub profile_dir: TextEdit,
     /// Folders the phone may create projects in (`project.browse`).
     pub project_roots: Vec<String>,
-    pub root_input: TextEdit,
     pub pairing: Option<Pairing>,
     pub error: Option<String>,
     pub notice: Option<String>,
@@ -128,8 +184,26 @@ pub fn init() -> App {
     App {
         bridge: None,
         conn: Conn::Connecting,
-        screen: Screen::NewSession,
-        sidebar: PaneState::new(276.0).range(180.0, 520.0),
+        screen: Screen::Home,
+        look: crate::look::Look::current(),
+        sidebar_open: true,
+        new_open: false,
+        settings: None,
+        shortcuts_open: false,
+        menu: None,
+        search: TextEdit::new(""),
+        first_prompt: TextEdit::new(""),
+        pending_first: None,
+        hostname: String::new(),
+        sel_agent: None,
+        sel_ws: None,
+        sel_conn: None,
+        sel_root: None,
+        adding_profile: false,
+        adding_connector: false,
+        adding_workspace: false,
+        conn_token: TextEdit::new("").secure(),
+        pick_added: None,
         info: None,
         workspaces: vec![],
         sessions: vec![],
@@ -154,7 +228,6 @@ pub fn init() -> App {
         profile_name: TextEdit::new(""),
         profile_dir: TextEdit::new(""),
         project_roots: vec![],
-        root_input: TextEdit::new(""),
         pairing: None,
         error: None,
         notice: None,
@@ -193,6 +266,150 @@ impl App {
         self.call(Tag::SessionCreated, m::SESSION_CREATE, params);
     }
 
+    /// The sheet's Start button: start the session, keep the first message for it.
+    pub fn start_from_sheet(&mut self) {
+        if self.new_ws.is_none() || self.new_agent.is_none() {
+            self.notice = Some("Pick a workspace and a login first.".into());
+            return;
+        }
+        let first = self.first_prompt.text.trim().to_string();
+        self.pending_first = (!first.is_empty()).then_some(first);
+        self.first_prompt.clear();
+        self.start_session();
+        self.new_open = false;
+        self.menu = None;
+    }
+
+    /// Open the New session sheet, preselecting Quick tasks for a quick task, else the last
+    /// choice (or the first folder), and the last login (or the first one that's ready).
+    pub fn open_new_session(&mut self, quick: bool) {
+        self.close_overlays();
+        if quick || self.new_ws.as_ref().is_none_or(|w| self.workspace(w).is_none()) {
+            let first_folder = self.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).map(|w| w.workspace_id.clone());
+            let quick_ws = self.workspaces.iter().find(|w| w.kind == WorkspaceKind::Scratch).map(|w| w.workspace_id.clone());
+            self.new_ws = if quick { quick_ws.or(first_folder) } else { first_folder.or(quick_ws) };
+        }
+        let agents = self.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
+        if !agents.iter().any(|a| a.available && Some(login_key(a)) == self.new_agent) {
+            self.new_agent = agents.iter().find(|a| a.available).map(login_key);
+        }
+        self.new_open = true;
+        self.first_prompt.focused = true;
+    }
+
+    pub fn open_settings(&mut self, tab: Tab) {
+        self.close_overlays();
+        self.settings = Some(tab);
+        match tab {
+            Tab::General | Tab::Agents => self.refresh(Refresh::HostInfo),
+            Tab::Workspaces => self.refresh(Refresh::Workspaces),
+            Tab::Connectors => self.refresh(Refresh::Connectors),
+            Tab::Devices => self.refresh(Refresh::Devices),
+        }
+    }
+
+    /// Close the sheet, Settings, the shortcuts window and any menu.
+    pub fn close_overlays(&mut self) {
+        self.new_open = false;
+        self.settings = None;
+        self.shortcuts_open = false;
+        self.menu = None;
+    }
+
+    /// The open session.
+    pub fn current(&self) -> Option<&Session> {
+        match &self.screen {
+            Screen::Session(id) => self.session(id),
+            Screen::Home => None,
+        }
+    }
+
+    /// The login a session runs as, as everywhere shows it: "Claude Code · Work".
+    pub fn login_label(&self, s: &Session) -> String {
+        let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();
+        let key = s.profile_id.clone().unwrap_or_else(|| s.agent.as_str().to_string());
+        agents.iter().find(|a| login_key(a) == key).map(|a| a.label()).unwrap_or_else(|| s.agent.display_name().to_string())
+    }
+
+    /// Sessions as the sidebar lists them: workspaces in order with Quick tasks first,
+    /// newest first inside each, filtered by the search field.
+    pub fn sidebar_groups(&self) -> Vec<(&Workspace, Vec<&Session>)> {
+        let q = self.search.text.trim().to_lowercase();
+        let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
+        ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
+        let mut out = vec![];
+        for w in ws {
+            let mut list: Vec<&Session> = self
+                .sessions
+                .iter()
+                .filter(|x| x.workspace_id == w.workspace_id)
+                .filter(|x| {
+                    q.is_empty()
+                        || x.title.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                        || self.login_label(x).to_lowercase().contains(&q)
+                        || w.name.to_lowercase().contains(&q)
+                })
+                .collect();
+            if list.is_empty() {
+                continue;
+            }
+            list.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
+            out.push((w, list));
+        }
+        out
+    }
+
+    /// Session ids in sidebar order; ⌘1…⌘9 number the live ones in this order.
+    pub fn sidebar_order(&self) -> Vec<String> {
+        self.sidebar_groups().into_iter().flat_map(|(_, l)| l.into_iter().map(|s| s.session_id.clone())).collect()
+    }
+    pub fn numbered(&self) -> Vec<String> {
+        self.sidebar_groups()
+            .into_iter()
+            .flat_map(|(_, l)| l.into_iter().filter(|s| !s.state.is_terminal()).map(|s| s.session_id.clone()))
+            .take(9)
+            .collect()
+    }
+
+    /// Answer an approval.
+    pub fn respond(&self, approval_id: &str, approve: bool) {
+        let (what, decision) = if approve { ("Approve", "approve") } else { ("Deny", "deny") };
+        self.act(what, m::APPROVAL_RESPOND, json!({"approval_id": approval_id, "decision": decision}), Refresh::Approvals);
+    }
+
+    /// The first approval waiting in the open session.
+    pub fn current_approval(&self) -> Option<&PendingApproval> {
+        let Screen::Session(id) = &self.screen else { return None };
+        self.approvals.iter().find(|a| &a.session_id == id)
+    }
+
+    /// Show a folder in the file manager.
+    pub fn reveal(&mut self, path: &str) {
+        let path = match path.strip_prefix("~/") {
+            Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
+            None => path.to_string(),
+        };
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+            self.error = Some(format!("Could not open {path}: {e}"));
+        }
+    }
+
+    /// Answer the pairing on screen: the codes match (pair) or not (refuse).
+    pub fn confirm_pairing(&self, accept: bool) {
+        let Some(p) = &self.pairing else { return };
+        let what = if accept { "Confirm pairing" } else { "Refuse pairing" };
+        self.act(what, m::DEVICE_PAIR_CONFIRM, json!({"pairing_id": p.pairing_id, "accept": accept}), Refresh::Devices);
+    }
+
+    /// Add a folder as a workspace; from the New session sheet it's then selected.
+    pub fn add_workspace_path(&mut self, path: &str, select: bool) {
+        self.act("Add workspace", m::WORKSPACE_ADD, json!({"path": path}), Refresh::Workspaces);
+        if select {
+            self.pick_added = Some(path.to_string());
+        }
+    }
+
     /// Add the profile from the host screen's form.
     pub fn add_profile(&mut self) {
         let name = self.profile_name.text.trim().to_string();
@@ -206,6 +423,7 @@ impl App {
             return;
         }
         self.act("Add profile", m::AGENT_PROFILE_ADD, json!({"agent": agent, "name": name, "config_dir": dir}), Refresh::HostInfo);
+        self.adding_profile = false;
         self.profile_name.clear();
         self.profile_dir.clear();
     }
@@ -240,6 +458,7 @@ impl App {
     /// Open a session: subscribe from what we already have, so nothing is lost
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
+        self.menu = None;
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
         self.ensure_subscribed(id);
@@ -288,6 +507,19 @@ impl App {
         self.act("Send prompt", m::SESSION_PROMPT, params, Refresh::None);
         self.prompt.clear();
         self.files.remove(&id);
+    }
+
+    /// Put the open session's last prompt back in the empty composer. True if there was one.
+    pub fn recall_last_prompt(&mut self) -> bool {
+        let Screen::Session(id) = &self.screen else { return false };
+        let last = self.transcripts.get(id).and_then(|t| t.events.iter().rev().find(|e| e.kind == EventType::Prompt)).and_then(|e| e.payload["text"].as_str()).map(String::from);
+        match last.filter(|t| !t.is_empty()) {
+            Some(t) => {
+                self.prompt.replace_text(&t);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Whether the host takes attachments and voice (protocol 2).
@@ -439,18 +671,21 @@ impl App {
                 (Tag::Voice, Ok(v)) => self.voice = parse(v),
                 // An older host without voice: no microphone button.
                 (Tag::Voice, Err(_)) => self.voice = None,
-                (Tag::Workspaces, Ok(v)) => self.workspaces = parse(v).unwrap_or_default(),
+                (Tag::Workspaces, Ok(v)) => {
+                    self.workspaces = parse(v).unwrap_or_default();
+                    if let Some(p) = self.pick_added.clone() {
+                        if let Some(w) = self.workspaces.iter().find(|w| w.path == p || p.ends_with(&w.path) || w.path.ends_with(p.trim_start_matches('~'))) {
+                            self.new_ws = Some(w.workspace_id.clone());
+                            self.pick_added = None;
+                        }
+                    }
+                }
                 (Tag::ProjectRoots, Ok(v)) => {
                     self.project_roots = parse::<ProjectBrowse>(v).map(|b| b.roots).unwrap_or_default()
                 }
                 // An older host without projects.
                 (Tag::ProjectRoots, Err(_)) => self.project_roots = vec![],
-                (Tag::Sessions, Ok(v)) => {
-                    self.sessions = parse(v).unwrap_or_default();
-                    if self.screen == Screen::NewSession && self.sessions.is_empty() && self.workspaces.is_empty() {
-                        self.screen = Screen::Workspaces;
-                    }
-                }
+                (Tag::Sessions, Ok(v)) => self.sessions = parse(v).unwrap_or_default(),
                 (Tag::Connectors, Ok(v)) => {
                     self.connectors = parse(v).unwrap_or_default();
                     self.settle_sign_ins();
@@ -460,6 +695,7 @@ impl App {
                         let (id, name, url) = (c.connector_id.clone(), c.name.clone(), c.url.clone());
                         let twin = self.connectors.iter().any(|x| x.url == url && x.connector_id != id);
                         let needs = c.status == "needs_sign_in";
+                        self.sel_conn = Some(id.clone());
                         self.upsert_connector(c);
                         if needs {
                             self.sign_in(&id);
@@ -498,6 +734,11 @@ impl App {
                         let id = s.session_id.clone();
                         self.upsert_session(s);
                         self.open_session(&id);
+                        // The sheet's first message goes as the session's first prompt.
+                        if let Some(text) = self.pending_first.take() {
+                            self.prompt.replace_text(&text);
+                            self.send_prompt();
+                        }
                     }
                 }
                 (Tag::Subscribed(id), Ok(v)) => {
@@ -513,7 +754,10 @@ impl App {
                 }
                 (Tag::Action { what, .. }, Err(e)) => self.error = Some(format!("{what} failed: {}", e.message)),
                 (Tag::PairStart, Err(e)) => self.error = Some(format!("Pairing could not start: {}", e.message)),
-                (Tag::SessionCreated, Err(e)) => self.error = Some(format!("Could not start the session: {}", e.message)),
+                (Tag::SessionCreated, Err(e)) => {
+                    self.pending_first = None;
+                    self.error = Some(format!("Could not start the session: {}", e.message))
+                }
                 (_, Err(e)) => self.error = Some(e.message),
             },
             FromHost::Note(n) => self.on_note(n),
@@ -582,8 +826,16 @@ impl App {
             url = format!("https://{url}");
         }
         self.error = None;
-        self.call(Tag::ConnectorAdded, m::CONNECTOR_ADD, json!({"url": url}));
+        let token = self.conn_token.text.trim().to_string();
+        let mut params = json!({"url": url});
+        if !token.is_empty() {
+            params["auth"] = json!("bearer");
+            params["token"] = json!(token);
+        }
+        self.call(Tag::ConnectorAdded, m::CONNECTOR_ADD, params);
         self.conn_url.clear();
+        self.conn_token.clear();
+        self.adding_connector = false;
     }
 
     /// Sign-ins that finished, one way or the other, since the last list.
@@ -691,17 +943,5 @@ impl App {
             }
             _ => {}
         }
-    }
-}
-
-/// "3m ago" style ages.
-pub fn ago(ts: i64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    let s = ((now - ts) / 1000).max(0);
-    match s {
-        s if s < 60 => "just now".into(),
-        s if s < 3600 => format!("{}m ago", s / 60),
-        s if s < 86400 => format!("{}h ago", s / 3600),
-        s => format!("{}d ago", s / 86400),
     }
 }

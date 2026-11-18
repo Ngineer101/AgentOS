@@ -1,0 +1,1360 @@
+//! Settings (⌘,) with toolbar tabs on macOS, Preferences (Ctrl+,) with a view switcher on
+//! GNOME: General (host status), Agents, Workspaces, Connectors and Devices.
+//!
+//! Drawn in the main window, over it: Rune windows each own their state, and Settings edits
+//! the same state as the main window (it would need a second copy kept in step).
+
+use crate::bridge::{Refresh, Tag};
+use crate::icons as ic;
+use crate::look::{agent_badge, Btn, Theme};
+use crate::model::{login_key, App, Tab};
+use crate::sheet::{scrim, tilde};
+use crate::view::{clip, short_age};
+use agenthost_proto::methods as m;
+use agenthost_proto::*;
+use rune::{col, el, icon, row, text, Color, El, Icon, ScrollSpec, TextStyle, Tx};
+use serde_json::json;
+
+fn tab_icon(tab: Tab) -> &'static Icon {
+    match tab {
+        Tab::General => &ic::TAB_GENERAL,
+        Tab::Agents => &ic::TAB_AGENTS,
+        Tab::Workspaces => &ic::TAB_WORKSPACES,
+        Tab::Connectors => &ic::TAB_CONNECTORS,
+        Tab::Devices => &ic::TAB_DEVICES,
+    }
+}
+
+pub fn view(s: &App, tab: Tab, t: &Theme) -> El {
+    let body = match tab {
+        Tab::General => general(s, t),
+        Tab::Agents => agents(s, t),
+        Tab::Workspaces => workspaces(s, t),
+        Tab::Connectors => connectors(s, t),
+        Tab::Devices => devices(s, t),
+    };
+    if t.mac() {
+        mac_window(s, tab, t, body)
+    } else {
+        gnome_window(s, tab, t, body)
+    }
+}
+
+fn close(s: &mut App) {
+    s.settings = None;
+    s.pairing = None;
+}
+
+fn mac_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
+    let dot = |c: Color| el().size(12.0, 12.0).radius(6.0).fill(c);
+    let lights = row()
+        .w(52.0)
+        .gap(8.0)
+        .center_y()
+        .child(
+            row()
+                .size(12.0, 12.0)
+                .role("button")
+                .label("Close Settings")
+                .on_press(close)
+                .child(dot(rune::color::hex("#ff5f57").unwrap_or(t.danger))),
+        )
+        .child(dot(Color::WHITE.alpha(0.18)))
+        .child(dot(Color::WHITE.alpha(0.18)));
+    let mut tabs = row().gap(4.0).justify_center().role("tablist").focus_group();
+    for tb in Tab::ALL {
+        let on = tb == tab;
+        let color = if on { t.accent } else { t.text2 };
+        let mut b = col()
+            .key(format!("tab-{}", tb.title().to_lowercase()))
+            .size(76.0, 48.0)
+            .center()
+            .gap(3.0)
+            .radius(7.0)
+            .role("tab")
+            .label(tb.title())
+            .checked(on)
+            .focusable(true)
+            .on_press(move |s: &mut App| s.open_settings(tb))
+            .child(icon(tab_icon(tb), 22.0).color(color))
+            .child(text(tb.title()).font(TextStyle::new(11.0, 400.0)).color(color));
+        b = if on { b.fill(Color::WHITE.alpha(0.1)) } else { b.hover(Color::WHITE.alpha(0.05)) };
+        tabs = tabs.child(b);
+    }
+    let header = col()
+        .w_full()
+        .fill(t.toolbar)
+        .border_sides([0.0, 0.0, 0.5, 0.0], Color::BLACK.alpha(0.6))
+        .child(row().w_full().h(28.0).px(12.0).center_y().child(lights).child(row().grow(1.0).justify_center().child(text(tab.title()).font(TextStyle::new(13.0, 600.0)).color(t.text))).child(el().w(52.0)))
+        .child(row().w_full().justify_center().pt(6.0).pb(8.0).child(tabs));
+    let mut panel = col()
+        .key("settings")
+        .w(760.0)
+        .max_w(760.0)
+        .shrink()
+        .min_h(0.0)
+        .radius(12.0)
+        .fill(t.panel)
+        .border(0.5, Color::WHITE.alpha(0.18))
+        .shadow(30.0, 80.0, Color::BLACK.alpha(0.55))
+        .clip_rounded(12.0)
+        .child(header)
+        .child(col().key("settings-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(body.px(24.0).pt(20.0).pb(24.0)));
+    let pairing = tab == Tab::Devices && s.pairing.is_some();
+    if pairing {
+        // The sheet hangs from the tab bar, over a dimmed tab.
+        panel = panel.min_h(640.0).child(el().pin(Some(0.0), Some(94.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.3)));
+    } else {
+        panel = panel.modal(true, close);
+    }
+    // Settings windows keep their top edge where it is as tabs change height.
+    let mut layer = scrim("settings-layer", 0.32, close).pt(40.0).px(24.0).pb(24.0).items_center().child(panel);
+    if pairing {
+        layer = layer.child(col().key("pair-layer").pin(Some(0.0), Some(40.0 + 94.0), Some(0.0), None).items_center().child(pairing_sheet(s, t)));
+    }
+    layer
+}
+
+fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
+    let mut switcher = row().gap(6.0).role("tablist").focus_group();
+    for tb in Tab::ALL {
+        let on = tb == tab;
+        let mut b = row()
+            .key(format!("tab-{}", tb.title().to_lowercase()))
+            .h(34.0)
+            .px(14.0)
+            .gap(8.0)
+            .center_y()
+            .radius(7.0)
+            .role("tab")
+            .label(tb.title())
+            .checked(on)
+            .focusable(true)
+            .on_press(move |s: &mut App| s.open_settings(tb))
+            .child(icon(tab_icon(tb), 16.0).color(if on { t.text } else { t.text2 }))
+            .child(text(tb.title()).font(TextStyle::new(14.5, 700.0)).color(if on { t.text } else { t.text2 }));
+        b = if on { b.fill(Color::WHITE.alpha(0.1)) } else { b.hover(Color::WHITE.alpha(0.05)) };
+        switcher = switcher.child(b);
+    }
+    let header = row()
+        .w_full()
+        .h(54.0)
+        .px(10.0)
+        .center_y()
+        .child(el().w(24.0))
+        .child(row().grow(1.0).justify_center().child(switcher))
+        .child(
+            row()
+                .size(24.0, 24.0)
+                .radius(12.0)
+                .center()
+                .fill(Color::WHITE.alpha(0.1))
+                .role("button")
+                .label("Close Preferences")
+                .on_press(close)
+                .child(icon(&ic::CLOSE, 10.0).color(t.text)),
+        );
+    let mut panel = col()
+        .key("settings")
+        .w(880.0)
+        .max_w(880.0)
+        .shrink()
+        .min_h(0.0)
+        .radius(14.0)
+        .fill(t.panel)
+        .border(1.0, Color::BLACK.alpha(0.6))
+        .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
+        .clip_rounded(14.0)
+        .child(header)
+        .child(col().key("settings-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(row().w_full().px(40.0).pt(10.0).pb(32.0).justify_center().child(body.max_w(680.0))));
+    let pairing = tab == Tab::Devices && s.pairing.is_some();
+    if pairing {
+        panel = panel.min_h(640.0).child(el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.4)));
+    } else {
+        panel = panel.modal(true, close);
+    }
+    let mut layer = scrim("settings-layer", 0.5, close).padding(30.0).center().child(panel);
+    if pairing {
+        layer = layer.child(col().key("pair-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().child(pairing_sheet(s, t)));
+    }
+    layer
+}
+
+// ---------------------------------------------------------------------------
+// Pieces
+// ---------------------------------------------------------------------------
+
+fn section(t: &Theme, title: &str, note: Option<String>, content: El) -> El {
+    let mut head = row().w_full().gap(8.0).center_y().child(t.section_title(title)).child(el().grow(1.0));
+    if let Some(n) = note {
+        head = head.child(t.faint(n));
+    }
+    col().w_full().gap(if t.mac() { 6.0 } else { 10.0 }).child(head).child(content)
+}
+
+/// A form row: a title (and detail under it) at the start, `trailing` at the end.
+fn form_row(t: &Theme, title: &str, detail: Option<String>, trailing: El) -> El {
+    let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(t.label(title.to_string()));
+    if let Some(d) = detail {
+        names = names.child(t.small(d).wrap());
+    }
+    row().w_full().gap(10.0).px(if t.mac() { 12.0 } else { 14.0 }).py(if t.mac() { 8.0 } else { 12.0 }).center_y().child(names).child(trailing)
+}
+
+fn footnote(t: &Theme, msg: &str) -> El {
+    text(msg.to_string()).font(TextStyle::new(if t.mac() { 11.0 } else { 13.0 }, 400.0).lh(if t.mac() { 16.0 } else { 19.0 })).color(t.text3).wrap()
+}
+
+fn policy_name(p: ToolPolicy) -> &'static str {
+    match p {
+        ToolPolicy::Auto => "Allow",
+        ToolPolicy::Ask => "Ask Every Time",
+        ToolPolicy::Disabled => "Off",
+    }
+}
+fn policy_short(p: ToolPolicy) -> &'static str {
+    match p {
+        ToolPolicy::Auto => "Allow",
+        ToolPolicy::Ask => "Ask",
+        ToolPolicy::Disabled => "Off",
+    }
+}
+fn policy_id(p: ToolPolicy) -> &'static str {
+    match p {
+        ToolPolicy::Auto => "auto",
+        ToolPolicy::Ask => "ask",
+        ToolPolicy::Disabled => "disabled",
+    }
+}
+fn policy_of(id: &str) -> Option<ToolPolicy> {
+    Some(match id {
+        "auto" => ToolPolicy::Auto,
+        "ask" => ToolPolicy::Ask,
+        "disabled" => ToolPolicy::Disabled,
+        _ => return None,
+    })
+}
+fn next_policy(p: ToolPolicy) -> ToolPolicy {
+    match p {
+        ToolPolicy::Auto => ToolPolicy::Ask,
+        ToolPolicy::Ask => ToolPolicy::Disabled,
+        ToolPolicy::Disabled => ToolPolicy::Auto,
+    }
+}
+
+/// Set a connector's policy: `which` is `read`, `write`, or a tool's name (`None` clears its
+/// override).
+fn set_policy(s: &mut App, cid: &str, which: &str, p: Option<ToolPolicy>) {
+    let params = match which {
+        "read" => json!({"connector_id": cid, "read_policy": p}),
+        "write" => json!({"connector_id": cid, "write_policy": p}),
+        tool => json!({"connector_id": cid, "tool_policies": {tool: p}}),
+    };
+    s.act("Set tool policy", m::CONNECTOR_UPDATE, params, Refresh::Connectors);
+}
+
+/// A pop-up picker for a policy: the native menu on macOS, else each press steps to the next.
+fn pick_policy(s: &mut App, tx: &mut Tx, key: String, cid: String, which: String, current: ToolPolicy, can_reset: bool) {
+    if rune::popup_menu_supported() {
+        let mut menu = rune::PopupMenu::new();
+        for p in [ToolPolicy::Auto, ToolPolicy::Ask, ToolPolicy::Disabled] {
+            menu = menu.item(rune::PopupItem::new(policy_id(p), policy_name(p)).checked(p == current));
+        }
+        if can_reset {
+            menu = menu.separator().item(rune::PopupItem::new("default", "Use the Default"));
+        }
+        tx.popup_menu(menu, key, move |s: &mut App, picked, _| match picked {
+            Some("default") => set_policy(s, &cid, &which, None),
+            Some(id) => set_policy(s, &cid, &which, policy_of(id)),
+            None => {}
+        });
+    } else {
+        set_policy(s, &cid, &which, Some(next_policy(current)));
+    }
+}
+
+fn popup_button(t: &Theme, key: String, label: &str) -> El {
+    let mac = t.mac();
+    row()
+        .key(key)
+        .h(if mac { 22.0 } else { 34.0 })
+        .pl(if mac { 9.0 } else { 12.0 })
+        .pr(if mac { 6.0 } else { 10.0 })
+        .gap(8.0)
+        .center_y()
+        .radius(if mac { 5.0 } else { 7.0 })
+        .fill(t.control)
+        .role("combobox")
+        .label(label.to_string())
+        .focusable(true)
+        .hover(Color::WHITE.alpha(0.06))
+        .child(text(label.to_string()).font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0)).color(t.text))
+        .child(icon(if mac { &ic::UPDOWN } else { &ic::CHEVRON_DOWN }, 10.0).color(t.text2))
+}
+
+/// A selectable row in a source list (Workspaces, Connectors).
+fn source_row(t: &Theme, key: String, selected: bool, glyph: El, name: &str, detail: El, f: impl Fn(&mut App) + 'static) -> El {
+    let mac = t.mac();
+    let mut r = row()
+        .key(key)
+        .w_full()
+        .gap(8.0)
+        .px(8.0)
+        .py(if mac { 6.0 } else { 10.0 })
+        .center_y()
+        .radius(if mac { 6.0 } else { 8.0 })
+        .role("listitem")
+        .label(name.to_string())
+        .focusable(true)
+        .on_press(f)
+        .child(row().w(22.0).center().child(glyph))
+        .child(col().grow(1.0).min_w(0.0).gap(1.0).child(text(name.to_string()).font(t.font()).color(if selected && mac { Color::WHITE } else { t.text }).truncate()).child(detail));
+    r = if selected { r.fill(if mac { t.accent } else { Color::WHITE.alpha(0.1) }) } else { r.hover(Color::WHITE.alpha(0.04)) };
+    r
+}
+
+/// The two-pane layout: a source list on the left, the detail on the right.
+fn split(t: &Theme, list: El, detail: El) -> El {
+    let mac = t.mac();
+    let mut l = col().w(220.0).min_h(300.0).radius(t.box_radius).fill(t.boxed).clip_rounded(t.box_radius).child(list.grow(1.0));
+    if mac {
+        l = l.border(0.5, t.sep);
+    }
+    row().w_full().gap(16.0).child(l).child(detail.grow(1.0).min_w(0.0))
+}
+
+// ---------------------------------------------------------------------------
+// General: host status
+// ---------------------------------------------------------------------------
+
+fn general(s: &App, t: &Theme) -> El {
+    let mut c = col().key("general").w_full().gap(18.0);
+    let Some(info) = &s.info else {
+        return c.child(t.small("Waiting for the host…"));
+    };
+    c = c.child(
+        row()
+            .w_full()
+            .gap(12.0)
+            .center_y()
+            .child(el().w(44.0).h(44.0).pixels(crate::brand::logo()))
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(2.0)
+                    .child(text("AgentHost").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+                    .child(t.small(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)).wrap()),
+            )
+            .child(t.button("Re-run Checks", Btn::Default, None, |s| s.call(Tag::HostInfo, m::HOST_CHECK, json!({}))).key("rerun")),
+    );
+    let ok = |b: bool, yes: &str, no: &str| t.status(if b { t.ok } else { t.warn }, if b { yes } else { no }, !b);
+    let sb = &info.sandbox;
+    let mut rows = vec![
+        form_row(t, "Sandbox", Some(format!("{} keeps each agent inside its workspace and network rules", sb.backend)), ok(sb.ok, "Working", "Needs attention")),
+        form_row(t, "sandbox-runtime", None, t.small(sb.runtime_version.clone().unwrap_or_else(|| "Not installed".into()))),
+    ];
+    for p in &sb.prerequisites {
+        let trailing = if p.present { icon(&ic::CHECK, 14.0).color(t.ok) } else { t.mono(p.install.clone().unwrap_or_else(|| "missing".into())) };
+        rows.push(form_row(t, &p.name, None, trailing));
+    }
+    if let Some(pr) = &sb.problem {
+        rows.push(form_row(t, "Problem", Some(pr.clone()), el()));
+    }
+    c = c.child(section(t, "Sandbox", Some("What keeps agents in their workspace".into()), t.group(rows, if t.mac() { 12.0 } else { 0.0 })));
+    c = c.child(section(t, if t.mac() { "Voice input" } else { "Voice Input" }, None, voice_box(s, t)));
+    let r = &info.relay;
+    let relay = vec![
+        form_row(
+            t,
+            "Status",
+            r.error.clone(),
+            if !r.configured {
+                t.small("Off")
+            } else {
+                t.status(if r.connected { t.ok } else { t.warn }, if r.connected { "Connected" } else { "Disconnected" }, !r.connected)
+            },
+        ),
+        form_row(t, "Address", None, t.mono(r.url.clone().unwrap_or_else(|| "Not configured: start the host with --relay-url to pair phones".into())).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text2)),
+    ];
+    c.child(section(t, "Relay", Some("How your phone reaches this computer".into()), t.group(relay, if t.mac() { 12.0 } else { 0.0 })))
+}
+
+fn voice_box(s: &App, t: &Theme) -> El {
+    let Some(v) = &s.voice else {
+        return t.group(vec![form_row(t, "Speech model", Some("This host has no voice input. Update agenthostd.".into()), el())], 0.0);
+    };
+    let detail = format!("{} · on this computer · {} MB", v.model, v.download_bytes / 1_000_000);
+    let trailing = if v.ready {
+        text("Installed").font(TextStyle::new(if t.mac() { 12.0 } else { 13.0 }, 400.0)).color(t.ok)
+    } else if let Some(p) = &v.progress {
+        t.small(format!("Downloading… {}%", p.received * 100 / p.total.max(1)))
+    } else {
+        t.small_button("Download", |s| s.download_voice())
+    };
+    let mut rows = vec![form_row(t, "Speech model", Some(detail), trailing)];
+    if let (Some(e), None) = (&v.error, &v.progress) {
+        rows.push(form_row(t, "Last error", Some(e.clone()), el()));
+    }
+    t.group(rows, if t.mac() { 12.0 } else { 0.0 })
+}
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+fn login_detail(a: &AgentStatus) -> String {
+    let mut parts = vec![if a.profile_name.is_some() { "Profile".to_string() } else { "Default login".to_string() }];
+    if let Some(d) = &a.config_dir {
+        parts.push(tilde(d));
+    }
+    if a.profile_name.is_none() {
+        if let Some(v) = &a.version {
+            parts.push(v.clone());
+        }
+    }
+    parts.join(" · ")
+}
+
+fn sessions_of(s: &App, key: &str) -> (usize, usize) {
+    let mine: Vec<&Session> = s.sessions.iter().filter(|x| x.profile_id.clone().unwrap_or_else(|| x.agent.as_str().to_string()) == key).collect();
+    (mine.iter().filter(|x| !x.state.is_terminal()).count(), mine.len())
+}
+
+fn agents(s: &App, t: &Theme) -> El {
+    let Some(info) = &s.info else { return col().w_full().child(t.small("Waiting for the host…")) };
+    if !t.mac() {
+        return gnome_agents(s, info, t);
+    }
+    let selected = s.sel_agent.clone().or_else(|| info.agents.iter().find(|a| a.profile_id.is_some() && a.profile_name.is_some()).map(login_key));
+    let mut rows = vec![];
+    for a in &info.agents {
+        let key = login_key(a);
+        let on = selected.as_deref() == Some(key.as_str());
+        let status = if a.available {
+            t.status(t.ok, "Ready", false)
+        } else {
+            t.status(t.warn, &a.problem.clone().map(|p| capitalize(&p)).unwrap_or_else(|| "Unavailable".into()), true)
+        };
+        let k2 = key.clone();
+        let mut r = row()
+            .key(format!("agent-{key}"))
+            .w_full()
+            .gap(10.0)
+            .px(12.0)
+            .py(10.0)
+            .center_y()
+            .role("listitem")
+            .label(a.label())
+            .focusable(true)
+            .on_press(move |s: &mut App| s.sel_agent = Some(k2.clone()))
+            .child(agent_badge(t, a.agent, 26.0, true))
+            .child(col().grow(1.0).min_w(0.0).child(t.label(a.label())).child(t.small(login_detail(a))))
+            .child(status);
+        if on {
+            r = r.fill(t.accent.alpha(0.22));
+        }
+        rows.push(r);
+    }
+    let sel = info.agents.iter().find(|a| Some(login_key(a)) == selected);
+    let removable = sel.and_then(|a| a.profile_name.as_ref().and(a.profile_id.clone()));
+    let remove: Option<Box<dyn Fn(&mut App)>> = removable.map(|id| {
+        Box::new(move |s: &mut App| {
+            s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo);
+            s.sel_agent = None;
+        }) as Box<dyn Fn(&mut App)>
+    });
+    let list = t.group(rows, 48.0).child(t.plus_minus(
+        "Add a Login",
+        |s: &mut App, _: &mut Tx| {
+            s.adding_profile = true;
+            s.profile_name.focused = true;
+        },
+        remove,
+        "+ adds another login (a profile) of an agent",
+    ));
+    let mut c = col().key("agents").w_full().gap(18.0).child(section(t, "Agent logins", Some("Each login can be picked per session".into()), list));
+    if s.adding_profile {
+        c = c.child(profile_form(s, info, t));
+    } else if let Some(a) = sel {
+        c = c.child(agent_detail(s, a, t));
+    }
+    c
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+fn agent_detail(s: &App, a: &AgentStatus, t: &Theme) -> El {
+    let key = login_key(a);
+    let (live, total) = sessions_of(s, &key);
+    let env = a.agent.profile_env().unwrap_or("its config folder setting");
+    let mut rows = vec![];
+    if let Some(n) = &a.profile_name {
+        rows.push(form_row(t, "Name", None, t.label(n.clone())));
+    }
+    if let Some(d) = &a.config_dir {
+        let dir = d.clone();
+        rows.push(form_row(
+            t,
+            "Config folder",
+            Some(format!("What {env} points at")),
+            row().gap(10.0).center_y().child(t.mono(tilde(d)).color(t.text2)).child(t.small_button(if t.mac() { "Show in Finder" } else { "Open Folder" }, move |s| s.reveal(&dir))),
+        ));
+    }
+    let login_state = if a.available { "Logged in".to_string() } else { capitalize(a.problem.as_deref().unwrap_or("not logged in")) };
+    let fix = a.fix.clone();
+    let login_btn = match fix {
+        Some(f) if !a.available => t.small_button_tx("Copy Login Command", move |s, tx| {
+            tx.copy(f.clone());
+            s.notice = Some(format!("Copied. Run it in a terminal: {f}"));
+        }),
+        _ => el(),
+    };
+    rows.push(form_row(t, "Login", Some(login_state), login_btn));
+    rows.push(form_row(t, "Sessions", None, t.small(format!("{live} live · {total} total")).font(TextStyle::new(t.fs, 400.0))));
+    let note = if a.profile_name.is_some() {
+        "Sessions on this login can write only to its folder, and no other session can read it. Removing the profile keeps the folder."
+    } else {
+        "The agent's own login. Add a profile with + to use a second subscription (work and personal, say)."
+    };
+    col().w_full().gap(6.0).child(t.section_title(&a.label())).child(t.group(rows, 12.0)).child(footnote(t, note))
+}
+
+/// "Add a login": another login of an agent, kept in its own config folder.
+fn profile_form(s: &App, info: &HostInfo, t: &Theme) -> El {
+    let mut kinds: Vec<AgentKind> = vec![];
+    for a in &info.agents {
+        if a.agent.profile_env().is_some() && !kinds.contains(&a.agent) {
+            kinds.push(a.agent);
+        }
+    }
+    let mut pick = row().gap(6.0).flex_wrap();
+    for kind in kinds {
+        let on = s.profile_agent == Some(kind);
+        pick = pick.child(t.button(kind.display_name(), if on { Btn::Primary } else { Btn::Default }, None, move |s| s.profile_agent = Some(kind)).key(format!("kind-{}", kind.as_str())));
+    }
+    let setting = s
+        .profile_agent
+        .and_then(|a| a.profile_env())
+        .map(|v| format!("The folder the agent's {v} setting points at, e.g. ~/.claude-work. Log in there once (the command shows after adding)."))
+        .unwrap_or_else(|| "Pick the agent, then give the login a name and its config folder.".into());
+    let choose = t.small_button_tx("Choose…", |_, tx| {
+        let options = rune::FileDialogOptions { title: "The agent's config folder".into(), ..Default::default() };
+        tx.open_folder(options, |s: &mut App, result, _| match result {
+            Ok(Some(p)) => s.profile_dir.replace_text(&p.display().to_string()),
+            Ok(None) => {}
+            Err(e) => s.error = Some(format!("Could not open the folder picker: {e}")),
+        });
+    });
+    let field_w = if t.mac() { 300.0 } else { 340.0 };
+    let rows = vec![
+        form_row(t, "Agent", None, pick),
+        form_row(t, "Name", None, row().w(field_w).child(t.field(&s.profile_name, "Work", |s| &mut s.profile_name))),
+        form_row(t, "Config folder", Some(setting), row().w(field_w).gap(6.0).center_y().child(row().grow(1.0).min_w(0.0).child(t.field_submit(&s.profile_dir, "~/.claude-work", |s| &mut s.profile_dir, |s: &mut App, _: &mut Tx| s.add_profile()))).child(choose)),
+    ];
+    col()
+        .key("profile-form")
+        .w_full()
+        .gap(6.0)
+        .child(t.section_title("New login"))
+        .child(t.group(rows, 12.0))
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .pt(6.0)
+                .child(footnote(t, "Each login is its own subscription. New sessions can pick it; its folder stays hidden from every other session.").shrink())
+                .child(el().grow(1.0))
+                .child(t.button("Cancel", Btn::Default, None, |s| s.adding_profile = false))
+                .child(t.button("Add Login", Btn::Primary, None, |s| s.add_profile()).key("add-profile")),
+        )
+}
+
+fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
+    let mut rows = vec![];
+    for a in &info.agents {
+        let key = login_key(a);
+        let profile = a.profile_name.is_some();
+        let open = profile && s.sel_agent.as_deref() == Some(key.as_str());
+        let k2 = key.clone();
+        let mut r = row()
+            .key(format!("agent-{key}"))
+            .w_full()
+            .gap(12.0)
+            .px(14.0)
+            .py(12.0)
+            .center_y()
+            .child(agent_badge(t, a.agent, 32.0, true))
+            .child(col().grow(1.0).min_w(0.0).child(t.label(a.label())).child(t.small(if a.available { login_detail(a) } else { capitalize(a.problem.as_deref().unwrap_or("not logged in")) })));
+        if a.available {
+            r = r.child(text("Ready").font(TextStyle::new(13.0, 400.0)).color(t.ok));
+        } else if let Some(f) = a.fix.clone() {
+            r = r.child(t.button_tx("How to Log In", Btn::Default, None, move |s, tx| {
+                tx.copy(f.clone());
+                s.notice = Some(format!("Copied. Run it in a terminal: {f}"));
+            }));
+        }
+        if profile {
+            r = r
+                .role("button")
+                .expanded(open)
+                .focusable(true)
+                .on_press(move |s: &mut App| s.sel_agent = if s.sel_agent.as_deref() == Some(k2.as_str()) { None } else { Some(k2.clone()) })
+                .child(icon(if open { &ic::CHEVRON_UP } else { &ic::CHEVRON_DOWN }, 14.0).color(t.text));
+        }
+        let mut block = col().w_full().child(r);
+        if open {
+            let (live, _) = sessions_of(s, &key);
+            let env = a.agent.profile_env().unwrap_or("");
+            let sub = |title: &str, detail: El, trailing: El| {
+                row()
+                    .w_full()
+                    .pl(58.0)
+                    .pr(14.0)
+                    .py(10.0)
+                    .gap(10.0)
+                    .center_y()
+                    .border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25))
+                    .child(col().grow(1.0).min_w(0.0).gap(2.0).child(t.label(title.to_string())).child(detail))
+                    .child(trailing)
+            };
+            if let Some(n) = &a.profile_name {
+                block = block.child(
+                    row()
+                        .w_full()
+                        .pl(58.0)
+                        .pr(14.0)
+                        .py(10.0)
+                        .border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25))
+                        .child(col().gap(2.0).child(t.small("Name")).child(t.label(n.clone()))),
+                );
+            }
+            if let Some(d) = &a.config_dir {
+                let dir = d.clone();
+                block = block.child(sub(
+                    "Config Folder",
+                    t.mono_small(format!("{} · {env}", tilde(d))),
+                    row().size(34.0, 34.0).center().radius(7.0).role("button").label("Open the folder").hover(Color::WHITE.alpha(0.08)).on_press(move |s: &mut App| s.reveal(&dir)).child(icon(&ic::FOLDER, 16.0).color(t.text)),
+                ));
+            }
+            let login = if a.available { format!("Logged in · {live} live session{}", if live == 1 { "" } else { "s" }) } else { capitalize(a.problem.as_deref().unwrap_or("")) };
+            let copy = match a.fix.clone() {
+                Some(f) => t.button_tx("Copy Login Command", Btn::Default, None, move |s, tx| {
+                    tx.copy(f.clone());
+                    s.notice = Some(format!("Copied: {f}"));
+                }),
+                None => el(),
+            };
+            block = block.child(sub("Login", t.small(login), copy));
+            if let Some(id) = a.profile_id.clone() {
+                block = block.child(
+                    row().w_full().pl(58.0).py(10.0).border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25)).child(t.button("Remove Profile…", Btn::Destructive, None, move |s| {
+                        s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo);
+                        s.sel_agent = None;
+                    })),
+                );
+            }
+            block = block.fill(Color::WHITE.alpha(0.02));
+        }
+        rows.push(block);
+    }
+    let head = row()
+        .w_full()
+        .center_y()
+        .child(col().grow(1.0).gap(2.0).child(t.section_title("Agent Logins")).child(t.small("Each login can be picked when you start a session").font(TextStyle::new(14.0, 400.0))))
+        .child(
+            row()
+                .h(34.0)
+                .px(12.0)
+                .gap(6.0)
+                .center_y()
+                .radius(7.0)
+                .fill(t.control)
+                .role("button")
+                .label("Add Profile")
+                .hover(Color::WHITE.alpha(0.06))
+                .on_press(|s: &mut App| s.adding_profile = true)
+                .child(icon(&ic::PLUS, 13.0).color(t.text))
+                .child(text("Add Profile").font(TextStyle::new(14.5, 700.0)).color(t.text)),
+        );
+    let mut c = col().key("agents").w_full().gap(24.0).child(col().w_full().gap(12.0).child(head).child(t.group(rows, 0.0)));
+    if s.adding_profile {
+        c = c.child(profile_form(s, info, t));
+    }
+    c.child(col().w_full().gap(12.0).child(t.section_title("Voice Input")).child(voice_box(s, t)))
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
+
+fn pick_workspace_folder(tx: &mut Tx) {
+    let options = rune::FileDialogOptions { title: "Add a folder agents may work in".into(), ..Default::default() };
+    tx.open_folder(options, |s: &mut App, result, _| match result {
+        Ok(Some(p)) => s.add_workspace_path(&p.display().to_string(), false),
+        Ok(None) => {}
+        Err(_) => {
+            // No picker here (no portal, headless): type the path instead.
+            s.adding_workspace = true;
+            s.ws_path.focused = true;
+        }
+    });
+}
+
+fn workspaces(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let mut ws: Vec<&Workspace> = s.workspaces.iter().collect();
+    ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
+    let selected = s.sel_ws.clone().filter(|id| s.workspace(id).is_some()).or_else(|| ws.iter().find(|w| w.kind != WorkspaceKind::Scratch).or(ws.first()).map(|w| w.workspace_id.clone()));
+    let mut list = col().w_full().grow(1.0).padding(4.0).gap(2.0).role("list");
+    for w in &ws {
+        let on = selected.as_deref() == Some(w.workspace_id.as_str());
+        let quick = w.kind == WorkspaceKind::Scratch;
+        let glyph = if quick { icon(&ic::BOLT, 14.0).color(if on && mac { Color::WHITE } else { t.bolt }) } else { icon(&ic::FOLDER, 15.0).color(if on && mac { Color::WHITE } else { rune::color::hex("#5fb0ff").unwrap_or(t.accent) }) };
+        let kind = match w.kind {
+            WorkspaceKind::Scratch => "Built in",
+            WorkspaceKind::Repo => "Git repo",
+            WorkspaceKind::Folder => "Folder",
+        };
+        let id = w.workspace_id.clone();
+        let detail = text(kind.to_string()).font(t.font_small()).color(if on && mac { Color::WHITE.alpha(0.8) } else { t.text2 });
+        list = list.child(source_row(t, format!("ws-{}", w.workspace_id), on, glyph, if quick { "Quick tasks" } else { &w.name }, detail, move |s| s.sel_ws = Some(id.clone())));
+    }
+    let sel = selected.as_ref().and_then(|id| s.workspace(id));
+    let remove: Option<Box<dyn Fn(&mut App)>> = sel.filter(|w| w.kind != WorkspaceKind::Scratch).map(|w| {
+        let id = w.workspace_id.clone();
+        Box::new(move |s: &mut App| {
+            s.act("Remove workspace", m::WORKSPACE_REMOVE, json!({"workspace_id": id}), Refresh::Workspaces);
+            s.sel_ws = None;
+        }) as Box<dyn Fn(&mut App)>
+    });
+    let mut left = col().w_full().child(list);
+    if mac {
+        left = left.child(t.plus_minus("Add Folder", |_, tx| pick_workspace_folder(tx), remove, ""));
+    } else {
+        let mut bar = row().w_full().gap(6.0).padding(8.0).child(t.small_button_tx("Add Folder…", |_, tx| pick_workspace_folder(tx)));
+        if let Some(f) = remove {
+            bar = bar.child(t.small_button("Remove", move |s| f(s)));
+        }
+        left = left.child(bar);
+    }
+    let detail = match sel {
+        Some(w) => workspace_detail(s, w, t),
+        None => col().child(t.small("No workspaces yet.")),
+    };
+    let mut c = col().key("workspaces").w_full().gap(18.0);
+    if s.adding_workspace {
+        let add = |s: &mut App| {
+            let p = s.ws_path.text.trim().to_string();
+            if !p.is_empty() {
+                s.add_workspace_path(&p, false);
+            }
+            s.ws_path.clear();
+            s.adding_workspace = false;
+        };
+        c = c.child(t.group(
+            vec![form_row(
+                t,
+                "Add a folder",
+                Some("A repo or plain folder agents may read and change.".into()),
+                row().w(360.0).gap(6.0).center_y().child(t.field(&s.ws_path, "/path/to/project", |s| &mut s.ws_path)).child(t.small_button("Add", add)).child(t.small_button("Cancel", |s| s.adding_workspace = false)),
+            )],
+            0.0,
+        ));
+    }
+    c = c.child(split(t, left, detail));
+    c.child(project_roots(s, t))
+}
+
+fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
+    let mac = t.mac();
+    let quick = w.kind == WorkspaceKind::Scratch;
+    let id = w.workspace_id.clone();
+    let preset = |p: NetworkPreset, name: &str, detail: &str| {
+        let on = w.network.presets.contains(&p);
+        let net = w.network.clone();
+        let id = id.clone();
+        form_row(
+            t,
+            name,
+            Some(detail.to_string()),
+            t.switch(on, name, move |s: &mut App| {
+                let mut net = net.clone();
+                if on {
+                    net.presets.retain(|x| *x != p);
+                } else {
+                    net.presets.push(p);
+                }
+                s.act("Change network rules", m::WORKSPACE_UPDATE, json!({"workspace_id": id, "network": net}), Refresh::Workspaces);
+            })
+            .key(format!("{}-{:?}", w.workspace_id, p)),
+        )
+    };
+    let mut hosts = row().gap(6.0).center_y().flex_wrap();
+    for h in &w.network.custom_hosts {
+        let (id2, h2) = (id.clone(), h.clone());
+        let net = w.network.clone();
+        hosts = hosts.child(
+            row()
+                .h(if mac { 22.0 } else { 28.0 })
+                .pl(8.0)
+                .pr(5.0)
+                .gap(5.0)
+                .center_y()
+                .radius(11.0)
+                .fill(Color::WHITE.alpha(0.1))
+                .child(text(h.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0)).color(t.text))
+                .child(
+                    row()
+                        .role("button")
+                        .label(format!("Remove {h}"))
+                        .on_press(move |s: &mut App| {
+                            let mut n = net.clone();
+                            n.custom_hosts.retain(|x| *x != h2);
+                            s.act("Remove host", m::WORKSPACE_UPDATE, json!({"workspace_id": id2, "network": n}), Refresh::Workspaces);
+                        })
+                        .child(icon(&ic::XMARK_CIRCLE, 12.0).color(Color::WHITE.alpha(0.3))),
+                ),
+        );
+    }
+    let editing = s.host_for.as_deref() == Some(w.workspace_id.as_str());
+    let add_host = if editing {
+        let idh = id.clone();
+        row().w(220.0).child(
+            t.field_submit(&s.custom_host, "api.example.com", |s| &mut s.custom_host, move |s: &mut App, _: &mut Tx| {
+                let h = s.custom_host.text.trim().to_string();
+                if !h.is_empty() {
+                    s.act("Add host", m::WORKSPACE_UPDATE, json!({"workspace_id": idh, "add_custom_host": h}), Refresh::Workspaces);
+                }
+                s.custom_host.clear();
+                s.host_for = None;
+            }),
+        )
+    } else {
+        let idh = id.clone();
+        t.small_button("Add Host…", move |s| {
+            s.host_for = Some(idh.clone());
+            s.custom_host = rune::TextEdit::new("");
+            s.custom_host.focused = true;
+        })
+    };
+    let extra = row()
+        .w_full()
+        .gap(10.0)
+        .px(if mac { 12.0 } else { 14.0 })
+        .py(if mac { 6.0 } else { 10.0 })
+        .center_y()
+        .child(t.label("Extra hosts"))
+        .child(el().grow(1.0))
+        .child(hosts)
+        .child(add_host);
+    let net = t.group(
+        vec![
+            preset(NetworkPreset::Web, "Open web", "Any public site. Your local network stays blocked."),
+            preset(NetworkPreset::Packages, "Package registries", "npm, PyPI, crates.io, Go modules"),
+            preset(NetworkPreset::Github, "GitHub", "github.com, its API and downloads"),
+            extra,
+        ],
+        if mac { 12.0 } else { 0.0 },
+    );
+    let mut conns = vec![];
+    for c in &s.connectors {
+        let on = w.connectors.contains(&c.connector_id);
+        let (idc, cid) = (id.clone(), c.connector_id.clone());
+        let current = w.connectors.clone();
+        conns.push(
+            row()
+                .w_full()
+                .gap(10.0)
+                .px(if mac { 12.0 } else { 14.0 })
+                .py(if mac { 8.0 } else { 12.0 })
+                .center_y()
+                .child(
+                    t.checkbox(on, &c.name, move |s: &mut App| {
+                        let mut list = current.clone();
+                        if on {
+                            list.retain(|x| *x != cid);
+                        } else {
+                            list.push(cid.clone());
+                        }
+                        s.act("Change connectors", m::WORKSPACE_UPDATE, json!({"workspace_id": idc, "connectors": list}), Refresh::Workspaces);
+                    })
+                    .key(format!("{}-{}", w.workspace_id, c.connector_id)),
+                )
+                .child(t.label(c.name.clone()))
+                .child(el().grow(1.0))
+                .child(t.small(format!("{} tools", c.tools.len()))),
+        );
+    }
+    if conns.is_empty() {
+        conns.push(form_row(t, "No connectors", Some("Add one in the Connectors tab.".into()), el()));
+    }
+    let place = if quick {
+        t.small(format!("No project folder: each session gets a fresh, empty folder of its own (in {}).", tilde(&w.path))).wrap()
+    } else {
+        t.mono(tilde(&w.path)).color(t.text2)
+    };
+    col()
+        .w_full()
+        .gap(if mac { 6.0 } else { 10.0 })
+        .child(text(if quick { "Quick tasks".to_string() } else { w.name.clone() }).font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+        .child(place)
+        .child(el().h(8.0))
+        .child(t.group_title("Network"))
+        .child(net)
+        .child(footnote(t, "The agent's own provider hosts are always allowed."))
+        .child(el().h(6.0))
+        .child(t.group_title("Connectors"))
+        .child(t.group(conns, if mac { 12.0 } else { 0.0 }))
+}
+
+/// Where paired phones may pick or create project folders.
+fn project_roots(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let mut rows = vec![];
+    for r in &s.project_roots {
+        let on = s.sel_root.as_deref() == Some(r.as_str());
+        let r2 = r.clone();
+        let mut e = row()
+            .key(format!("root-{r}"))
+            .w_full()
+            .gap(8.0)
+            .px(12.0)
+            .py(if mac { 8.0 } else { 12.0 })
+            .center_y()
+            .role("listitem")
+            .label(r.clone())
+            .focusable(true)
+            .on_press(move |s: &mut App| s.sel_root = Some(r2.clone()))
+            .child(icon(&ic::FOLDER, 15.0).color(if on && mac { Color::WHITE } else { rune::color::hex("#5fb0ff").unwrap_or(t.accent) }))
+            .child(t.mono(tilde(r)).color(if on && mac { Color::WHITE } else { t.text }));
+        if on {
+            e = e.fill(if mac { t.accent } else { Color::WHITE.alpha(0.1) });
+        }
+        rows.push(e);
+    }
+    if rows.is_empty() {
+        rows.push(form_row(t, "None", Some("Phones can't create projects.".into()), el()));
+    }
+    let add = |_: &mut App, tx: &mut Tx| {
+        let options = rune::FileDialogOptions { title: "A folder your phone may create projects in".into(), ..Default::default() };
+        tx.open_folder(options, |s: &mut App, result, _| match result {
+            Ok(Some(p)) => {
+                let mut roots = s.project_roots.clone();
+                roots.push(p.display().to_string());
+                s.set_project_roots(roots);
+            }
+            Ok(None) => {}
+            Err(e) => s.error = Some(format!("Could not open the folder picker: {e}")),
+        });
+    };
+    let remove: Option<Box<dyn Fn(&mut App)>> = s.sel_root.clone().filter(|r| s.project_roots.contains(r)).map(|r| {
+        Box::new(move |s: &mut App| {
+            let rest: Vec<String> = s.project_roots.iter().filter(|x| **x != r).cloned().collect();
+            s.set_project_roots(rest);
+            s.sel_root = None;
+        }) as Box<dyn Fn(&mut App)>
+    });
+    let mut b = t.group(rows, 0.0);
+    if mac {
+        b = b.child(t.plus_minus("Add Project Folder", add, remove, ""));
+    } else {
+        let mut bar = row().w_full().gap(6.0).padding(8.0).border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25)).child(t.small_button_tx("Add Folder…", add));
+        if let Some(f) = remove {
+            bar = bar.child(t.small_button("Remove", move |s| f(s)));
+        }
+        b = b.child(bar);
+    }
+    section(t, if mac { "Project folders" } else { "Project Folders" }, Some("Where your iPhone may create projects".into()), b).key("project-roots")
+}
+
+// ---------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------
+
+fn conn_badge(t: &Theme, c: &Connector, size: f32) -> El {
+    if c.name.to_lowercase().contains("github") || c.url.contains("github") {
+        return row().size(size, size).radius((size * 0.24).round()).center().fill(rune::color::hex("#24292f").unwrap_or(Color::BLACK)).child(icon(&ic::GITHUB, size * 0.6).color(Color::WHITE));
+    }
+    let palette = ["#4b3a8c", "#0f766e", "#9a3412", "#1d4ed8", "#7e22ce"];
+    let i = c.name.bytes().map(|b| b as usize).sum::<usize>() % palette.len();
+    t.badge_letter(c.name.chars().next().unwrap_or('?').to_ascii_uppercase(), rune::color::hex(palette[i]).unwrap_or(Color::BLACK), Color::WHITE, size)
+}
+
+fn conn_status(s: &App, c: &Connector) -> (String, bool) {
+    if s.signing_in.contains_key(&c.connector_id) {
+        return ("Waiting for the browser…".into(), true);
+    }
+    let n = c.tools.len();
+    match c.status.as_str() {
+        "ok" if c.auth == ConnectorAuth::None => (format!("No sign-in · {n} tools"), false),
+        "ok" => (format!("Signed in · {n} tools"), false),
+        "needs_sign_in" => ("Sign-in needed".into(), true),
+        "error" => ("Error".into(), true),
+        _ => ("Checking…".into(), false),
+    }
+}
+
+fn connectors(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let selected = s.sel_conn.clone().filter(|id| s.connectors.iter().any(|c| &c.connector_id == id)).or_else(|| s.connectors.first().map(|c| c.connector_id.clone()));
+    let mut list = col().w_full().grow(1.0).padding(4.0).gap(2.0).role("list");
+    for c in &s.connectors {
+        let on = !s.adding_connector && selected.as_deref() == Some(c.connector_id.as_str());
+        let (st, warn) = conn_status(s, c);
+        let detail = text(st).font(t.font_small()).color(if warn { t.warn } else if on && mac { Color::WHITE.alpha(0.8) } else { t.text2 }).truncate();
+        let id = c.connector_id.clone();
+        list = list.child(source_row(t, format!("conn-{}", c.connector_id), on, conn_badge(t, c, 22.0), &c.name, detail, move |s| {
+            s.sel_conn = Some(id.clone());
+            s.adding_connector = false;
+        }));
+    }
+    if s.connectors.is_empty() {
+        list = list.child(t.small("No connectors yet.").padding(8.0));
+    }
+    let remove: Option<Box<dyn Fn(&mut App)>> = selected.clone().filter(|_| !s.adding_connector).map(|id| {
+        Box::new(move |s: &mut App| {
+            s.act("Remove connector", m::CONNECTOR_REMOVE, json!({"connector_id": id}), Refresh::Connectors);
+            s.sel_conn = None;
+        }) as Box<dyn Fn(&mut App)>
+    });
+    let mut left = col().w_full().child(list);
+    let start_add = |s: &mut App, _: &mut Tx| {
+        s.adding_connector = true;
+        s.conn_url.focused = true;
+    };
+    if mac {
+        left = left.child(t.plus_minus("Add a Connector", start_add, remove, ""));
+    } else {
+        let mut bar = row().w_full().gap(6.0).padding(8.0).child(t.small_button_tx("Add…", start_add));
+        if let Some(f) = remove {
+            bar = bar.child(t.small_button("Remove", move |s| f(s)));
+        }
+        left = left.child(bar);
+    }
+    let detail = if s.adding_connector || s.connectors.is_empty() {
+        add_connector(s, t)
+    } else {
+        match selected.as_ref().and_then(|id| s.connectors.iter().find(|c| &c.connector_id == id)) {
+            Some(c) => connector_detail(s, c, t),
+            None => col(),
+        }
+    };
+    col().key("connectors").w_full().gap(18.0).child(split(t, left, detail))
+}
+
+fn add_connector(s: &App, t: &Theme) -> El {
+    let w = if t.mac() { 300.0 } else { 320.0 };
+    let rows = vec![
+        form_row(t, "Server URL", Some("A remote MCP server".into()), row().w(w).child(t.field_submit(&s.conn_url, "https://mcp.sentry.dev/mcp", |s| &mut s.conn_url, |s: &mut App, _: &mut Tx| s.add_connector()))),
+        form_row(t, "Token", Some("Optional: for servers that take a bearer token".into()), row().w(w).child(t.field(&s.conn_token, "Bearer token", |s| &mut s.conn_token))),
+    ];
+    col()
+        .key("add-connector")
+        .w_full()
+        .gap(8.0)
+        .child(text("Add a Connector").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+        .child(t.group(rows, 12.0))
+        .child(footnote(t, "If the server needs an account, your browser opens so you can sign in. New connectors are on in every workspace. For two accounts on one service (work and personal), add it twice and rename each."))
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(el().grow(1.0))
+                .child(t.button("Cancel", Btn::Default, None, |s| s.adding_connector = false))
+                .child(t.button("Add", Btn::Primary, None, |s| s.add_connector()).key("add-connector-button")),
+        )
+}
+
+fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
+    let mac = t.mac();
+    let id = c.connector_id.clone();
+    let signing = s.signing_in.get(&c.connector_id);
+    let renaming = s.renaming.as_deref() == Some(c.connector_id.as_str());
+    let title: El = if renaming {
+        let idn = id.clone();
+        row().w(260.0).child(t.field_submit(&s.rename, "e.g. Sentry (work)", |s| &mut s.rename, move |s: &mut App, _: &mut Tx| {
+            let n = s.rename.text.trim().to_string();
+            if !n.is_empty() {
+                s.act("Rename connector", m::CONNECTOR_UPDATE, json!({"connector_id": idn, "name": n}), Refresh::Connectors);
+            }
+            s.renaming = None;
+        }))
+    } else {
+        let (idr, nm) = (id.clone(), c.name.clone());
+        text(c.name.clone())
+            .font(TextStyle::new(15.0, t.w_bold))
+            .color(t.text)
+            .role("button")
+            .label(format!("Rename {}", c.name))
+            .help("Double-click to rename")
+            .on_double_press(move |s: &mut App| {
+                s.renaming = Some(idr.clone());
+                s.rename = rune::TextEdit::new(nm.clone());
+                s.rename.focused = true;
+            })
+    };
+    let mut actions = row().gap(8.0).center_y();
+    match signing {
+        Some(link) if !link.is_empty() => {
+            let l = link.clone();
+            actions = actions.child(t.small_button("Open Browser Again", move |s| s.open_queue.push(l.clone())));
+        }
+        Some(_) => {}
+        None if c.status == "needs_sign_in" || (c.status == "error" && c.auth == ConnectorAuth::Oauth) => {
+            let ids = id.clone();
+            actions = actions.child(t.button("Sign In…", Btn::Primary, None, move |s| s.sign_in(&ids)).key("sign-in"));
+        }
+        None => {}
+    }
+    let idf = id.clone();
+    actions = actions.child(t.small_button("Refresh Tools", move |s| s.act("Refresh", m::CONNECTOR_REFRESH, json!({"connector_id": idf}), Refresh::Connectors)));
+    let ide = id.clone();
+    let enabled = c.enabled;
+    actions = actions.child(
+        t.switch(enabled, "On", move |s: &mut App| s.act("Turn connector on or off", m::CONNECTOR_UPDATE, json!({"connector_id": ide, "enabled": !enabled}), Refresh::Connectors))
+            .key(format!("{}-enabled", c.connector_id)),
+    );
+    let mut d = col()
+        .w_full()
+        .gap(if mac { 6.0 } else { 10.0 })
+        .child(row().w_full().gap(10.0).items_start().child(col().grow(1.0).min_w(0.0).gap(4.0).child(title).child(t.mono(clip(c.url.trim_start_matches("https://"), 60)).color(t.text2))).child(actions));
+    if let Some(link) = signing.filter(|l| !l.is_empty()) {
+        d = d.child(footnote(t, "Finish signing in in your browser. This updates by itself when you're done. If no browser opened, open this link:")).child(t.mono_small(link.clone()));
+    } else if c.status == "error" {
+        if let Some(det) = &c.status_detail {
+            d = d.child(text(det.clone()).font(t.font_small()).color(t.danger).wrap());
+        }
+    }
+    d = d.child(t.faint(format!("Agents see its tools as {}__…", connector_slug(&c.name))));
+    // Defaults.
+    let default_row = |label: &str, which: &'static str, p: ToolPolicy| {
+        let key = format!("pol-{}-{which}", c.connector_id);
+        let (k2, cid) = (key.clone(), c.connector_id.clone());
+        form_row(t, label, None, popup_button(t, key, policy_name(p)).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), which.into(), p, false)))
+    };
+    d = d.child(el().h(8.0)).child(t.group_title("By default")).child(t.group(
+        vec![default_row("Tools that read", "read", c.read_policy), default_row("Tools that change things", "write", c.write_policy)],
+        if mac { 12.0 } else { 0.0 },
+    ));
+    if c.tools.is_empty() {
+        return d;
+    }
+    let changed = c.tools.iter().filter(|x| x.policy_override.is_some()).count();
+    d = d.child(el().h(8.0)).child(
+        row()
+            .w_full()
+            .child(t.group_title("Tools"))
+            .child(el().grow(1.0))
+            .child(t.faint(format!("{} tools · {changed} changed from the default", c.tools.len()))),
+    );
+    let head_cell = |s: &str, w: Option<f32>| {
+        let e = text(s.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(t.text2);
+        match w {
+            Some(w) => row().w(w).child(e),
+            None => row().grow(1.0).child(e),
+        }
+    };
+    let mut table = col()
+        .w_full()
+        .radius(t.box_radius)
+        .fill(t.boxed)
+        .clip_rounded(t.box_radius)
+        .child(row().w_full().px(12.0).py(8.0).border_sides([0.0, 0.0, 0.5, 0.0], t.sep).child(head_cell("Tool", Some(180.0))).child(head_cell("Kind", Some(120.0))).child(head_cell("Policy", None)));
+    if mac {
+        table = table.border(0.5, t.sep);
+    }
+    for (i, tool) in c.tools.iter().enumerate() {
+        let key = format!("pol-{}-{}", c.connector_id, tool.name);
+        let (k2, cid, name, p) = (key.clone(), c.connector_id.clone(), tool.name.clone(), tool.policy);
+        let color = match tool.policy {
+            ToolPolicy::Auto => t.text,
+            ToolPolicy::Ask => t.warn,
+            ToolPolicy::Disabled => t.danger,
+        };
+        let mut pol = row()
+            .key(key)
+            .gap(6.0)
+            .center_y()
+            .role("combobox")
+            .label(format!("{} policy: {}", tool.name, policy_short(tool.policy)))
+            .focusable(true)
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), name.clone(), p, true))
+            .child(text(policy_short(tool.policy)).font(t.font()).color(color));
+        if tool.policy_override.is_some() {
+            pol = pol.child(row().gap(4.0).center_y().child(t.dot(t.accent, 6.0)).child(text("changed").font(TextStyle::new(11.0, 400.0)).color(t.accent_text)));
+        }
+        let mut r = row()
+            .key(format!("tool-{}", tool.name))
+            .w_full()
+            .px(12.0)
+            .py(if mac { 7.0 } else { 9.0 })
+            .center_y()
+            .help(tool.description.clone().unwrap_or_default())
+            .child(row().w(180.0).child(text(tool.name.clone()).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text).truncate()))
+            .child(row().w(120.0).child(t.small(if tool.kind == ToolKind::Read { "Reads" } else { "Changes" }).font(t.font())))
+            .child(row().grow(1.0).child(pol));
+        if i % 2 == 1 {
+            r = r.fill(Color::WHITE.alpha(0.03));
+        }
+        table = table.child(r);
+    }
+    d.child(table)
+}
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+
+fn devices(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let mut rows = vec![];
+    for d in &s.devices {
+        let id = d.device_id.clone();
+        let renaming = s.renaming.as_deref() == Some(d.device_id.as_str());
+        let seen = d.last_seen_at.map(|ts| {
+            let a = short_age(ts, s.look);
+            if a == "now" { "Online now".to_string() } else { format!("Last seen {a} ago") }
+        });
+        let name: El = if renaming {
+            let idn = id.clone();
+            row().w(260.0).child(t.field_submit(&s.rename, "Name", |s| &mut s.rename, move |s: &mut App, _: &mut Tx| {
+                let n = s.rename.text.trim().to_string();
+                if !n.is_empty() {
+                    s.act("Rename device", m::DEVICE_RENAME, json!({"device_id": idn, "name": n}), Refresh::Devices);
+                }
+                s.renaming = None;
+            }))
+        } else {
+            col().gap(1.0).child(t.label(d.name.clone())).child(t.small(seen.unwrap_or_else(|| "Never seen".into())))
+        };
+        let (idr, idv, nm) = (id.clone(), id.clone(), d.name.clone());
+        rows.push(
+            row()
+                .key(format!("dev-{}", d.device_id))
+                .w_full()
+                .gap(10.0)
+                .px(12.0)
+                .py(10.0)
+                .center_y()
+                .child(icon(&ic::PHONE, 22.0).color(t.text2))
+                .child(name)
+                .child(el().grow(1.0))
+                .child(t.small_button("Rename…", move |s| {
+                    s.renaming = Some(idr.clone());
+                    s.rename = rune::TextEdit::new(nm.clone());
+                    s.rename.focused = true;
+                }))
+                .child(t.small_button_danger("Revoke…", move |s| s.act("Revoke device", m::DEVICE_REVOKE, json!({"device_id": idv}), Refresh::Devices)).key(format!("revoke-{}", d.device_id))),
+        );
+    }
+    if rows.is_empty() {
+        rows.push(form_row(t, "No paired devices", Some("Pair your iPhone to start sessions and answer approvals from it.".into()), el()));
+    }
+    let pair = row().w_full().pt(6.0).child(el().grow(1.0)).child(t.small_button("Pair iPhone…", |s| s.call(Tag::PairStart, m::DEVICE_PAIR_START, json!({}))).key("pair"));
+    let r = s.info.as_ref().map(|i| i.relay.clone()).unwrap_or_default();
+    let relay = vec![
+        form_row(
+            t,
+            "Status",
+            r.error.clone(),
+            if !r.configured {
+                t.small("Off")
+            } else {
+                t.status(if r.connected { t.ok } else { t.warn }, if r.connected { "Connected" } else { "Disconnected" }, false)
+            },
+        ),
+        form_row(t, "Address", None, t.mono(r.url.clone().unwrap_or_else(|| "Not configured".into())).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text2)),
+    ];
+    let here = if cfg!(target_os = "macos") && mac { "this Mac" } else { "this computer" };
+    col()
+        .key("devices")
+        .w_full()
+        .gap(18.0)
+        .child(col().w_full().gap(0.0).child(section(t, if mac { "Paired devices" } else { "Paired Devices" }, Some(format!("Phones reach {here} through your relay")), t.group(rows, 44.0))).child(pair))
+        .child(section(t, "Relay", None, t.group(relay, if mac { 12.0 } else { 0.0 })))
+}
+
+fn qr(payload: &str, t: &Theme) -> El {
+    let Ok(code) = qrcode::QrCode::new(payload.as_bytes()) else { return t.mono(payload.to_string()) };
+    let w = code.width();
+    let colors = code.to_colors();
+    let module = (150.0 / w as f32).floor().max(2.0);
+    let mut grid = col().key("qr");
+    for y in 0..w {
+        let mut r = row();
+        for x in 0..w {
+            let dark = colors[y * w + x] == qrcode::Color::Dark;
+            r = r.child(el().size(module, module).fill(if dark { Color::BLACK } else { Color::WHITE }));
+        }
+        grid = grid.child(r);
+    }
+    col().padding(14.0).radius(12.0).fill(Color::WHITE).child(grid)
+}
+
+fn pairing_sheet(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let Some(p) = &s.pairing else { return el() };
+    let mut c = col().w_full().items_center().gap(12.0);
+    let title = text("Pair an iPhone").font(TextStyle::new(15.0, t.w_bold)).color(t.text);
+    let center = |msg: &str| text(msg.to_string()).font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0).lh(if mac { 18.0 } else { 21.0 })).color(t.text2).wrap().align(rune::Align::Center).max_w(330.0);
+    let buttons;
+    match (&p.pending, &p.done) {
+        (_, Some(done)) => {
+            c = c.child(title).child(t.label(done.clone()));
+            buttons = row().w_full().gap(8.0).child(el().grow(1.0)).child(t.button("Done", Btn::Primary, None, |s| s.pairing = None).default_button());
+        }
+        (pend, None) => {
+            c = c.child(title).child(center("In AgentHost on your iPhone, tap Pair and scan this code. It works once and expires in 2 minutes.")).child(qr(&p.qr, t));
+            match pend {
+                Some(pend) => {
+                    let mut code = col()
+                        .key("confirm")
+                        .w_full()
+                        .gap(6.0)
+                        .items_center()
+                        .padding(14.0)
+                        .radius(10.0)
+                        .fill(Color::WHITE.alpha(0.05))
+                        .child(center(&format!("\u{201c}{}\u{201d} wants to pair. Check it shows the same code:", pend.device_name)))
+                        .child(text(pend.short_code.clone()).font(TextStyle::new(26.0, 600.0).mono().tracking(2.0)).color(t.text).key("short-code"));
+                    if mac {
+                        code = code.border(0.5, Color::WHITE.alpha(0.14));
+                    }
+                    c = c.child(code);
+                    buttons = row()
+                        .w_full()
+                        .gap(8.0)
+                        .child(el().grow(1.0))
+                        .child(t.button("Refuse", Btn::Default, None, |s| s.confirm_pairing(false)).key("refuse"))
+                        .child(
+                            t.button("Codes Match, Pair", Btn::Primary, Some(if mac { "↩" } else { "Enter" }), |s| s.confirm_pairing(true))
+                                .key("codes-match")
+                                .default_button(),
+                        );
+                }
+                None => {
+                    c = c.child(t.faint("Waiting for your iPhone…"));
+                    buttons = row().w_full().gap(8.0).child(el().grow(1.0)).child(t.button("Cancel", Btn::Default, None, |s| s.pairing = None).key("cancel-pair"));
+                }
+            }
+        }
+    }
+    let mut sheet = col()
+        .key("pairing")
+        .w(420.0)
+        .gap(18.0)
+        .px(24.0)
+        .pt(24.0)
+        .pb(20.0)
+        .fill(t.sheet)
+        .shadow(24.0, 60.0, Color::BLACK.alpha(0.55))
+        .modal(true, |s: &mut App| s.pairing = None)
+        .child(c)
+        .child(buttons);
+    sheet = if mac { sheet.corners([0.0, 0.0, 12.0, 12.0]).border_sides([0.0, 0.5, 0.5, 0.5], Color::WHITE.alpha(0.14)) } else { sheet.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    sheet
+}
