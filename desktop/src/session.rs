@@ -946,7 +946,11 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     let a = &pending.arguments;
     let command = a["command"].as_str().unwrap_or_default().to_string();
     let reason = a["reason"].as_str().unwrap_or_default().trim().to_string();
-    let title = pending.summary.clone().unwrap_or_else(|| format!("Install a tool: {command}"));
+    let title = pending.summary.clone().unwrap_or_else(|| format!("Run {command}"));
+    // The host says what the button does and what to watch for; older
+    // hosts only ever asked to install.
+    let approve_label = a["approve_label"].as_str().unwrap_or("Install").to_string();
+    let note = a["note"].as_str().unwrap_or("The package manager may run the package's install scripts with your permissions. Install only what you expected.").to_string();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
     let mins = ((pending.expires_at - now) / 60_000).max(0);
     let expires = if mins >= 1 { format!("expires in {mins} min") } else { "expires soon".into() };
@@ -954,7 +958,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     let aid = pending.approval_id.clone();
     let (a1, a2) = (aid.clone(), aid);
     let deny = t.button("Deny", Btn::Default, Some(&keys(s.look, Cmd::Deny)), move |s| s.respond(&a2, false)).key("deny");
-    let approve = t.button("Install", Btn::Primary, Some(&keys(s.look, Cmd::Approve)), move |s| s.respond(&a1, true)).key("approve");
+    let approve = t.button(&approve_label, Btn::Primary, Some(&keys(s.look, Cmd::Approve)), move |s| s.respond(&a1, true)).key("approve");
     let (deny, approve) = if mac { (deny, approve) } else { (deny.radius(17.0).px(18.0), approve.radius(17.0).px(18.0)) };
     let mut head = row().w_full().gap(10.0).center_y();
     if mac {
@@ -986,7 +990,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     }
     card = card.child(col().w_full().px(11.0).py(9.0).radius(if mac { 7.0 } else { 8.0 }).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
     card = card.child(
-        text("The package manager may run the package's install scripts with your permissions. Install only what you expected.")
+        text(note)
             .font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0))
             .color(t.text2)
             .wrap(),
