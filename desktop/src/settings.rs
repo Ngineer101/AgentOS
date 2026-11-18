@@ -22,6 +22,7 @@ fn tab_icon(tab: Tab) -> &'static Icon {
         Tab::Workspaces => &ic::TAB_WORKSPACES,
         Tab::Connectors => &ic::TAB_CONNECTORS,
         Tab::Devices => &ic::TAB_DEVICES,
+        Tab::Archived => &ic::TAB_ARCHIVED,
     }
 }
 
@@ -32,6 +33,7 @@ pub fn view(s: &App, tab: Tab, t: &Theme) -> El {
         Tab::Workspaces => workspaces(s, t),
         Tab::Connectors => connectors(s, t),
         Tab::Devices => devices(s, t),
+        Tab::Archived => archived(s, t),
     };
     if t.mac() {
         mac_window(s, tab, t, body)
@@ -903,6 +905,9 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         .child(text(if quick { "Quick tasks".to_string() } else { w.name.clone() }).font(TextStyle::new(15.0, t.w_bold)).color(t.text))
         .child(place)
         .child(el().h(8.0))
+        .child(t.group_title(if mac { "New sessions" } else { "New Sessions" }))
+        .child(t.group(vec![default_login_row(s, w, t)], 0.0))
+        .child(el().h(6.0))
         .child(t.group_title("Network"))
         .child(net)
         .child(footnote(t, "The agent's own provider hosts are always allowed."))
@@ -1357,4 +1362,101 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
         .child(buttons);
     sheet = if mac { sheet.corners([0.0, 0.0, 12.0, 12.0]).border_sides([0.0, 0.5, 0.5, 0.5], Color::WHITE.alpha(0.14)) } else { sheet.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
     sheet
+}
+
+// ---------------------------------------------------------------------------
+// A workspace's default login
+// ---------------------------------------------------------------------------
+
+const NO_DEFAULT: &str = "None — set by the next session";
+
+fn default_login_row(s: &App, w: &Workspace, t: &Theme) -> El {
+    let current = s.default_login(&w.workspace_id);
+    let agents = s.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
+    let label = current.as_ref().and_then(|k| agents.iter().find(|a| &login_key(a) == k)).map(|a| a.label()).unwrap_or_else(|| NO_DEFAULT.to_string());
+    let key = format!("default-login-{}", w.workspace_id);
+    let (k2, ws) = (key.clone(), w.workspace_id.clone());
+    let picker = popup_button(t, key, &label).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_default_login(s, tx, k2.clone(), ws.clone()));
+    form_row(t, "Default agent", Some("New sessions here start with this login".into()), picker)
+}
+
+/// The default-login picker: the logins that work, and None. Natively on macOS; elsewhere each
+/// press steps to the next.
+fn pick_default_login(s: &mut App, tx: &mut Tx, key: String, ws: String) {
+    let agents: Vec<AgentStatus> = s.info.as_ref().map(|i| i.agents.iter().filter(|a| a.available).cloned().collect()).unwrap_or_default();
+    let current = s.default_login(&ws);
+    if rune::popup_menu_supported() {
+        let mut menu = rune::PopupMenu::new();
+        for a in &agents {
+            let k = login_key(a);
+            menu = menu.item(rune::PopupItem::new(k.clone(), a.label()).checked(current.as_deref() == Some(k.as_str())));
+        }
+        menu = menu.separator().item(rune::PopupItem::new("none", NO_DEFAULT).checked(current.is_none()));
+        tx.popup_menu(menu, key, move |s: &mut App, picked, _| match picked {
+            Some("none") => s.set_default_login(&ws, None),
+            Some(k) => s.set_default_login(&ws, Some(k)),
+            None => {}
+        });
+    } else {
+        let keys: Vec<Option<String>> = agents.iter().map(|a| Some(login_key(a))).chain([None]).collect();
+        let i = keys.iter().position(|k| *k == current).map(|i| (i + 1) % keys.len()).unwrap_or(0);
+        s.set_default_login(&ws, keys[i].as_deref());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Archived
+// ---------------------------------------------------------------------------
+
+fn archived(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let q = s.archive_search.text.trim().to_lowercase();
+    let mut rows = vec![];
+    for x in &s.archived {
+        let title = x.title.clone().unwrap_or_else(|| s.login_label(x));
+        let ws = s.workspace(&x.workspace_id).map(|w| if w.kind == WorkspaceKind::Scratch { "Quick tasks".to_string() } else { w.name.clone() }).unwrap_or_default();
+        let login = s.login_label(x);
+        if !q.is_empty() && ![&title, &ws, &login].iter().any(|f| f.to_lowercase().contains(&q)) {
+            continue;
+        }
+        let when = x.archived_at.map(|ts| {
+            let a = short_age(ts, s.look);
+            if a == "now" { "Archived just now".to_string() } else { format!("Archived {a} ago") }
+        });
+        let (open, unarchive) = (x.session_id.clone(), x.session_id.clone());
+        rows.push(
+            row()
+                .key(format!("archived-{}", x.session_id))
+                .w_full()
+                .gap(10.0)
+                .px(12.0)
+                .py(if mac { 8.0 } else { 12.0 })
+                .center_y()
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(1.0)
+                        .child(t.label(title).truncate())
+                        .child(t.small(format!("{login} · {ws}{}", when.map(|w| format!(" · {w}")).unwrap_or_default())).truncate()),
+                )
+                .child(t.small_button("Open", move |s| {
+                    s.close_overlays();
+                    s.open_session(&open);
+                }))
+                .child(t.small_button("Unarchive", move |s| s.unarchive(&unarchive)).key(format!("unarchive-{}", x.session_id))),
+        );
+    }
+    if rows.is_empty() {
+        let msg = if q.is_empty() { "No archived sessions" } else { "No archived sessions match" };
+        rows.push(form_row(t, msg, Some(format!("Archive a session from its menu or with {}.", crate::commands::label(s.look, crate::commands::Cmd::Archive))), el()));
+    }
+    let search = row().w(if mac { 220.0 } else { 260.0 }).child(t.field(&s.archive_search, "Search archived", |s| &mut s.archive_search));
+    col()
+        .key("archived")
+        .w_full()
+        .gap(if mac { 6.0 } else { 10.0 })
+        .child(row().w_full().gap(8.0).center_y().child(t.section_title(if mac { "Archived sessions" } else { "Archived Sessions" })).child(el().grow(1.0)).child(search))
+        .child(t.group(rows, if mac { 12.0 } else { 0.0 }))
+        .child(footnote(t, "Archived sessions keep their transcript; open one to read it. They can't be deleted: the event log is append-only."))
 }

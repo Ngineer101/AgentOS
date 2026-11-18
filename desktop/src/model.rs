@@ -22,10 +22,11 @@ pub enum Tab {
     Workspaces,
     Connectors,
     Devices,
+    Archived,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [Tab::General, Tab::Agents, Tab::Workspaces, Tab::Connectors, Tab::Devices];
+    pub const ALL: [Tab; 6] = [Tab::General, Tab::Agents, Tab::Workspaces, Tab::Connectors, Tab::Devices, Tab::Archived];
     pub fn title(self) -> &'static str {
         match self {
             Tab::General => "General",
@@ -33,6 +34,7 @@ impl Tab {
             Tab::Workspaces => "Workspaces",
             Tab::Connectors => "Connectors",
             Tab::Devices => "Devices",
+            Tab::Archived => "Archived",
         }
     }
 }
@@ -46,6 +48,46 @@ pub enum Menu {
     Main,
     /// The New session dialog's login drop-down (GNOME).
     Login,
+    /// A sidebar row's context menu, at a window point.
+    Row(String, f32, f32),
+    /// A sidebar section's context menu (its workspace), at a window point.
+    Section(String, f32, f32),
+}
+
+/// One status vocabulary everywhere: the sidebar, the toolbar capsule, the header.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Status {
+    /// Created, starting or running: a spinner.
+    Working,
+    /// Waiting for an approval: orange.
+    NeedsYou,
+    /// Red, with the reason in the session.
+    Failed,
+    /// Idle: the agent finished its turn and waits for you. The accent colour.
+    YourTurn,
+    /// Grey.
+    Ended,
+}
+
+impl Status {
+    pub fn of(st: SessionState) -> Status {
+        match st {
+            SessionState::Created | SessionState::Starting | SessionState::Running => Status::Working,
+            SessionState::WaitingApproval => Status::NeedsYou,
+            SessionState::Failed => Status::Failed,
+            SessionState::Idle => Status::YourTurn,
+            SessionState::Ended => Status::Ended,
+        }
+    }
+    pub fn word(self) -> &'static str {
+        match self {
+            Status::Working => "Working",
+            Status::NeedsYou => "Needs you",
+            Status::Failed => "Failed",
+            Status::YourTurn => "Your turn",
+            Status::Ended => "Ended",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -108,10 +150,13 @@ pub struct App {
     pub menu: Option<Menu>,
     /// Filters the sidebar.
     pub search: TextEdit,
-    /// The optional first message in the New session sheet.
-    pub first_prompt: TextEdit,
-    /// Sent as soon as the session it was typed for exists.
-    pub pending_first: Option<String>,
+    /// Archived sessions (Settings › Archived), once asked for.
+    pub archived: Vec<Session>,
+    pub archive_search: TextEdit,
+    /// A live session waiting for "Archive ends the session" to be confirmed.
+    pub confirm_archive: Option<String>,
+    /// The New session sheet's "Make … the default for …" box.
+    pub make_default: bool,
     /// This computer's name, for the sidebar's host line.
     pub hostname: String,
     /// Settings selections.
@@ -192,8 +237,10 @@ pub fn init() -> App {
         shortcuts_open: false,
         menu: None,
         search: TextEdit::new(""),
-        first_prompt: TextEdit::new(""),
-        pending_first: None,
+        archived: vec![],
+        archive_search: TextEdit::new(""),
+        confirm_archive: None,
+        make_default: false,
         hostname: String::new(),
         sel_agent: None,
         sel_ws: None,
@@ -266,22 +313,86 @@ impl App {
         self.call(Tag::SessionCreated, m::SESSION_CREATE, params);
     }
 
-    /// The sheet's Start button: start the session, keep the first message for it.
+    /// The sheet's Start button: start the session; with the box checked, the login becomes
+    /// the workspace's default.
     pub fn start_from_sheet(&mut self) {
-        if self.new_ws.is_none() || self.new_agent.is_none() {
+        let (Some(ws), Some(key)) = (self.new_ws.clone(), self.new_agent.clone()) else {
             self.notice = Some("Pick a workspace and a login first.".into());
             return;
-        }
-        let first = self.first_prompt.text.trim().to_string();
-        self.pending_first = (!first.is_empty()).then_some(first);
-        self.first_prompt.clear();
+        };
         self.start_session();
+        if self.make_default && self.default_login(&ws).as_deref() != Some(key.as_str()) {
+            self.set_default_login(&ws, Some(&key));
+        }
+        self.make_default = false;
         self.new_open = false;
         self.menu = None;
     }
 
+    /// The workspace's default login ([`login_key`]), if it's set and still usable.
+    pub fn default_login(&self, ws: &str) -> Option<String> {
+        let w = self.workspace(ws)?;
+        let agent = w.default_agent?;
+        let key = w.default_profile_id.clone().unwrap_or_else(|| agent.as_str().to_string());
+        let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();
+        agents.iter().find(|a| login_key(a) == key && a.agent == agent && a.available).map(login_key)
+    }
+
+    /// Pick a workspace in the sheet: its default login comes with it.
+    pub fn pick_workspace(&mut self, ws: &str) {
+        self.new_ws = Some(ws.to_string());
+        self.make_default = false;
+        if let Some(key) = self.default_login(ws) {
+            self.new_agent = Some(key);
+        }
+    }
+
+    /// Set (or with `None` clear) the login new sessions in a workspace start with.
+    pub fn set_default_login(&self, ws: &str, key: Option<&str>) {
+        let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();
+        let params = match key.and_then(|k| agents.iter().find(|a| login_key(a) == k)) {
+            Some(a) => json!({"workspace_id": ws, "agent": a.agent, "profile_id": login_key(a)}),
+            None => json!({"workspace_id": ws, "agent": null}),
+        };
+        self.act("Change the default login", m::WORKSPACE_SET_DEFAULT_AGENT, params, Refresh::Workspaces);
+    }
+
+    /// Archive a session: a live one asks first (archiving ends it), an ended one goes at once.
+    pub fn archive(&mut self, id: &str) {
+        let Some(sess) = self.sessions.iter().find(|x| x.session_id == id) else { return };
+        if !sess.state.is_terminal() && self.confirm_archive.as_deref() != Some(id) {
+            self.confirm_archive = Some(id.to_string());
+            return;
+        }
+        self.confirm_archive = None;
+        // Select the next session (or the empty state) before it leaves the list.
+        if self.screen == Screen::Session(id.to_string()) {
+            let order = self.sidebar_order();
+            let i = order.iter().position(|x| x == id);
+            let next = i.and_then(|i| order.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| order.get(j)))).cloned();
+            match next {
+                Some(n) => self.open_session(&n),
+                None => self.screen = Screen::Home,
+            }
+        }
+        self.act("Archive session", m::SESSION_ARCHIVE, json!({"session_id": id}), Refresh::Archived);
+    }
+
+    /// Archive every ended session in a workspace.
+    pub fn archive_ended(&mut self, ws: &str) {
+        let ids: Vec<String> = self.sessions.iter().filter(|x| x.workspace_id == ws && x.state.is_terminal()).map(|x| x.session_id.clone()).collect();
+        for id in ids {
+            self.archive(&id);
+        }
+    }
+
+    pub fn unarchive(&mut self, id: &str) {
+        self.act("Unarchive session", m::SESSION_UNARCHIVE, json!({"session_id": id}), Refresh::Archived);
+    }
+
     /// Open the New session sheet, preselecting Quick tasks for a quick task, else the last
-    /// choice (or the first folder), and the last login (or the first one that's ready).
+    /// choice (or the first folder); and the workspace's default login, else the last login
+    /// (or the first one that's ready).
     pub fn open_new_session(&mut self, quick: bool) {
         self.close_overlays();
         if quick || self.new_ws.as_ref().is_none_or(|w| self.workspace(w).is_none()) {
@@ -290,11 +401,13 @@ impl App {
             self.new_ws = if quick { quick_ws.or(first_folder) } else { first_folder.or(quick_ws) };
         }
         let agents = self.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
-        if !agents.iter().any(|a| a.available && Some(login_key(a)) == self.new_agent) {
+        if let Some(key) = self.new_ws.clone().and_then(|w| self.default_login(&w)) {
+            self.new_agent = Some(key);
+        } else if !agents.iter().any(|a| a.available && Some(login_key(a)) == self.new_agent) {
             self.new_agent = agents.iter().find(|a| a.available).map(login_key);
         }
+        self.make_default = false;
         self.new_open = true;
-        self.first_prompt.focused = true;
     }
 
     pub fn open_settings(&mut self, tab: Tab) {
@@ -305,6 +418,7 @@ impl App {
             Tab::Workspaces => self.refresh(Refresh::Workspaces),
             Tab::Connectors => self.refresh(Refresh::Connectors),
             Tab::Devices => self.refresh(Refresh::Devices),
+            Tab::Archived => self.refresh(Refresh::Archived),
         }
     }
 
@@ -314,6 +428,7 @@ impl App {
         self.settings = None;
         self.shortcuts_open = false;
         self.menu = None;
+        self.confirm_archive = None;
     }
 
     /// The open session.
@@ -446,6 +561,7 @@ impl App {
             Refresh::Approvals => self.call(Tag::Approvals, m::APPROVAL_LIST, json!({})),
             Refresh::HostInfo => self.call(Tag::HostInfo, m::HOST_INFO, json!({})),
             Refresh::ProjectRoots => self.call(Tag::ProjectRoots, m::PROJECT_BROWSE, json!({})),
+            Refresh::Archived => self.call(Tag::Archived, m::SESSION_LIST, json!({"archived": true})),
         }
     }
 
@@ -473,8 +589,9 @@ impl App {
         self.call(Tag::Subscribed(id.into()), m::EVENTS_SUBSCRIBE, json!({"session_id": id, "after_seq": after}));
     }
 
+    /// A session by id: a listed one, else an archived one.
     pub fn session(&self, id: &str) -> Option<&Session> {
-        self.sessions.iter().find(|s| s.session_id == id)
+        self.sessions.iter().find(|s| s.session_id == id).or_else(|| self.archived.iter().find(|s| s.session_id == id))
     }
 
     pub fn workspace(&self, id: &str) -> Option<&Workspace> {
@@ -685,7 +802,16 @@ impl App {
                 }
                 // An older host without projects.
                 (Tag::ProjectRoots, Err(_)) => self.project_roots = vec![],
-                (Tag::Sessions, Ok(v)) => self.sessions = parse(v).unwrap_or_default(),
+                (Tag::Sessions, Ok(v)) => {
+                    let all: Vec<Session> = parse(v).unwrap_or_default();
+                    self.sessions = all.into_iter().filter(|s| s.archived_at.is_none()).collect();
+                }
+                (Tag::Archived, Ok(v)) => {
+                    let mut all: Vec<Session> = parse(v).unwrap_or_default();
+                    all.retain(|s| s.archived_at.is_some());
+                    all.sort_by_key(|s| std::cmp::Reverse(s.archived_at));
+                    self.archived = all;
+                }
                 (Tag::Connectors, Ok(v)) => {
                     self.connectors = parse(v).unwrap_or_default();
                     self.settle_sign_ins();
@@ -734,11 +860,8 @@ impl App {
                         let id = s.session_id.clone();
                         self.upsert_session(s);
                         self.open_session(&id);
-                        // The sheet's first message goes as the session's first prompt.
-                        if let Some(text) = self.pending_first.take() {
-                            self.prompt.replace_text(&text);
-                            self.send_prompt();
-                        }
+                        // The first session in a workspace sets its default login.
+                        self.refresh(Refresh::Workspaces);
                     }
                 }
                 (Tag::Subscribed(id), Ok(v)) => {
@@ -754,10 +877,7 @@ impl App {
                 }
                 (Tag::Action { what, .. }, Err(e)) => self.error = Some(format!("{what} failed: {}", e.message)),
                 (Tag::PairStart, Err(e)) => self.error = Some(format!("Pairing could not start: {}", e.message)),
-                (Tag::SessionCreated, Err(e)) => {
-                    self.pending_first = None;
-                    self.error = Some(format!("Could not start the session: {}", e.message))
-                }
+                (Tag::SessionCreated, Err(e)) => self.error = Some(format!("Could not start the session: {}", e.message)),
                 (_, Err(e)) => self.error = Some(e.message),
             },
             FromHost::Note(n) => self.on_note(n),
@@ -904,6 +1024,16 @@ impl App {
                     }
                     let waiting = s.state == SessionState::WaitingApproval;
                     let was = self.session(&s.session_id).map(|x| x.state == SessionState::WaitingApproval).unwrap_or(false);
+                    // Archived sessions leave the list (and come back when unarchived).
+                    if s.archived_at.is_some() {
+                        self.sessions.retain(|x| x.session_id != s.session_id);
+                        match self.archived.iter_mut().find(|x| x.session_id == s.session_id) {
+                            Some(x) => *x = s,
+                            None => self.archived.insert(0, s),
+                        }
+                        return;
+                    }
+                    self.archived.retain(|x| x.session_id != s.session_id);
                     self.upsert_session(s);
                     if waiting != was {
                         self.refresh(Refresh::Approvals);

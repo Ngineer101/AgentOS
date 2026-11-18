@@ -34,6 +34,8 @@ pub enum Tag {
     Voice,
     /// `project.browse` with no path: the project folders.
     ProjectRoots,
+    /// `session.list` with `archived: true`.
+    Archived,
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -47,6 +49,7 @@ pub enum Refresh {
     Approvals,
     HostInfo,
     ProjectRoots,
+    Archived,
 }
 
 pub enum ToHost {

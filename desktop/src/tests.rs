@@ -330,10 +330,9 @@ fn connect(socket: &std::path::Path) -> model::App {
     app
 }
 
-/// ⌘N's sheet: pick a workspace and a login, type a first message, Start. The session opens
-/// and the message goes as its first prompt.
+/// ⌘N's sheet: pick a workspace and a login, Start. The session opens and takes a prompt.
 #[test]
-fn the_new_session_sheet_starts_a_session_with_its_first_message() {
+fn the_new_session_sheet_starts_a_session_you_can_prompt() {
     let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::Builder::new().prefix("ahs").tempdir_in("/tmp").unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -346,9 +345,11 @@ fn the_new_session_sheet_starts_a_session_with_its_first_message() {
     assert!(app.new_open);
     assert_eq!(app.new_ws.as_deref(), Some(QUICK_WORKSPACE_ID));
     app.new_agent = Some("fake".into());
-    app.first_prompt.replace_text("hello from the sheet");
     app.start_from_sheet();
     assert!(!app.new_open, "the sheet closes on Start");
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    app.prompt.replace_text("hello from the sheet");
+    app.send_prompt();
     pump(&mut app, |a| {
         let Screen::Session(id) = &a.screen else { return false };
         a.transcripts.get(id).is_some_and(|t| t.events.iter().any(|e| e.kind == EventType::AgentMessage && e.payload["text"] == "echo: hello from the sheet"))
@@ -385,8 +386,10 @@ fn an_approval_waits_inline_and_the_approve_shortcut_runs_the_tool() {
 
     app.open_new_session(true);
     app.new_agent = Some("fake".into());
-    app.first_prompt.replace_text(&format!(r#"mcp {}__create_note {{"text":"buy milk"}}"#, connector_slug(&conn.name)));
     app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    app.prompt.replace_text(&format!(r#"mcp {}__create_note {{"text":"buy milk"}}"#, connector_slug(&conn.name)));
+    app.send_prompt();
     pump(&mut app, |a| a.current_approval().is_some());
     let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
     assert!(server.state.calls.lock().unwrap().is_empty(), "called before approval");
@@ -453,8 +456,11 @@ fn sidebar_groups_numbers_and_search() {
     let mut tx = rune::Tx::default();
     let names: Vec<&str> = app.sidebar_groups().iter().map(|(w, _)| w.name.as_str()).collect();
     assert_eq!(names, ["Quick tasks", "relay", "notes"], "Quick tasks first; empty workspaces left out");
-    // Ended sessions get no number.
+    // Ended and failed sessions get no number.
     assert_eq!(app.numbered(), ["ses_q", "ses_1", "ses_2", "ses_3"]);
+    // One status vocabulary.
+    let word = |id: &str| model::Status::of(app.session(id).unwrap().state).word();
+    assert_eq!([word("ses_q"), word("ses_1"), word("ses_2"), word("ses_5"), word("ses_4")], ["Your turn", "Needs you", "Working", "Failed", "Ended"]);
     commands::run(&mut app, Cmd::Jump(2), &mut tx);
     assert_eq!(app.screen, Screen::Session("ses_1".into()));
     commands::run(&mut app, Cmd::NextSession, &mut tx);
@@ -470,4 +476,67 @@ fn sidebar_groups_numbers_and_search() {
     assert_eq!(app.settings, Some(model::Tab::General));
     commands::run(&mut app, Cmd::NewSession, &mut tx);
     assert!(app.new_open && app.settings.is_none());
+}
+
+/// Archive: a live session asks first, leaves the list, shows in Settings › Archived, opens
+/// read-only, and comes back when unarchived. The first session in a workspace makes its
+/// login the default, the sheet preselects it, and "Make … the default" changes it.
+#[test]
+fn archiving_and_default_logins() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahr").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+    let idle = |a: &model::App| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle));
+
+    // The first quick task sets Quick tasks' default login to the fake agent.
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.start_from_sheet();
+    pump(&mut app, idle);
+    let Screen::Session(first) = app.screen.clone() else { unreachable!() };
+    pump(&mut app, |a| a.default_login(QUICK_WORKSPACE_ID).as_deref() == Some("fake"));
+    app.new_agent = None;
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    assert_eq!(app.new_agent.as_deref(), Some("fake"), "the sheet preselects the workspace's default");
+    app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if *id != first) && idle(a));
+    let Screen::Session(second) = app.screen.clone() else { unreachable!() };
+
+    // Clearing the default from Settings, then "Make … the default" sets it again.
+    app.set_default_login(QUICK_WORKSPACE_ID, None);
+    pump(&mut app, |a| a.workspace(QUICK_WORKSPACE_ID).is_some_and(|w| w.default_agent.is_none()));
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.make_default = true;
+    app.start_from_sheet();
+    pump(&mut app, |a| a.default_login(QUICK_WORKSPACE_ID).as_deref() == Some("fake"));
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if *id != first && *id != second) && idle(a));
+    let Screen::Session(third) = app.screen.clone() else { unreachable!() };
+
+    // Archiving the open, live session asks first; confirming selects another one.
+    commands::run(&mut app, Cmd::Archive, &mut tx);
+    assert_eq!(app.confirm_archive.as_deref(), Some(third.as_str()), "a live session asks first");
+    app.archive(&third);
+    assert!(app.confirm_archive.is_none());
+    assert_ne!(app.screen, Screen::Session(third.clone()), "another session is selected");
+    pump(&mut app, |a| !a.sessions.iter().any(|s| s.session_id == third));
+    app.open_settings(model::Tab::Archived);
+    pump(&mut app, |a| a.archived.iter().any(|s| s.session_id == third && s.archived_at.is_some() && s.state.is_terminal()));
+    assert!(!app.sidebar_order().contains(&third));
+    // Open shows it read-only; Unarchive brings it back to the list.
+    app.close_overlays();
+    app.open_session(&third);
+    assert!(app.current().is_some_and(|s| s.archived_at.is_some()));
+    app.unarchive(&third);
+    pump(&mut app, |a| a.sessions.iter().any(|s| s.session_id == third) && !a.archived.iter().any(|s| s.session_id == third));
+    // Ended sessions archive at once.
+    app.act("End session", agenthost_proto::methods::SESSION_END, serde_json::json!({"session_id": first}), bridge::Refresh::None);
+    pump(&mut app, |a| a.session(&first).is_some_and(|s| s.state.is_terminal()));
+    app.archive_ended(QUICK_WORKSPACE_ID);
+    assert!(app.confirm_archive.is_none());
+    pump(&mut app, |a| !a.sessions.iter().any(|s| s.session_id == first));
+    assert!(app.error.is_none(), "{:?}", app.error);
 }

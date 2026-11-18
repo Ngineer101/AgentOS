@@ -85,7 +85,21 @@ fn base(s: &mut App) {
         sess("ses_1", "ws_relay", AgentKind::Claude, Some("prof_work"), SessionState::WaitingApproval, "Fix the flaky resume test", 40_000),
         sess("ses_2", "ws_relay", AgentKind::Codex, None, SessionState::Running, "Add OAuth refresh", 300_000),
         sess("ses_3", "ws_relay", AgentKind::Opencode, None, SessionState::Idle, "Review the relay worker", 7_200_000),
+        sess("ses_5", "ws_notes", AgentKind::Codex, None, SessionState::Failed, "Tidy the reading list", 1_500_000),
         sess("ses_4", "ws_notes", AgentKind::Claude, None, SessionState::Ended, "Weekly summary", 90_000_000),
+    ];
+    if let Some(f) = s.sessions.iter_mut().find(|x| x.session_id == "ses_5") {
+        f.state_reason = Some("codex exited with status 1: model rate limit reached".into());
+    }
+    let archived = |id: &str, ws: &str, agent, profile: Option<&str>, title: &str, ago_ms: i64| Session {
+        state: SessionState::Ended,
+        archived_at: Some(t - ago_ms),
+        ..sess(id, ws, agent, profile, SessionState::Ended, title, ago_ms + 3_600_000)
+    };
+    s.archived = vec![
+        archived("ses_a1", "ws_relay", AgentKind::Claude, Some("prof_work"), "Port the CLI to clap 5", 7_200_000),
+        archived("ses_a2", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), "Summarise the Rust 2027 RFC", 86_400_000 * 2),
+        archived("ses_a3", "ws_notes", AgentKind::Codex, None, "Draft the release notes", 86_400_000 * 9),
     ];
     s.connectors = vec![Connector {
         connector_id: "con_gh".into(),
@@ -310,14 +324,48 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.new_ws = Some("ws_relay".into());
         s.new_agent = Some("prof_work".into());
         s.new_open = true;
-        s.first_prompt.focused = true;
+    }),
+    ("new-other-login", |s| {
+        session(s);
+        s.new_ws = Some("ws_relay".into());
+        s.new_agent = Some("claude".into());
+        s.make_default = true;
+        s.new_open = true;
+    }),
+    ("confirm-archive", |s| {
+        session(s);
+        s.confirm_archive = Some("ses_1".into());
+    }),
+    ("row-menu", |s| {
+        session(s);
+        s.menu = Some(Menu::Row("ses_3".into(), 120.0, 320.0));
+    }),
+    ("failed", |s| {
+        session(s);
+        s.screen = Screen::Session("ses_5".into());
+    }),
+    ("settings-archived", |s| {
+        base(s);
+        s.settings = Some(Tab::Archived);
+    }),
+    ("archived-open", |s| {
+        base(s);
+        let t = s.transcripts.entry("ses_a1".into()).or_default();
+        t.events = vec![
+            ev("ses_a1", 1, 0, EventType::SessionState, json!({"state": "created"})),
+            ev("ses_a1", 2, 1_000, EventType::Prompt, json!({"text": "Port the CLI's argument parsing to clap 5."})),
+            ev("ses_a1", 3, 40_000, EventType::AgentMessage, json!({"text": "Done: the derive macros moved to `#[command]` and `#[arg]`, and `cargo test -p agenthost-cli` passes."})),
+            ev("ses_a1", 4, 41_000, EventType::TurnEnd, json!({"stop_reason": "end_turn"})),
+            ev("ses_a1", 5, 50_000, EventType::SessionState, json!({"state": "ended", "reason": "archived"})),
+        ];
+        t.last_seq = 5;
+        s.screen = Screen::Session("ses_a1".into());
     }),
     ("new-login-menu", |s| {
         session(s);
         s.new_ws = Some("ws_relay".into());
         s.new_agent = Some("prof_work".into());
         s.new_open = true;
-        s.first_prompt.focused = true;
         s.menu = Some(Menu::Login);
     }),
     ("settings-general", |s| {

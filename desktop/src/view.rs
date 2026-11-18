@@ -4,7 +4,7 @@
 use crate::commands::{label as keys, run, Cmd};
 use crate::icons as ic;
 use crate::look::{Btn, Look, Theme};
-use crate::model::{App, Conn, Menu, Screen, Tab};
+use crate::model::{App, Conn, Menu, Screen, Status, Tab};
 use agenthost_proto::*;
 use rune::{col, el, icon, row, text, Color, Cx, El, ScrollSpec, TextStyle, Tx};
 
@@ -28,6 +28,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if s.shortcuts_open {
         root = root.child(crate::sheet::shortcuts(s, &t));
+    }
+    if let Some(id) = &s.confirm_archive {
+        root = root.child(crate::sheet::confirm_archive(s, id, &t));
     }
     root
 }
@@ -73,34 +76,28 @@ pub fn short_age(ts: i64, look: Look) -> String {
     format!("{n}{}", if look.mac() { unit_mac } else { unit_gnome })
 }
 
-pub fn state_word(st: SessionState) -> &'static str {
+/// A status's colour in this look.
+pub fn status_color(t: &Theme, st: Status) -> Color {
     match st {
-        SessionState::Created => "Created",
-        SessionState::Starting => "Starting",
-        SessionState::Idle => "Idle",
-        SessionState::Running => "Running",
-        SessionState::WaitingApproval => "Needs approval",
-        SessionState::Ended => "Ended",
-        SessionState::Failed => "Failed",
+        Status::Working => t.text2,
+        Status::NeedsYou => t.warn,
+        Status::Failed => t.danger,
+        Status::YourTurn => t.accent,
+        Status::Ended => if t.mac() { t.text3 } else { Color::WHITE.alpha(0.3) },
     }
 }
 
-/// The status vocabulary: orange = needs you, spinner = running, ring = idle, grey = ended.
-fn status_glyph(t: &Theme, st: SessionState, quick: bool, selected: bool) -> El {
-    let mac = t.mac();
-    let on_sel = selected && mac;
-    let size = if mac { 8.0 } else { 9.0 };
-    let boxed = |e: El| row().size(14.0, 14.0).center().child(e);
-    boxed(match st {
-        SessionState::WaitingApproval => t.dot(if on_sel { Color::WHITE } else { t.warn }, size),
-        SessionState::Running | SessionState::Starting => {
-            icon(&ic::SPINNER, if mac { 14.0 } else { 16.0 }).color(if on_sel { Color::WHITE } else if mac { t.text2 } else { t.text }).looping(rune::LoopSpec::rotation(0.9))
-        }
-        SessionState::Failed => t.dot(if on_sel { Color::WHITE } else { t.danger }, size),
-        _ if quick => icon(&ic::BOLT, 14.0).color(if on_sel { Color::WHITE } else { t.bolt }),
-        SessionState::Ended => t.dot(if on_sel { Color::WHITE.alpha(0.7) } else if mac { t.text3 } else { Color::WHITE.alpha(0.3) }, size),
-        _ => el().size(size, size).radius(size / 2.0).border(1.5, if on_sel { Color::WHITE } else if mac { t.text3 } else { t.text2 }),
-    })
+/// The status vocabulary: spinner = working, orange = needs you, red = failed, accent dot =
+/// your turn, grey = ended. `on_accent` draws it on a selected (accent) row.
+pub fn status_glyph(t: &Theme, st: Status, on_accent: bool) -> El {
+    let size = if t.mac() { 8.0 } else { 9.0 };
+    let c = if on_accent { Color::WHITE } else { status_color(t, st) };
+    let e = match st {
+        Status::Working => icon(&ic::SPINNER, if t.mac() { 14.0 } else { 16.0 }).color(if on_accent { Color::WHITE } else if t.mac() { t.text2 } else { t.text }).looping(rune::LoopSpec::rotation(0.9)),
+        Status::Ended if on_accent => t.dot(Color::WHITE.alpha(0.6), size),
+        _ => t.dot(c, size),
+    };
+    row().size(14.0, 14.0).center().child(e)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,17 +181,31 @@ fn sidebar(s: &App, t: &Theme) -> El {
         let quick = w.kind == WorkspaceKind::Scratch;
         let title = if quick { if mac { "Quick tasks".to_string() } else { "Quick Tasks".to_string() } } else { w.name.clone() };
         let top = if gi == 0 { if mac { 6.0 } else { 8.0 } } else { 12.0 };
+        let wsid = w.workspace_id.clone();
         list = list.child(
             text(title)
                 .font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) })
                 .color(if mac { t.text3 } else { t.text2 })
                 .pt(top)
                 .pb(4.0)
-                .px(if mac { 10.0 } else { 12.0 }),
+                .px(if mac { 10.0 } else { 12.0 })
+                .on_secondary_press(move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| {
+                    if s.look.mac() && rune::popup_menu_supported() {
+                        let ws = wsid.clone();
+                        let menu = rune::PopupMenu::new().item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions"));
+                        tx.popup_menu(menu, p, move |s: &mut App, picked, _| {
+                            if picked == Some("archive-ended") {
+                                s.archive_ended(&ws);
+                            }
+                        });
+                    } else {
+                        s.menu = Some(Menu::Section(wsid.clone(), p.x, p.y));
+                    }
+                }),
         );
         for x in sessions {
             let n = numbered.iter().position(|id| *id == x.session_id).map(|i| i + 1);
-            list = list.child(session_row(s, t, x, quick, n));
+            list = list.child(session_row(s, t, x, n));
         }
     }
     if groups.is_empty() {
@@ -251,21 +262,15 @@ fn sidebar(s: &App, t: &Theme) -> El {
     sb
 }
 
-fn session_row(s: &App, t: &Theme, x: &Session, quick: bool, n: Option<usize>) -> El {
+fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     let mac = t.mac();
     let selected = s.screen == Screen::Session(x.session_id.clone());
     let ended = x.state.is_terminal();
     let title = x.title.clone().unwrap_or_else(|| s.login_label(x));
-    // With the state shown, a profile's name alone says which login ("Needs approval · Work").
-    let mut sub = vec![];
-    if quick && x.state == SessionState::Idle {
-        sub.push(s.login_label(x));
-    } else {
-        sub.push(state_word(x.state).to_string());
-        let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
-        sub.push(profile.unwrap_or_else(|| x.agent.display_name().to_string()));
-    }
-    sub.push(short_age(x.updated_at, s.look));
+    // The status, then the login: a profile's name alone says which ("Your turn · Work · 3m").
+    let status = Status::of(x.state);
+    let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
+    let sub = vec![status.word().to_string(), profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)];
     let sub = sub.join(" · ");
     let (title_c, sub_c) = if selected && mac {
         (Color::WHITE, Color::WHITE.alpha(0.8))
@@ -289,7 +294,11 @@ fn session_row(s: &App, t: &Theme, x: &Session, quick: bool, n: Option<usize>) -
             s.close_overlays();
             s.open_session(&id)
         })
-        .child(status_glyph(t, x.state, quick, selected).mt(if mac { 2.0 } else { 0.0 }));
+        .on_secondary_press({
+            let id = x.session_id.clone();
+            move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| row_menu(s, &id, p, tx)
+        })
+        .child(status_glyph(t, status, selected && mac).mt(if mac { 2.0 } else { 0.0 }));
     r = if mac { r.items_start() } else { r.center_y() };
     let weight = if selected && !mac { 700.0 } else { 400.0 };
     r = r.child(
@@ -340,12 +349,22 @@ fn toolbar(s: &App, t: &Theme) -> El {
             ("AgentHost".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
         }
     };
+    let sub_text = text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate();
+    // GNOME has no capsule: the status leads the header's subtitle.
+    let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none()) {
+        Some(x) => {
+            let st = Status::of(x.state);
+            let word = text(format!("{} · ", st.word())).font(TextStyle::new(t.fs_small, 700.0).lh((t.fs_small * 1.2).round())).color(if st == Status::Working { t.text2 } else { status_color(t, st) });
+            row().key("header-status").gap(6.0).center_y().min_w(0.0).child(status_glyph(t, st, false).size(12.0, 12.0)).child(word).child(sub_text.shrink())
+        }
+        None => row().min_w(0.0).child(sub_text),
+    };
     let titles = col()
         .key("title")
         .min_w(0.0)
         .shrink()
         .child(text(title).font(TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 }).lh((t.fs * 1.2).round())).color(t.text).truncate())
-        .child(text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate());
+        .child(sub_line);
     let running = sess.is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
     let live = sess.is_some_and(|x| !x.state.is_terminal());
     let stop = t
@@ -421,28 +440,67 @@ fn toolbar(s: &App, t: &Theme) -> El {
 }
 
 /// The macOS toolbar's status capsule: this session needs you, or another one does.
+/// The macOS toolbar's status capsule, and one for approvals waiting in other sessions.
 fn capsule(s: &App, t: &Theme) -> Option<El> {
-    let pill = |label: String, fg: Color, bg: Color| {
-        row().key("status-capsule").h(22.0).px(9.0).gap(6.0).center_y().radius(11.0).fill(bg).child(t.dot(fg, 6.0)).child(text(label).font(TextStyle::new(11.0, 600.0)).color(fg))
+    let pill = |key: &str, label: String, fg: Color, bg: Color, glyph: El| {
+        row().key(key.to_string()).h(22.0).px(9.0).gap(6.0).center_y().radius(11.0).fill(bg).child(glyph).child(text(label).font(TextStyle::new(11.0, 600.0)).color(fg))
     };
+    let mut r = row().gap(6.0).center_y();
+    let mut any = false;
     let sess = s.current();
-    if let Some(x) = sess {
-        match x.state {
-            SessionState::WaitingApproval => {
-                return Some(pill("Needs approval".into(), t.warn, t.warn.alpha(0.16)).role("button").label("Needs approval: show the request").on_press_tx(|_: &mut App, tx: &mut Tx| tx.scroll_into_view("approval-card")));
-            }
-            SessionState::Running | SessionState::Starting => return Some(pill(state_word(x.state).into(), t.text2, Color::WHITE.alpha(0.08))),
-            SessionState::Failed => return Some(pill("Failed".into(), t.danger, t.danger.alpha(0.16))),
-            _ => {}
+    if let Some(x) = sess.filter(|x| x.archived_at.is_none()) {
+        let st = Status::of(x.state);
+        let c = status_color(t, st);
+        let glyph = if st == Status::Working { icon(&ic::SPINNER, 10.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9)) } else { t.dot(c, 6.0) };
+        let (fg, bg) = match st {
+            Status::Working | Status::Ended => (t.text2, Color::WHITE.alpha(0.08)),
+            _ => (c, c.alpha(0.16)),
+        };
+        let mut p = pill("status-capsule", st.word().to_string(), fg, bg, glyph);
+        if st == Status::NeedsYou {
+            p = p.role("button").label("Needs you: show the request").on_press_tx(|_: &mut App, tx: &mut Tx| tx.scroll_into_view("approval-card"));
         }
+        r = r.child(p);
+        any = true;
     }
     let elsewhere = s.approvals.iter().filter(|a| sess.is_none_or(|x| x.session_id != a.session_id)).count();
-    (elsewhere > 0).then(|| {
-        pill(format!("{elsewhere} waiting · {}", keys(s.look, Cmd::NextApproval)), t.warn, t.warn.alpha(0.16))
-            .role("button")
-            .label("Go to the next waiting approval")
-            .on_press_tx(|s: &mut App, tx: &mut Tx| run(s, Cmd::NextApproval, tx))
-    })
+    if elsewhere > 0 {
+        r = r.child(
+            pill("waiting-capsule", format!("{elsewhere} waiting · {}", keys(s.look, Cmd::NextApproval)), t.warn, t.warn.alpha(0.16), t.dot(t.warn, 6.0))
+                .role("button")
+                .label("Go to the next waiting approval")
+                .on_press_tx(|s: &mut App, tx: &mut Tx| run(s, Cmd::NextApproval, tx)),
+        );
+        any = true;
+    }
+    any.then_some(r)
+}
+
+/// A sidebar row's context menu: native on macOS, the app's own elsewhere.
+fn row_menu(s: &mut App, id: &str, p: rune::PointerPress, tx: &mut Tx) {
+    let Some(x) = s.session(id).cloned() else { return };
+    if s.look.mac() && rune::popup_menu_supported() {
+        let mut archive = rune::PopupItem::new("archive", if x.state.is_terminal() { "Archive Session" } else { "Archive Session…" });
+        if let Ok(k) = "ctrl+cmd+a".parse::<rune::Shortcut>() {
+            archive = archive.key_equivalent(k);
+        }
+        let menu = rune::PopupMenu::new()
+            .item(rune::PopupItem::new("open", "Open"))
+            .item(rune::PopupItem::new("end", "End Session").enabled(!x.state.is_terminal()))
+            .separator()
+            .item(archive)
+            .item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions in This Workspace"));
+        let (id, ws) = (id.to_string(), x.workspace_id.clone());
+        tx.popup_menu(menu, p, move |s: &mut App, picked, _| match picked {
+            Some("open") => s.open_session(&id),
+            Some("end") => s.act("End session", agenthost_proto::methods::SESSION_END, serde_json::json!({"session_id": id}), crate::bridge::Refresh::None),
+            Some("archive") => s.archive(&id),
+            Some("archive-ended") => s.archive_ended(&ws),
+            _ => {}
+        });
+    } else {
+        s.menu = Some(Menu::Row(id.to_string(), p.x, p.y));
+    }
 }
 
 /// The toolbar's "…" menu: native on macOS, the app's own elsewhere.
@@ -466,11 +524,17 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
         if let Some(k) = key("cmd+shift+backspace") {
             end = end.key_equivalent(k);
         }
-        let menu = rune::PopupMenu::new().item(stop).item(folder).separator().item(end);
+        let archived = s.current().is_some_and(|x| x.archived_at.is_some());
+        let mut archive = rune::PopupItem::new("archive", if live { "Archive Session…" } else { "Archive Session" }).enabled(!archived);
+        if let Some(k) = key("ctrl+cmd+a") {
+            archive = archive.key_equivalent(k);
+        }
+        let menu = rune::PopupMenu::new().item(stop).item(folder).separator().item(end).item(archive);
         tx.popup_menu(menu, "session-menu", |s: &mut App, picked, tx| match picked {
             Some("stop") => run(s, Cmd::Stop, tx),
             Some("folder") => run(s, Cmd::ShowFolder, tx),
             Some("end") => run(s, Cmd::EndSession, tx),
+            Some("archive") => run(s, Cmd::Archive, tx),
             _ => {}
         });
     } else {
@@ -521,6 +585,16 @@ fn banners(s: &App, t: &Theme) -> El {
                 ),
             );
         }
+    }
+    // An archived session opened from Settings: read-only.
+    if let Some(x) = s.current().filter(|x| x.archived_at.is_some()) {
+        let id = x.session_id.clone();
+        let when = x.archived_at.map(|ts| format!(" {} ago", short_age(ts, s.look))).filter(|w| w != " now ago").unwrap_or_default();
+        c = c.child(
+            strip(msg(format!("Archived{when} · Read only")), Color::WHITE.alpha(0.06))
+                .key("archived-banner")
+                .child(t.small_button("Unarchive", move |s| s.unarchive(&id)).key("unarchive")),
+        );
     }
     let close = |label: &str, f: fn(&mut App)| t.small_button(label, f);
     if let Some(e) = &s.error {
@@ -653,6 +727,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("Attach Files…", keys(look, Cmd::Attach), |s, tx| run(s, Cmd::Attach, tx)).enabled(live)),
                 None,
                 Some(Item::new("End Session", keys(look, Cmd::EndSession), |s, tx| run(s, Cmd::EndSession, tx)).enabled(live).danger()),
+                Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), |s, tx| run(s, Cmd::Archive, tx)).enabled(s.current().is_some_and(|x| x.archived_at.is_none()))),
             ];
             let right = if t.mac() { 14.0 } else { 80.0 };
             layer = layer.child(menu_box(t, items, 260.0).pin(None, Some(t.toolbar_h - 2.0), Some(right), None));
@@ -670,6 +745,25 @@ fn menu_layer(s: &App, t: &Theme) -> El {
             ];
             let left = if s.sidebar_open { t.sidebar_w - 250.0 } else { 6.0 };
             layer = layer.child(menu_box(t, items, 244.0).pin(Some(left), Some(t.toolbar_h - 4.0), None, None));
+        }
+        Some(Menu::Row(id, x, y)) => {
+            if let Some(sess) = s.session(id) {
+                let (a, b, c, ws) = (id.clone(), id.clone(), id.clone(), sess.workspace_id.clone());
+                let live = !sess.state.is_terminal();
+                let items = vec![
+                    Some(Item::new("Open", String::new(), move |s, _| s.open_session(&a))),
+                    Some(Item::new("End Session", String::new(), move |s, _| s.act("End session", agenthost_proto::methods::SESSION_END, serde_json::json!({"session_id": b}), crate::bridge::Refresh::None)).enabled(live)),
+                    None,
+                    Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), move |s, _| s.archive(&c))),
+                    Some(Item::new("Archive Ended Sessions Here", String::new(), move |s, _| s.archive_ended(&ws))),
+                ];
+                layer = layer.child(menu_box(t, items, 280.0).pin(Some(*x), Some(*y), None, None));
+            }
+        }
+        Some(Menu::Section(ws, x, y)) => {
+            let ws = ws.clone();
+            let items = vec![Some(Item::new("Archive Ended Sessions", String::new(), move |s, _| s.archive_ended(&ws)))];
+            layer = layer.child(menu_box(t, items, 240.0).pin(Some(*x), Some(*y), None, None));
         }
         _ => {}
     }

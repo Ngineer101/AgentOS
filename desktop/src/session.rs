@@ -93,6 +93,26 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
     if let Some(r) = sess.state_reason.as_ref().filter(|_| !sess.state.is_terminal()) {
         area = area.child(t.faint(r.clone()));
     }
+    if sess.archived_at.is_some() {
+        return el();
+    }
+    if sess.state == SessionState::Failed {
+        let reason = sess.state_reason.clone().unwrap_or_else(|| "The agent stopped unexpectedly.".into());
+        area = area.child(
+            row()
+                .key("failed-reason")
+                .w_full()
+                .gap(10.0)
+                .px(12.0)
+                .py(10.0)
+                .center_y()
+                .radius(t.card_radius)
+                .fill(t.danger.alpha(0.10))
+                .border(if t.mac() { 0.5 } else { 1.0 }, t.danger.alpha(0.35))
+                .child(t.dot(t.danger, 8.0))
+                .child(col().grow(1.0).min_w(0.0).gap(1.0).child(t.strong("The session failed")).child(t.small(reason).wrap())),
+        );
+    }
     if sess.state.is_terminal() {
         let msg = format!("This session has {}. Start another with {}.", if sess.state == SessionState::Failed { "failed" } else { "ended" }, keys(s.look, Cmd::NewSession));
         return column(t, area.child(row().w_full().justify_center().py(12.0).child(t.small(msg))));

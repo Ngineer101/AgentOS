@@ -96,7 +96,7 @@ fn workspace_rows(s: &App, t: &Theme) -> Vec<El> {
             .label(name.clone())
             .focusable(true)
             .hover(Color::WHITE.alpha(0.03))
-            .on_press(move |s: &mut App| s.new_ws = Some(id.clone()))
+            .on_press(move |s: &mut App| s.pick_workspace(&id))
             .child(t.radio(on, true))
             .child(row().w(16.0).center().child(glyph))
             .child(col().grow(1.0).min_w(0.0).child(t.label(name)).child(t.small(detail).truncate()));
@@ -150,6 +150,10 @@ fn agent_rows(s: &App, t: &Theme) -> Vec<El> {
             names = names.child(t.small(tilde(d)));
         }
         r = r.child(names);
+        let is_default = s.new_ws.as_ref().and_then(|w| s.default_login(w)).as_deref() == Some(key.as_str());
+        if is_default {
+            r = r.child(row().key("default-tag").h(16.0).px(6.0).center_y().radius(4.0).fill(Color::WHITE.alpha(0.1)).child(text("Default").font(TextStyle::new(10.5, 600.0)).color(t.text2)));
+        }
         if a.available {
             let k2 = key.clone();
             r = r.focusable(true).hover(Color::WHITE.alpha(0.03)).on_press(move |s: &mut App| s.new_agent = Some(k2.clone())).child(text("Ready").font(TextStyle::new(11.0, 400.0)).color(t.ok));
@@ -180,30 +184,24 @@ fn capitalize(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
-fn first_message(s: &App, t: &Theme, height: f32) -> El {
-    let mac = t.mac();
-    let input = rune::text_input(&s.first_prompt, TextStyle::new(t.fs, 400.0).lh((t.fs * 1.35).round()))
-        .key("first-message")
-        .label("First message")
-        .w_full()
-        .color(t.text)
-        .placeholder("What should the agent do?", t.text3)
-        .caret(t.text, t.accent.alpha(0.35))
-        .on_edit(|s: &mut App| &mut s.first_prompt)
-        .on_submit(|s: &mut App, _: &mut Tx| s.start_from_sheet());
-    let mut b = col().w_full().min_h(height).radius(if mac { 6.0 } else { 12.0 }).px(if mac { 8.0 } else { 14.0 }).py(if mac { 6.0 } else { 8.0 }).fill(t.field);
-    if mac {
-        b = b.border(0.5, t.field_border);
-        if s.first_prompt.focused {
-            b = b.box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() });
-        }
-        b.child(input)
-    } else {
-        if s.first_prompt.focused {
-            b = b.border(2.0, t.accent);
-        }
-        b.gap(2.0).child(text("First message (optional)").font(TextStyle::new(12.5, 400.0)).color(if s.first_prompt.focused { t.accent_text } else { t.text2 })).child(input)
+/// "Make <login> the default for <workspace>", when the pick isn't the workspace's default.
+fn make_default_box(s: &App, t: &Theme) -> Option<El> {
+    let (ws, key) = (s.new_ws.as_ref()?, s.new_agent.as_ref()?);
+    if s.default_login(ws).as_deref() == Some(key.as_str()) {
+        return None;
     }
+    let login = s.info.as_ref()?.agents.iter().find(|a| &login_key(a) == key)?.label();
+    let w = s.workspace(ws)?;
+    let name = if w.kind == WorkspaceKind::Scratch { "Quick tasks".to_string() } else { w.name.clone() };
+    let msg = format!("Make {login} the default for {name}");
+    Some(
+        row()
+            .key("make-default")
+            .gap(8.0)
+            .center_y()
+            .child(t.checkbox(s.make_default, &msg, |s| s.make_default = !s.make_default))
+            .child(text(msg.clone()).font(TextStyle::new(if t.mac() { 12.0 } else { 14.0 }, 400.0)).color(t.text).role("button").label(msg).on_press(|s: &mut App| s.make_default = !s.make_default)),
+    )
 }
 
 fn mac_sheet(s: &App, t: &Theme) -> El {
@@ -215,14 +213,11 @@ fn mac_sheet(s: &App, t: &Theme) -> El {
         .pt(10.0)
         .pb(4.0)
         .child(col().w_full().gap(6.0).child(t.group_title("Workspace")).child(t.group(workspace_rows(s, t), 58.0)))
-        .child(col().w_full().gap(6.0).child(t.group_title("Agent")).child(t.group(agent_rows(s, t), 64.0)))
-        .child(
-            col()
-                .w_full()
-                .gap(6.0)
-                .child(row().gap(4.0).child(t.group_title("First message")).child(text("(optional)").font(TextStyle::new(12.0, 400.0)).color(t.text3)))
-                .child(first_message(s, t, 56.0)),
-        );
+        .child(col().w_full().gap(6.0).child(t.group_title("Agent")).child(t.group(agent_rows(s, t), 64.0)));
+    let form = match make_default_box(s, t) {
+        Some(b) => form.child(b),
+        None => form,
+    };
     let start = t.button("Start Session", if ready { Btn::Primary } else { Btn::Default }, Some("⌘↩"), |s| s.start_from_sheet()).key("start-session").px(14.0).default_button();
     let sheet = col()
         .key("new-session")
@@ -254,7 +249,7 @@ fn mac_sheet(s: &App, t: &Theme) -> El {
                 .pt(16.0)
                 .pb(18.0)
                 .center_y()
-                .child(t.faint("Remembers your last choice"))
+                .child(t.faint("Each workspace remembers its login"))
                 .child(el().grow(1.0))
                 .child(t.button("Cancel", Btn::Default, None, |s| s.new_open = false).px(14.0).key("cancel"))
                 .child(start),
@@ -266,6 +261,8 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
     let ready = s.new_ws.is_some() && s.new_agent.is_some();
     let agents = s.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
     let cur = agents.iter().find(|a| Some(login_key(a)) == s.new_agent);
+    let default = s.new_ws.as_ref().and_then(|w| s.default_login(w));
+    let cur_label = cur.map(|a| if default.as_deref() == Some(login_key(a).as_str()) { format!("{} · Default", a.label()) } else { a.label() });
     let login = row()
         .key("login-row")
         .w_full()
@@ -287,7 +284,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         })
         .child(t.label("Login"))
         .child(el().grow(1.0))
-        .child(t.small(cur.map(|a| a.label()).unwrap_or_else(|| "Choose…".into())).font(TextStyle::new(t.fs, 400.0)))
+        .child(t.small(cur_label.unwrap_or_else(|| "Choose…".into())).font(TextStyle::new(t.fs, 400.0)))
         .child(icon(&ic::CHEVRON_DOWN, 14.0).color(t.text));
     let agent_block = col().w_full().gap(10.0).child(t.group_title("Agent")).child(login);
     // The drop-down floats over the dialog, under the Login row.
@@ -297,7 +294,14 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
             .map(|a| {
                 let key = login_key(a);
                 let on = Some(&key) == s.new_agent.as_ref();
-                let mut it = Item::new(&a.label(), if a.available { String::new() } else { a.problem.clone().map(|p| capitalize(&p)).unwrap_or_default() }, move |s, _| s.new_agent = Some(key.clone())).checked(on);
+                let note = if !a.available {
+                    a.problem.clone().map(|p| capitalize(&p)).unwrap_or_default()
+                } else if default.as_deref() == Some(key.as_str()) {
+                    "Default".to_string()
+                } else {
+                    String::new()
+                };
+                let mut it = Item::new(&a.label(), note, move |s, _| s.new_agent = Some(key.clone())).checked(on);
                 if !a.available {
                     it = it.enabled(false);
                 }
@@ -313,8 +317,12 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         .pt(12.0)
         .pb(24.0)
         .child(col().w_full().gap(10.0).child(t.group_title("Workspace")).child(t.group(workspace_rows(s, t), 0.0)))
-        .child(agent_block)
-        .child(col().w_full().gap(10.0).child(first_message(s, t, 58.0)).child(t.small(format!("{} starts the session", "Ctrl+Enter")).font(TextStyle::new(13.0, 400.0))));
+        .child(agent_block);
+    let body = match make_default_box(s, t) {
+        Some(b) => body.child(b),
+        None => body,
+    };
+    let body = body.child(t.small("Ctrl+Enter starts the session").font(TextStyle::new(13.0, 400.0)));
     let header = row()
         .w_full()
         .h(48.0)
@@ -372,6 +380,7 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
                 ("Go to session 1–9", jump),
                 ("Search sessions", l(Cmd::Search)),
                 ("End session", l(Cmd::EndSession)),
+                ("Archive session", l(Cmd::Archive)),
             ],
         ),
         ("Approvals", vec![("Approve request", l(Cmd::Approve)), ("Deny request", l(Cmd::Deny)), ("Next waiting approval", l(Cmd::NextApproval))]),
@@ -452,4 +461,30 @@ pub fn shortcuts(s: &App, t: &Theme) -> El {
         )
         .child(row().w_full().gap(40.0).px(36.0).pt(12.0).pb(28.0).items_start().child(left).child(right));
     scrim("shortcuts-layer", 0.4, |s| s.shortcuts_open = false).padding(30.0).center().child(panel)
+}
+
+/// "Archive ends the session": asked before archiving a live session.
+pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
+    let title = s.session(id).map(|x| x.title.clone().unwrap_or_else(|| s.login_label(x))).unwrap_or_default();
+    let id2 = id.to_string();
+    let mac = t.mac();
+    let buttons = row()
+        .w_full()
+        .gap(8.0)
+        .child(el().grow(1.0))
+        .child(t.button("Cancel", Btn::Default, None, |s| s.confirm_archive = None).key("cancel-archive"))
+        .child(t.button("Archive", Btn::Primary, None, move |s| s.archive(&id2)).key("confirm-archive").default_button());
+    let mut panel = col()
+        .key("archive-alert")
+        .w(if mac { 340.0 } else { 380.0 })
+        .gap(if mac { 12.0 } else { 16.0 })
+        .padding(if mac { 20.0 } else { 24.0 })
+        .fill(t.sheet)
+        .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
+        .modal(true, |s: &mut App| s.confirm_archive = None)
+        .child(text(format!("Archive \u{201c}{}\u{201d}?", crate::view::clip(&title, 60))).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
+        .child(t.small("Archive ends the session. Its transcript stays in Settings › Archived, where you can open or unarchive it.").wrap())
+        .child(buttons);
+    panel = if mac { panel.radius(12.0).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    scrim("archive-layer", 0.32, |s| s.confirm_archive = None).center().child(panel)
 }

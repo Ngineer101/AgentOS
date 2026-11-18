@@ -27,6 +27,8 @@ pub enum Cmd {
     ToggleSidebar,
     Settings,
     EndSession,
+    /// Hide the session from the list (ending it first if live).
+    Archive,
     ShowFolder,
     Shortcuts,
     MainMenu,
@@ -35,7 +37,8 @@ pub enum Cmd {
     Quit,
 }
 
-const KEYED: [Cmd; 21] = [
+const KEYED: [Cmd; 22] = [
+    Cmd::Archive,
     Cmd::NewSession,
     Cmd::QuickTask,
     Cmd::Attach,
@@ -78,6 +81,8 @@ pub fn chord(look: Look, cmd: Cmd) -> Option<String> {
         Cmd::ToggleSidebar => if mac { "ctrl+super+s" } else { "f9" }.into(),
         Cmd::Settings => if mac { "super+," } else { "ctrl+," }.into(),
         Cmd::EndSession => if mac { "super+shift+backspace" } else { "ctrl+shift+backspace" }.into(),
+        // ⌘⌫ would be "delete to the line's start" in the composer; ⌃⌘A is Mail's Archive.
+        Cmd::Archive => if mac { "ctrl+super+a" } else { "ctrl+alt+a" }.into(),
         Cmd::ShowFolder if mac => "super+alt+r".into(),
         Cmd::Shortcuts if !mac => "ctrl+shift+/".into(),
         Cmd::MainMenu if !mac => "f10".into(),
@@ -106,6 +111,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::ToggleSidebar => if mac { "⌃⌘S" } else { "F9" },
         Cmd::Settings => if mac { "⌘," } else { "Ctrl+," },
         Cmd::EndSession => if mac { "⇧⌘⌫" } else { "Ctrl+Shift+⌫" },
+        Cmd::Archive => if mac { "⌃⌘A" } else { "Ctrl+Alt+A" },
         Cmd::ShowFolder => if mac { "⌥⌘R" } else { "" },
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
         Cmd::MainMenu => if mac { "" } else { "F10" },
@@ -239,6 +245,11 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
                 s.act("End session", m::SESSION_END, json!({"session_id": x.session_id}), Refresh::None);
             }
         }
+        Cmd::Archive => {
+            if let Some(x) = session.filter(|x| x.archived_at.is_none()) {
+                s.archive(&x.session_id);
+            }
+        }
         Cmd::ShowFolder => {
             if let Some(p) = session.and_then(|x| s.workspace(&x.workspace_id).map(|w| w.path.clone())) {
                 s.reveal(&p);
@@ -311,6 +322,8 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (None, Some("Session"), None, noop),
         (Some("Show Session Folder in Finder"), Some("Session"), Some("alt+cmd+r"), |s, tx| run(s, Cmd::ShowFolder, tx)),
         (Some("End Session…"), Some("Session"), Some("cmd+shift+backspace"), |s, tx| run(s, Cmd::EndSession, tx)),
+        (Some("Archive Session"), Some("Session"), Some("ctrl+cmd+a"), |s, tx| run(s, Cmd::Archive, tx)),
+        (Some("Archived Sessions…"), Some("View"), None, |s, _| s.open_settings(Tab::Archived)),
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
         (Some("Find Session"), Some("View"), Some("cmd+f"), |s, tx| run(s, Cmd::Search, tx)),
     ]
@@ -369,5 +382,7 @@ mod tests {
         assert_eq!(label(Look::Mac, Cmd::Jump(3)), "⌘3");
         assert_eq!(label(Look::Gnome, Cmd::Jump(3)), "Alt+3");
         assert_eq!(chord(Look::Gnome, Cmd::ToggleSidebar).as_deref(), Some("f9"));
+        assert_eq!(label(Look::Mac, Cmd::Archive), "⌃⌘A");
+        assert_eq!(label(Look::Gnome, Cmd::Archive), "Ctrl+Alt+A");
     }
 }

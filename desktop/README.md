@@ -19,12 +19,18 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   menu. The composer attaches files, dictates, and shows its keys; ↑ in an
   empty composer brings back your last message.
 - **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):
-  workspace, login ("Claude Code · Work"), optional first message, ⌘↩ starts.
+  workspace and login ("Claude Code · Work"); ⌘↩ starts, and you type the
+  first message in the session. Picking a workspace picks its default login
+  (tagged "Default"; the first session in a workspace sets it). Another login
+  offers "Make … the default for …".
+- **Archive** (⌃⌘A / Ctrl+Alt+A, the Session and "…" menus, row context
+  menus): hides a session; a live one asks first, since archiving ends it.
 - **Settings** (⌘, / Ctrl+,): General (host, sandbox, voice, relay, Re-run
   checks), Agents (logins and profiles), Workspaces (network rules, extra
   hosts, connectors, project folders), Connectors (add with URL and token,
   sign in, defaults and per-tool policy), Devices (pair with QR and code,
-  rename, revoke). Drawn over the main window rather than in a window of its
+  rename, revoke), Archived (search, Open read-only, Unarchive; archived
+  sessions can't be deleted). Workspaces also sets the default login. Drawn over the main window rather than in a window of its
   own: Rune's windows each own their state.
 - **Keys**: the macOS menu bar (File, Session, View, Settings…) lists every
   shortcut; on GNOME, Ctrl+? opens the shortcuts window and F10 the main menu.
@@ -35,7 +41,8 @@ cargo run --release
 # Headless snapshots of every screen with sample data (no host needed):
 AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.png --scene session --size 1280x800
 #   scenes: session session-compose session-voice-download session-no-sidebar session-menu main-menu
-#           home new new-login-menu settings-general settings-agents settings-agents-add
+#           home new new-other-login new-login-menu confirm-archive row-menu failed
+#           settings-archived archived-open settings-general settings-agents settings-agents-add
 #           settings-workspaces settings-connectors settings-connectors-add settings-devices
 #           pairing pairing-confirm shortcuts offline offline-home
 cargo test      # drives a real in-process host through the app's model and bridge
