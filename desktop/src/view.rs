@@ -114,6 +114,78 @@ pub fn branch_label(t: &Theme, branch: &str, color: Color, chip: bool) -> El {
     }
 }
 
+/// The header's branch: the name in full (middle-truncated when the header is narrow), a
+/// button that copies it.
+pub fn branch_button(t: &Theme, branch: &str, color: Color, chip: bool) -> El {
+    let mac = t.mac();
+    let size = if mac { 11.0 } else { 12.0 };
+    let b = branch.to_string();
+    let r = row()
+        .key("header-branch")
+        .gap(4.0)
+        .center_y()
+        .min_w(0.0)
+        .shrink()
+        .h(if mac { 18.0 } else { 22.0 })
+        .px(if mac { 4.0 } else { 8.0 })
+        .radius(if mac { 4.0 } else { 11.0 })
+        .role("button")
+        .label(format!("Branch {branch}: copy its name"))
+        .help(format!("{branch}\nClick to copy the branch name"))
+        .focusable(true)
+        .hover(Color::WHITE.alpha(if mac { 0.08 } else { 0.12 }))
+        .press(Color::WHITE.alpha(if mac { 0.14 } else { 0.18 }))
+        .on_press_tx(move |s: &mut App, tx: &mut Tx| crate::commands::copy_branch(s, &b, tx))
+        .child(icon(&ic::BRANCH, size).color(color))
+        .child(text(branch.to_string()).font(TextStyle::new(size, 400.0).mono()).color(color).truncate_middle().shrink());
+    if chip {
+        r.fill(Color::WHITE.alpha(0.08))
+    } else {
+        r
+    }
+}
+
+/// Renaming the session in the header: Return renames (blank clears the title), Escape
+/// cancels. A refusal is a toast and the field stays.
+fn title_field(s: &App, x: &Session, t: &Theme, font: TextStyle) -> El {
+    let mac = t.mac();
+    let input = rune::text_input(&s.title_edit, font)
+        .single_line()
+        .key("title-field")
+        .label("Session title")
+        .grow(1.0)
+        .min_w(0.0)
+        .color(t.text)
+        .placeholder(s.untitled_name(x), t.text3)
+        .caret(t.text, t.accent.alpha(0.35))
+        .on_edit(|s: &mut App| &mut s.title_edit)
+        .on_submit(|s: &mut App, _: &mut Tx| s.save_session_rename())
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, _: &mut Tx| {
+            if ev.key == rune::Key::Escape {
+                s.cancel_session_rename();
+                return true;
+            }
+            false
+        });
+    let mut f = row()
+        .key("title-rename")
+        .h(if mac { 20.0 } else { 28.0 })
+        .w(if mac { 340.0 } else { 320.0 })
+        .px(if mac { 6.0 } else { 8.0 })
+        // The text stays where the title was.
+        .ml(if mac { -6.0 } else { 0.0 })
+        .center_y()
+        .radius(if mac { 5.0 } else { 7.0 })
+        .fill(t.field)
+        .help("Return to rename, Escape to cancel. Leave it empty to use the workspace's name.")
+        .box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() })
+        .child(input);
+    if mac {
+        f = f.border(0.5, t.field_border);
+    }
+    f
+}
+
 /// The status vocabulary: spinner = working, orange = needs you, red = failed, accent dot =
 /// your turn, grey = ended. `on_accent` draws it on a selected (accent) row.
 pub fn status_glyph(t: &Theme, st: Status, on_accent: bool) -> El {
@@ -370,19 +442,18 @@ fn toolbar(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let sess = s.current();
     let (title, subtitle) = match sess {
-        Some(x) => {
-            let ws = s.workspace(&x.workspace_id).map(|w| w.name.clone()).unwrap_or_default();
-            // A live session's composer names its workspace and branch, so the header doesn't.
-            let sub = if crate::session::composer_shows_context(x) { s.login_label(x) } else { format!("{} — {ws}", s.login_label(x)) };
-            (x.title.clone().unwrap_or_else(|| s.login_label(x)), sub)
-        }
+        // The session's own title (else its workspace's name), over who runs it, where, and
+        // on which branch: the same live or ended.
+        Some(x) => (s.session_title(x), s.session_context(x)),
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
             ("AgentHost".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
         }
     };
+    let branch = sess.and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
+    // macOS runs the branch on with a dot; GNOME's capsule stands apart.
+    let subtitle = if branch.is_some() && mac { format!("{subtitle} ·") } else { subtitle };
     let sub_text = text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate();
-    let branch = sess.filter(|x| !crate::session::composer_shows_context(x)).and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
     // GNOME has no capsule: the status leads the header's subtitle.
     let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none()) {
         Some(x) => {
@@ -393,16 +464,23 @@ fn toolbar(s: &App, t: &Theme) -> El {
         None => row().min_w(0.0).child(sub_text.shrink()),
     };
     let sub_line = match &branch {
-        Some(b) => sub_line.gap(8.0).center_y().child(branch_label(t, b, t.text2, !mac).shrink()),
+        Some(b) => sub_line.gap(if mac { 1.0 } else { 8.0 }).center_y().child(branch_button(t, b, t.text2, !mac)),
         None => sub_line,
     };
     let sub_line = if mac { sub_line } else { sub_line.max_w(10_000.0).w_full().justify_center() };
-    let titles = col()
-        .key("title")
-        .min_w(0.0)
-        .shrink()
-        .child(text(title).font(TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 }).lh((t.fs * 1.2).round())).color(t.text).truncate())
-        .child(sub_line);
+    let title_font = TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 }).lh((t.fs * 1.2).round());
+    let renaming = sess.filter(|x| s.session_rename.as_deref() == Some(x.session_id.as_str()));
+    let title_el = match renaming {
+        Some(x) => title_field(s, x, t, title_font),
+        None => {
+            let mut e = text(title).key("session-title").font(title_font).color(t.text).truncate();
+            if sess.is_some_and(|x| x.archived_at.is_none()) {
+                e = e.help("Double-click to rename").on_double_press(|s: &mut App| s.start_session_rename());
+            }
+            e
+        }
+    };
+    let titles = col().key("title").min_w(0.0).shrink().gap(if renaming.is_some() && !mac { 2.0 } else { 0.0 }).child(title_el).child(sub_line);
     let running = sess.is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
     let live = sess.is_some_and(|x| !x.state.is_terminal());
     let stop = t
@@ -574,8 +652,15 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
         if let Some(k) = key("ctrl+cmd+a") {
             archive = archive.key_equivalent(k);
         }
-        let menu = rune::PopupMenu::new().item(stop).item(folder).separator().item(archive);
+        let branch = s.current().is_some_and(|x| x.worktree.is_some());
+        let mut menu = rune::PopupMenu::new().item(rune::PopupItem::new("rename", "Rename Session…").enabled(!archived));
+        if branch {
+            menu = menu.item(rune::PopupItem::new("copy-branch", "Copy Branch Name"));
+        }
+        let menu = menu.separator().item(stop).item(folder).separator().item(archive);
         tx.popup_menu(menu, "session-menu", |s: &mut App, picked, tx| match picked {
+            Some("rename") => run(s, Cmd::RenameSession, tx),
+            Some("copy-branch") => run(s, Cmd::CopyBranch, tx),
             Some("stop") => run(s, Cmd::Stop, tx),
             Some("folder") => run(s, Cmd::ShowFolder, tx),
             Some("archive") => run(s, Cmd::Archive, tx),
@@ -722,13 +807,19 @@ fn menu_layer(s: &App, t: &Theme) -> El {
         Some(Menu::Session) => {
             let live = s.current().is_some_and(|x| !x.state.is_terminal());
             let running = s.current().is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
-            let items = vec![
+            let archived = s.current().is_some_and(|x| x.archived_at.is_some());
+            let mut items = vec![Some(Item::new("Rename Session…", String::new(), |s, tx| run(s, Cmd::RenameSession, tx)).enabled(!archived))];
+            if s.current().is_some_and(|x| x.worktree.is_some()) {
+                items.push(Some(Item::new("Copy Branch Name", String::new(), |s, tx| run(s, Cmd::CopyBranch, tx))));
+            }
+            items.extend([
+                None,
                 Some(Item::new("Stop the Turn", keys(look, Cmd::Stop), |s, tx| run(s, Cmd::Stop, tx)).enabled(running)),
                 Some(Item::new("Show Session Folder", keys(look, Cmd::ShowFolder), |s, tx| run(s, Cmd::ShowFolder, tx))),
                 Some(Item::new("Attach Files…", keys(look, Cmd::Attach), |s, tx| run(s, Cmd::Attach, tx)).enabled(live)),
                 None,
-                Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), |s, tx| run(s, Cmd::Archive, tx)).enabled(s.current().is_some_and(|x| x.archived_at.is_none()))),
-            ];
+                Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), |s, tx| run(s, Cmd::Archive, tx)).enabled(!archived)),
+            ]);
             let right = if t.mac() { 14.0 } else { 80.0 };
             layer = layer.child(menu_box(t, items, 260.0).pin(None, Some(t.toolbar_h - 2.0), Some(right), None));
         }

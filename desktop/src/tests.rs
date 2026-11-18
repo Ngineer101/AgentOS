@@ -817,3 +817,125 @@ fn connector_icons_decode_from_data_urls() {
     assert!(crate::brand::data_url_pixels("https://example.com/x.png").is_none());
 }
 
+
+#[test]
+fn the_model_chip_drops_a_trailing_parenthetical() {
+    use crate::session::chip_label;
+    assert_eq!(chip_label("Default (recommended)"), "Default");
+    assert_eq!(chip_label("Opus 4.5"), "Opus 4.5");
+    assert_eq!(chip_label("Sonnet 4.5 (1M context)"), "Sonnet 4.5");
+    assert_eq!(chip_label("(recommended)"), "(recommended)", "nothing would be left");
+    assert_eq!(chip_label("gpt-5 (high) fast"), "gpt-5 (high) fast", "only a trailing one");
+    // The popover keeps the full name.
+    let app = demo("composer-default-model");
+    let o = model::App::config_option(app.session("ses_1").unwrap(), "model").unwrap();
+    assert_eq!(o.options.iter().find(|v| v.value == o.current_value).map(|v| v.name.as_str()), Some("Default (recommended)"));
+}
+
+#[test]
+fn the_header_title_falls_back_to_the_workspace() {
+    let app = demo("header-titled");
+    let x = app.session("ses_1").unwrap();
+    assert_eq!(app.session_title(x), "Fix the flaky resume test");
+    assert_eq!(app.session_context(x), "Claude Code · Work · relay");
+    let app = demo("header-quick-untitled");
+    let x = app.session("ses_q").unwrap();
+    assert_eq!(app.session_title(x), "Quick task");
+    assert_eq!(app.session_context(x), "Claude Code · Personal", "the title already says where");
+    let app = demo("header-untitled");
+    let x = app.session("ses_2").unwrap();
+    assert_eq!(app.session_title(x), "relay");
+    assert!(!app.session_title(x).contains("Codex"), "never the login");
+    let mut blank = x.clone();
+    blank.title = Some("   ".into());
+    assert_eq!(app.session_title(&blank), "relay");
+    // Ended sessions keep the workspace and branch.
+    let app = demo("header-ended");
+    let x = app.session("ses_1").unwrap();
+    assert!(x.state.is_terminal() && x.worktree.is_some());
+    assert_eq!(app.session_context(x), "Claude Code · Work · relay");
+}
+
+#[test]
+fn renaming_a_session_in_the_header() {
+    let mut app = demo("header-titled");
+    let mut tx = rune::Tx::default();
+    commands::run(&mut app, Cmd::RenameSession, &mut tx);
+    assert_eq!(app.session_rename.as_deref(), Some("ses_1"));
+    assert_eq!(app.title_edit.text, "Fix the flaky resume test");
+    // Unchanged: Return just closes the field.
+    app.save_session_rename();
+    assert!(app.session_rename.is_none());
+    // Too long: refused here, the field stays.
+    app.start_session_rename();
+    app.title_edit.replace_text("x".repeat(MAX_SESSION_TITLE + 1));
+    app.save_session_rename();
+    assert!(app.error.take().is_some());
+    assert_eq!(app.session_rename.as_deref(), Some("ses_1"));
+    // The host's refusal is a toast and the field stays open.
+    app.title_edit.replace_text("Flaky resume test");
+    app.save_session_rename();
+    let err = agenthost_proto::jsonrpc::RpcError { code: -32602, message: "no such session".into(), data: None };
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::SessionRenamed("ses_1".into()), result: Err(err) });
+    assert!(app.error.as_deref().is_some_and(|e| e.contains("no such session")));
+    assert_eq!(app.session_rename.as_deref(), Some("ses_1"));
+    // The reply is the renamed session.
+    let mut renamed = app.session("ses_1").unwrap().clone();
+    renamed.title = Some("Flaky resume test".into());
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::SessionRenamed("ses_1".into()), result: Ok(serde_json::to_value(&renamed).unwrap()) });
+    assert!(app.session_rename.is_none());
+    assert_eq!(app.session_title(app.session("ses_1").unwrap()), "Flaky resume test");
+    // Escape cancels; opening another session closes the field.
+    app.start_session_rename();
+    app.cancel_session_rename();
+    assert!(app.session_rename.is_none());
+    app.start_session_rename();
+    app.open_session("ses_2");
+    assert!(app.session_rename.is_none());
+    // Archived sessions can't be renamed.
+    let mut app = demo("archived-open");
+    app.start_session_rename();
+    assert!(app.session_rename.is_none());
+    // The menu bar has both items.
+    let titles: Vec<_> = commands::menu_table().into_iter().filter_map(|(t, ..)| t).collect();
+    assert!(titles.contains(&"Rename Session…") && titles.contains(&"Copy Branch Name"));
+}
+
+#[test]
+fn copying_the_branch_says_so() {
+    let mut app = demo("header-titled");
+    let mut tx = rune::Tx::default();
+    commands::run(&mut app, Cmd::CopyBranch, &mut tx);
+    assert_eq!(app.notice.as_deref(), Some("Copied branch name"));
+    // A session without a worktree has no branch to copy.
+    let mut app = demo("header-quick-untitled");
+    commands::run(&mut app, Cmd::CopyBranch, &mut tx);
+    assert!(app.notice.is_none());
+}
+
+/// `session.rename` against a real host: a title, then a blank one clears it.
+#[test]
+fn session_rename_round_trips_through_the_host() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahn").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    assert_eq!(app.session_title(app.session(&sid).unwrap()), "Quick task");
+    commands::run(&mut app, Cmd::RenameSession, &mut tx);
+    app.title_edit.replace_text("  Tidy the build  ");
+    app.save_session_rename();
+    pump(&mut app, |a| a.session_rename.is_none() && a.session(&sid).is_some_and(|s| s.title.as_deref() == Some("Tidy the build")));
+    commands::run(&mut app, Cmd::RenameSession, &mut tx);
+    app.title_edit.replace_text("");
+    app.save_session_rename();
+    pump(&mut app, |a| a.session_rename.is_none() && a.session(&sid).is_some_and(|s| s.title.is_none()));
+    assert_eq!(app.session_title(app.session(&sid).unwrap()), "Quick task");
+    assert!(app.error.is_none(), "{:?}", app.error);
+}

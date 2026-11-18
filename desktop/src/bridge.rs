@@ -44,6 +44,9 @@ pub enum Tag {
     ConnectorSearch(String),
     /// `connector.update` renaming this connector: errors show by the name field.
     Rename(String),
+    /// `session.rename` of this session: the reply is the session; errors are toasts and
+    /// the header's field stays open.
+    SessionRenamed(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }

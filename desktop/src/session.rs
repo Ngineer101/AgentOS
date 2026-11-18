@@ -148,7 +148,8 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
             }
             (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx)
         });
-    // One rounded container: where the work lands, files, the text, then the controls.
+    // One rounded container: files, the text, then the controls. Where the work lands (the
+    // workspace and branch) is the header's subtitle, not the composer's.
     let mut boxc = col().key("composer-box").w_full().radius(if mac { 18.0 } else { 12.0 });
     boxc = if mac {
         boxc.fill(Color::WHITE.alpha(0.055)).border(0.5, Color::WHITE.alpha(0.15)).shadow(6.0, 20.0, Color::BLACK.alpha(0.22))
@@ -157,13 +158,17 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         boxc.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, color: Color::BLACK.alpha(0.3), ..Default::default() })
     };
     let pad_x = if mac { 14.0 } else { 16.0 };
-    if let Some(line) = context_line(s, sess, t) {
-        boxc = boxc.child(line.px(pad_x).pt(if mac { 10.0 } else { 12.0 }));
-    }
-    if let Some(chips) = file_chips(s, id, t) {
+    let chips = file_chips(s, id, t);
+    let text_top = match (chips.is_some(), mac) {
+        (true, true) => 8.0,
+        (true, false) => 10.0,
+        (false, true) => 12.0,
+        (false, false) => 14.0,
+    };
+    if let Some(chips) = chips {
         boxc = boxc.child(chips.px(pad_x - 4.0));
     }
-    boxc = boxc.child(col().w_full().px(pad_x).pt(if mac { 8.0 } else { 10.0 }).pb(if mac { 2.0 } else { 4.0 }).child(rune::auto_grow(input, 1, 8)));
+    boxc = boxc.child(col().w_full().px(pad_x).pt(text_top).pb(if mac { 2.0 } else { 4.0 }).child(rune::auto_grow(input, 1, 8)));
     let chip = model_chip(s, sess, t);
     // Without a model chip the shortcut hint has the room.
     let hint = if chip.is_some() { "" } else if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
@@ -184,30 +189,6 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
     }
     let area = area.child(boxc.child(actions));
     column(t, area)
-}
-
-/// The composer's top line: the workspace and, with a worktree, its branch. The header leaves
-/// both out while the composer shows them, so each appears once.
-fn context_line(s: &App, sess: &Session, t: &Theme) -> Option<El> {
-    let ws = s.workspace(&sess.workspace_id).map(|w| w.name.clone());
-    let branch = sess.worktree.as_ref().map(|w| w.branch.clone());
-    if ws.is_none() && branch.is_none() {
-        return None;
-    }
-    let size = if t.mac() { 11.5 } else { 12.5 };
-    let mut r = row().key("composer-context").w_full().gap(if t.mac() { 8.0 } else { 10.0 }).center_y().min_w(0.0);
-    if let Some(w) = ws {
-        r = r.child(text(w).font(TextStyle::new(size, if t.mac() { 500.0 } else { 600.0 })).color(t.text2).truncate());
-    }
-    if let Some(b) = branch {
-        r = r.child(crate::view::branch_label(t, &b, t.text3, false).shrink().min_w(0.0));
-    }
-    Some(r)
-}
-
-/// Whether the composer shows the session's workspace and branch (a live session's does).
-pub fn composer_shows_context(sess: &Session) -> bool {
-    sess.archived_at.is_none() && !sess.state.is_terminal()
 }
 
 /// Whether the session can take a setting now (not starting, not over).
@@ -287,6 +268,19 @@ fn current_name(o: &SessionConfigOption) -> String {
     o.options.iter().find(|v| v.value == o.current_value).map(|v| v.name.clone()).unwrap_or_else(|| o.current_value.clone())
 }
 
+/// The chip's short name for a model: "Default (recommended)" is "Default". The popover
+/// keeps the full name and description.
+pub fn chip_label(name: &str) -> String {
+    let n = name.trim();
+    if let Some(open) = n.strip_suffix(')').and_then(|rest| rest.rfind('(')) {
+        let head = n[..open].trim_end();
+        if !head.is_empty() {
+            return head.to_string();
+        }
+    }
+    n.to_string()
+}
+
 /// The agent's mark for the chip: its letter, monochrome, as the reference's model glyph.
 fn agent_mark(agent: AgentKind, size: f32, ink: Color) -> El {
     let name = agent.display_name();
@@ -336,7 +330,7 @@ fn model_chip(s: &App, sess: &Session, t: &Theme) -> Option<El> {
         .focusable(ready)
         .disabled(!ready)
         .child(agent_mark(sess.agent, if mac { 13.0 } else { 14.0 }, ink))
-        .child(text(clip(&name, 28)).font(TextStyle::new(if mac { 12.5 } else { 13.5 }, if mac { 400.0 } else { 500.0 })).color(ink));
+        .child(text(clip(&chip_label(&name), 28)).font(TextStyle::new(if mac { 12.5 } else { 13.5 }, if mac { 400.0 } else { 500.0 })).color(ink));
     if fast_on {
         b = b.child(icon(&ic::BOLT, if mac { 11.0 } else { 12.0 }).color(ink));
     }

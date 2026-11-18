@@ -31,6 +31,10 @@ pub enum Cmd {
     /// Show or hide the side-question pane.
     ToggleSide,
     ShowFolder,
+    /// Rename Session…: the header's title becomes a field.
+    RenameSession,
+    /// Copy the session's worktree branch name.
+    CopyBranch,
     Shortcuts,
     MainMenu,
     PairPhone,
@@ -118,7 +122,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
         Cmd::MainMenu => if mac { "" } else { "F10" },
         Cmd::Quit => if mac { "⌘Q" } else { "Ctrl+Q" },
-        Cmd::PairPhone | Cmd::CheckHost => "",
+        Cmd::PairPhone | Cmd::CheckHost | Cmd::RenameSession | Cmd::CopyBranch => "",
     };
     s.to_string()
 }
@@ -257,6 +261,12 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
                 s.reveal(&p);
             }
         }
+        Cmd::RenameSession => s.start_session_rename(),
+        Cmd::CopyBranch => {
+            if let Some(b) = session.and_then(|x| x.worktree).map(|w| w.branch) {
+                copy_branch(s, &b, tx);
+            }
+        }
         Cmd::Shortcuts => {
             s.close_overlays();
             s.shortcuts_open = true;
@@ -277,6 +287,12 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
     if s.screen == Screen::Home && matches!(cmd, Cmd::Send) {
         s.menu = None;
     }
+}
+
+/// Put a branch name on the clipboard and say so.
+pub fn copy_branch(s: &mut App, branch: &str, tx: &mut Tx) {
+    tx.copy(branch.to_string());
+    s.notice = Some("Copied branch name".into());
 }
 
 /// The file picker for attachments.
@@ -322,6 +338,8 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Go to Session 8"), Some("Session"), Some("cmd+8"), |s, tx| run(s, Cmd::Jump(8), tx)),
         (Some("Go to Session 9"), Some("Session"), Some("cmd+9"), |s, tx| run(s, Cmd::Jump(9), tx)),
         (None, Some("Session"), None, noop),
+        (Some("Rename Session…"), Some("Session"), None, |s, tx| run(s, Cmd::RenameSession, tx)),
+        (Some("Copy Branch Name"), Some("Session"), None, |s, tx| run(s, Cmd::CopyBranch, tx)),
         (Some("Show Session Folder in Finder"), Some("Session"), Some("alt+cmd+r"), |s, tx| run(s, Cmd::ShowFolder, tx)),
         (Some("Archive Session…"), Some("Session"), Some("ctrl+cmd+a"), |s, tx| run(s, Cmd::Archive, tx)),
         (Some("Archived Sessions…"), Some("View"), None, |s, _| s.open_settings(Tab::Archived)),

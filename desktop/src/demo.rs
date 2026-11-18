@@ -234,7 +234,7 @@ fn config_options() -> Vec<SessionConfigOption> {
             description: None,
             category: Some("model".into()),
             current_value: "opus".into(),
-            options: vec![v("opus", "Opus 4.5", Some("The most capable")), v("sonnet", "Sonnet 4.5", Some("Fast, for everyday tasks")), v("haiku", "Haiku 4.5", Some("The fastest"))],
+            options: vec![v("default", "Default (recommended)", Some("Opus 4.5 for hard problems, Sonnet 4.5 for the rest")), v("opus", "Opus 4.5", Some("The most capable")), v("sonnet", "Sonnet 4.5", Some("Fast, for everyday tasks")), v("haiku", "Haiku 4.5", Some("The fastest"))],
         },
         SessionConfigOption {
             id: "effort".into(),
@@ -660,6 +660,77 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         let a = s.approvals[0].clone();
         let line = s.approval_line(&a);
         s.push_toast(crate::model::ToastKind::Approval, line, Some(crate::model::ToastAction::ShowApproval { session_id: a.session_id, approval_id: a.approval_id }), now);
+    }),
+    // The header: the session's own title over login · workspace · branch.
+    ("header-titled", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+    }),
+    // An untitled quick task: "Quick task" over the login.
+    ("header-quick-untitled", |s| {
+        session(s);
+        if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_q") {
+            x.title = None;
+        }
+        s.screen = Screen::Session("ses_q".into());
+    }),
+    // An untitled session in a git workspace: the workspace's name, the branch beside the login.
+    ("header-untitled", |s| {
+        session(s);
+        if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_2") {
+            x.title = None;
+        }
+        s.screen = Screen::Session("ses_2".into());
+    }),
+    // An ended session keeps its workspace and branch in the header.
+    ("header-ended", |s| {
+        session(s);
+        s.approvals.clear();
+        if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_1") {
+            x.state = SessionState::Ended;
+        }
+    }),
+    // Rename Session…: the header's title is a field.
+    ("rename-session", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.start_session_rename();
+        s.title_edit = rune::TextEdit::new("Fix the flaky resume test on CI");
+        s.title_edit.focused = true;
+    }),
+    // The ⋯ menu with Rename Session… and Copy Branch Name.
+    ("session-menu-rename", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.menu = Some(Menu::Session);
+    }),
+    // A model called "Default (recommended)": the chip says Default.
+    ("composer-default-model", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        if let Some(o) = s.sessions.iter_mut().find(|x| x.session_id == "ses_1").and_then(|x| x.config_options.iter_mut().find(|o| o.id == "model")) {
+            o.current_value = "default".into();
+        }
+    }),
+    ("composer-default-model-open", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        if let Some(o) = s.sessions.iter_mut().find(|x| x.session_id == "ses_1").and_then(|x| x.config_options.iter_mut().find(|o| o.id == "model")) {
+            o.current_value = "default".into();
+        }
+        s.menu = Some(Menu::Model);
+    }),
+    // Copying the branch from the header.
+    ("copied-branch", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.notice = Some("Copied branch name".into());
     }),
     ("offline-home", |s| {
         base(s);

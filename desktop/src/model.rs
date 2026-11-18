@@ -383,6 +383,9 @@ pub struct App {
     pub conn_name: TextEdit,
     /// A rename the host refused: (connector, why).
     pub rename_error: Option<(String, String)>,
+    /// The session whose title the header is renaming in place, and the field.
+    pub session_rename: Option<String>,
+    pub title_edit: TextEdit,
 }
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
@@ -468,6 +471,8 @@ pub fn init() -> App {
         add_manual: false,
         conn_name: TextEdit::new(""),
         rename_error: None,
+        session_rename: None,
+        title_edit: TextEdit::new(""),
         effort_drag: None,
     }
 }
@@ -758,6 +763,9 @@ impl App {
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
         self.menu = None;
+        if self.session_rename.as_deref() != Some(id) {
+            self.session_rename = None;
+        }
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
         self.ensure_subscribed(id);
@@ -1130,6 +1138,16 @@ impl App {
                     self.refresh(Refresh::Connectors);
                 }
                 (Tag::Rename(id), Err(e)) => self.rename_error = Some((id, e.message)),
+                (Tag::SessionRenamed(id), Ok(v)) => {
+                    if self.session_rename.as_deref() == Some(id.as_str()) {
+                        self.session_rename = None;
+                    }
+                    if let Some(x) = parse::<Session>(v) {
+                        self.upsert_session(x);
+                    }
+                }
+                // The field stays open with what was typed, to fix it.
+                (Tag::SessionRenamed(_), Err(e)) => self.error = Some(format!("Could not rename the session: {}", e.message)),
                 (Tag::PairStart, Ok(v)) => {
                     if let Some(p) = parse::<PairStartResult>(v) {
                         self.pairing = Some(Pairing { pairing_id: p.pairing_id, qr: p.qr_payload, expires_at: p.expires_at, ..Default::default() });
@@ -1311,6 +1329,73 @@ impl App {
             return;
         }
         self.call(Tag::Rename(id.to_string()), m::CONNECTOR_UPDATE, json!({"connector_id": id, "name": n}));
+    }
+
+    // ---- session titles -------------------------------------------------------------------
+
+    /// What an untitled session is called: its workspace's name, "Quick task" for a quick task.
+    pub fn untitled_name(&self, x: &Session) -> String {
+        match self.workspace(&x.workspace_id) {
+            Some(w) if w.kind == WorkspaceKind::Scratch => "Quick task".into(),
+            Some(w) => w.name.clone(),
+            None if x.workspace_id == QUICK_WORKSPACE_ID => "Quick task".into(),
+            None => "Session".into(),
+        }
+    }
+
+    /// The header's title: the session's own title, else [`App::untitled_name`].
+    pub fn session_title(&self, x: &Session) -> String {
+        match x.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) => t.to_string(),
+            None => self.untitled_name(x),
+        }
+    }
+
+    /// The header's subtitle before the branch: "Claude Code · Work · relay". The workspace is
+    /// left out when the title already is its name (an untitled session).
+    pub fn session_context(&self, x: &Session) -> String {
+        let mut parts = vec![self.login_label(x)];
+        let titled = x.title.as_deref().is_some_and(|t| !t.trim().is_empty());
+        if titled {
+            if let Some(w) = self.workspace(&x.workspace_id) {
+                parts.push(w.name.clone());
+            }
+        }
+        parts.join(" · ")
+    }
+
+    /// Rename Session…: the header's title becomes a field holding the current title.
+    pub fn start_session_rename(&mut self) {
+        let Some(x) = self.current().filter(|x| x.archived_at.is_none()) else { return };
+        let (id, title) = (x.session_id.clone(), x.title.clone().unwrap_or_default());
+        self.close_overlays();
+        let len = title.len();
+        self.session_rename = Some(id);
+        self.title_edit = TextEdit::new(title);
+        self.title_edit.set_selection(0, len);
+        self.title_edit.focused = true;
+    }
+
+    pub fn cancel_session_rename(&mut self) {
+        self.session_rename = None;
+    }
+
+    /// Return in the header's field: `session.rename`. A blank title clears it (the header then
+    /// shows the workspace's name); the same title just closes the field.
+    pub fn save_session_rename(&mut self) {
+        let Some(id) = self.session_rename.clone() else { return };
+        let title = self.title_edit.text.trim().to_string();
+        if title.chars().count() > MAX_SESSION_TITLE {
+            self.error = Some(format!("A session title can be at most {MAX_SESSION_TITLE} characters."));
+            return;
+        }
+        let current = self.session(&id).and_then(|x| x.title.clone()).unwrap_or_default();
+        if current.trim() == title {
+            self.session_rename = None;
+            return;
+        }
+        let title = if title.is_empty() { Value::Null } else { json!(title) };
+        self.call(Tag::SessionRenamed(id.clone()), m::SESSION_RENAME, json!({"session_id": id, "title": title}));
     }
 
     pub fn start_rename(&mut self, id: &str) {
