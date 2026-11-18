@@ -55,13 +55,15 @@ enum CredentialStoreError: LocalizedError {
 /// The device's keys, in the Keychain.
 ///
 /// * The credentials (which include the device's Noise and relay private keys)
-///   are stored as one generic-password item whose access control is
-///   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` + `.userPresence`: never
-///   backed up or migrated, and released only after Face ID or the passcode.
+///   are stored as one generic-password item, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`:
+///   never backed up or migrated, readable only while the iPhone is unlocked.
+///   With "Require Face ID" on (off by default) it also has `.userPresence`:
+///   released only after Face ID or the passcode.
 /// * On hardware with a Secure Enclave, the item's contents are additionally
 ///   encrypted (ECIES, P-256, AES-GCM) to a Secure Enclave key created with
-///   `.privateKeyUsage` + `.userPresence`. The private half never leaves the
-///   Secure Enclave, so the credentials cannot be decrypted off this device.
+///   `.privateKeyUsage` (plus `.userPresence` when Face ID is required). The
+///   private half never leaves the Secure Enclave, so the credentials cannot
+///   be decrypted off this device.
 /// * Where there is no Secure Enclave (the Simulator) the item is stored
 ///   without that extra layer (format byte 0).
 ///
@@ -78,12 +80,14 @@ enum CredentialStore {
 
     // MARK: Public API
 
-    static func save(_ creds: StoredCredentials) throws {
+    /// Store the credentials, released only after Face ID or the passcode when
+    /// `requireUserPresence`. Replaces what was stored.
+    static func save(_ creds: StoredCredentials, requireUserPresence: Bool) throws {
         let plain = try JSONEncoder().encode(creds)
-        // A fresh wrapping key per pairing; the old item and key go first.
+        // A fresh wrapping key per save; the old item and key go first.
         deleteAll()
         var blob: Data
-        if let pub = try? createWrapKey() {
+        if let pub = try? createWrapKey(requireUserPresence: requireUserPresence) {
             var error: Unmanaged<CFError>?
             guard let ct = SecKeyCreateEncryptedData(pub, algorithm, plain as CFData, &error) as Data? else {
                 throw CredentialStoreError.crypto(describe(error))
@@ -94,7 +98,7 @@ enum CredentialStore {
             blob = Data([formatPlain])
             blob.append(plain)
         }
-        guard let access = accessControl(flags: [.userPresence]) else {
+        guard let access = accessControl(flags: requireUserPresence ? [.userPresence] : []) else {
             throw CredentialStoreError.crypto("access control")
         }
         let attrs: [String: Any] = [
@@ -109,7 +113,9 @@ enum CredentialStore {
     }
 
     /// Load the credentials, or nil when this device is not paired.
-    /// `context` should be one that has just passed `deviceOwnerAuthentication`.
+    /// For credentials that need Face ID, `context` should be one that has just
+    /// passed `deviceOwnerAuthentication`; with `interactionNotAllowed` set, such
+    /// credentials throw `errSecInteractionNotAllowed` instead of prompting.
     static func load(context: LAContext) throws -> StoredCredentials? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -195,8 +201,11 @@ enum CredentialStore {
 
     /// Create the Secure Enclave wrapping key and return its public half.
     /// Throws where there is no Secure Enclave (the Simulator).
-    private static func createWrapKey() throws -> SecKey {
-        guard let access = accessControl(flags: [.privateKeyUsage, .userPresence]) else {
+    private static func createWrapKey(requireUserPresence: Bool) throws -> SecKey {
+        let flags: SecAccessControlCreateFlags = requireUserPresence
+            ? [.privateKeyUsage, .userPresence]
+            : [.privateKeyUsage]
+        guard let access = accessControl(flags: flags) else {
             throw CredentialStoreError.crypto("access control")
         }
         let attrs: [String: Any] = [

@@ -5,7 +5,8 @@ import SwiftUI
 
 /// Where the app is, top level.
 enum AppPhase: Equatable {
-    /// Nothing is shown until Face ID or the passcode succeeds.
+    /// Nothing is shown yet: the keys are being loaded (after Face ID or the
+    /// passcode, when "Require Face ID" is on).
     case locked
     /// No device keys: show the Pair screen.
     case unpaired
@@ -104,6 +105,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var phase: AppPhase = .locked
     @Published private(set) var link: LinkState = .disconnected
     @Published var lockError: String?
+    /// Ask for Face ID (or the passcode) when opening the app. Off by default.
+    @Published private(set) var requireUnlock = UserDefaults.standard.bool(forKey: AppModel.requireUnlockKey)
 
     @Published private(set) var hostInfo: HostInfoModel?
     @Published private(set) var workspaces: [WorkspaceInfo] = []
@@ -183,11 +186,40 @@ final class AppModel: ObservableObject {
 
     // MARK: Lock and unlock
 
-    /// Face ID or passcode, then load the keys with the same context.
+    private static let requireUnlockKey = "requireUnlock"
+
+    /// "Face ID", "Touch ID", "Optic ID", or "Passcode" on a phone without biometrics.
+    static var unlockMethodName: String {
+        let context = LAContext()
+        _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        switch context.biometryType {
+        case .faceID: return "Face ID"
+        case .touchID: return "Touch ID"
+        case .opticID: return "Optic ID"
+        default: return "Passcode"
+        }
+    }
+
+    /// Open the app: load the keys straight away, or after Face ID or the
+    /// passcode when "Require Face ID" is on (or the keys still need it).
     func unlock() async {
         guard phase == .locked, !unlocking else { return }
         unlocking = true
         defer { unlocking = false }
+        if !requireUnlock {
+            let quiet = LAContext()
+            quiet.interactionNotAllowed = true
+            do {
+                finishUnlock(try CredentialStore.load(context: quiet))
+                return
+            } catch CredentialStoreError.keychain(errSecInteractionNotAllowed, _) {
+                // Saved while Face ID was required (an earlier version): ask
+                // once more, then save them without it.
+            } catch {
+                lockError = userMessage(for: error)
+                return
+            }
+        }
         let context = LAContext()
         context.localizedCancelTitle = "Cancel"
         var error: NSError?
@@ -207,20 +239,75 @@ final class AppModel: ObservableObject {
         }
         lockError = nil
         do {
-            if let creds = try CredentialStore.load(context: context) {
-                credentials = creds
-                loadCache()
-                phase = .ready
-                startMonitoringNetwork()
-                connect()
-            } else {
-                // Not paired: make sure nothing from an earlier pairing is left.
-                TranscriptCache.deleteAll()
-                phase = UserDefaults.standard.bool(forKey: Self.removedFlag) ? .removed : .unpaired
+            let creds = try CredentialStore.load(context: context)
+            if let creds, !requireUnlock {
+                try? CredentialStore.save(creds, requireUserPresence: false)
             }
+            finishUnlock(creds)
         } catch {
             lockError = userMessage(for: error)
         }
+    }
+
+    private func finishUnlock(_ creds: StoredCredentials?) {
+        lockError = nil
+        if let creds {
+            credentials = creds
+            loadCache()
+            phase = .ready
+            startMonitoringNetwork()
+            connect()
+        } else {
+            // Not paired: make sure nothing from an earlier pairing is left.
+            TranscriptCache.deleteAll()
+            phase = UserDefaults.standard.bool(forKey: Self.removedFlag) ? .removed : .unpaired
+        }
+    }
+
+    /// Turn "Require Face ID" on or off. Either way Face ID (or the passcode)
+    /// confirms it first, so someone holding the unlocked phone can't switch
+    /// the lock off; the keys are then saved again with the new protection.
+    func setRequireUnlock(_ on: Bool) async throws {
+        guard on != requireUnlock else { return }
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            throw CredentialStoreError.crypto(
+                "set a passcode on this iPhone first (\(error?.localizedDescription ?? "unavailable"))")
+        }
+        let name = Self.unlockMethodName
+        guard try await context.evaluatePolicy(
+            .deviceOwnerAuthentication,
+            localizedReason: on ? "Turn on \(name) for AgentHost." : "Turn off \(name) for AgentHost."
+        ) else { return }
+        if let creds = credentials {
+            do {
+                try CredentialStore.save(creds, requireUserPresence: on)
+            } catch {
+                // Saving replaces the old item: put it back as it was.
+                try? CredentialStore.save(creds, requireUserPresence: !on)
+                throw error
+            }
+        }
+        UserDefaults.standard.set(on, forKey: Self.requireUnlockKey)
+        requireUnlock = on
+    }
+
+    /// The app went to the background: lock when Face ID is required,
+    /// otherwise just drop the connection (it is reopened on return).
+    func enterBackground() {
+        if requireUnlock {
+            lock()
+        } else if phase == .ready {
+            saveNow()
+            stopConnection()
+        }
+    }
+
+    /// Back in the foreground without a lock: reconnect.
+    func enterForeground() {
+        guard phase == .ready else { return }
+        connect()
     }
 
     /// Hide everything and drop the connection and keys from memory.
@@ -242,7 +329,7 @@ final class AppModel: ObservableObject {
     /// Store freshly paired credentials and connect.
     func didPair(_ creds: DeviceCredentials) throws {
         let stored = StoredCredentials(creds)
-        try CredentialStore.save(stored)
+        try CredentialStore.save(stored, requireUserPresence: requireUnlock)
         UserDefaults.standard.removeObject(forKey: Self.removedFlag)
         // Locked meanwhile: the keys are saved; the next unlock loads them.
         guard phase == .unpaired else { return }

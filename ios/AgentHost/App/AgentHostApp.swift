@@ -15,7 +15,8 @@ struct AgentHostApp: App {
     }
 }
 
-/// Chooses the screen for the current phase, locks on background, and
+/// Chooses the screen for the current phase, locks on background (when Face ID
+/// is required), and
 /// covers everything whenever the scene is not active (so the app-switcher
 /// snapshot shows nothing).
 struct RootView: View {
@@ -45,10 +46,11 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:
-                model.lock()
+                model.enterBackground()
                 autoUnlockTried = false
             case .active:
                 tryAutoUnlock()
+                model.enterForeground()
             default:
                 break
             }
@@ -89,7 +91,9 @@ struct LockView: View {
         ContentUnavailableView {
             Label("AgentHost Is Locked", systemImage: "lock.fill")
         } description: {
-            Text("Use Face ID or your passcode to continue.")
+            Text(model.requireUnlock || model.lockError != nil
+                 ? "Use \(AppModel.unlockMethodName) or your passcode to continue."
+                 : "Opening…")
             if let err = model.lockError {
                 Text(err).foregroundStyle(.red)
             }

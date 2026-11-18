@@ -4,6 +4,8 @@ import SwiftUI
 struct HostView: View {
     @EnvironmentObject private var model: AppModel
     @State private var confirmUnpair = false
+    @State private var securityError: String?
+    @State private var changingLock = false
 
     var body: some View {
         List {
@@ -31,6 +33,34 @@ struct HostView: View {
                 Text("This phone can run sessions and answer approvals. It cannot change workspaces, connectors, policy or devices.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(isOn: Binding(
+                    get: { model.requireUnlock },
+                    set: { on in
+                        changingLock = true
+                        Task {
+                            do {
+                                try await model.setRequireUnlock(on)
+                                securityError = nil
+                            } catch {
+                                securityError = userMessage(for: error)
+                            }
+                            changingLock = false
+                        }
+                    }
+                )) {
+                    Text("Require \(AppModel.unlockMethodName)")
+                }
+                .disabled(changingLock)
+                if let securityError {
+                    Text(securityError).font(.caption).foregroundStyle(.red)
+                }
+            } header: {
+                Text("Security")
+            } footer: {
+                Text("When on, AgentHost asks for \(AppModel.unlockMethodName) or your passcode each time you open it, and this iPhone's key to the host is only released after that. When off, the key is still kept only on this iPhone and never backed up.")
             }
 
             if let info = model.hostInfo {
