@@ -324,7 +324,7 @@ struct ApprovalBanner: View {
                         .foregroundStyle(.primary)
                     Group {
                         if let a = model.approvals.first {
-                            Text("\(a.connectorName) · \(a.tool)")
+                            Text(a.listLine)
                         } else {
                             Text("A session is waiting for a decision")
                         }
@@ -415,7 +415,7 @@ struct ApprovalListView: View {
                         selected = a
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(a.connectorName): \(a.tool)")
+                            Text(a.listLine)
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.primary)
                             Text(agentLabel(a)).font(.caption).foregroundStyle(.secondary)

@@ -18,15 +18,34 @@ struct ApprovalView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section(caps: "Connector") {
-                    Text(initial.connectorName)
-                }
-                Section(caps: "Tool") {
-                    Text(initial.tool).font(.body.monospaced())
-                }
-                Section(caps: "Arguments") {
-                    CodeBlock(text: initial.arguments.isNull ? "(none)" : initial.arguments.prettyJSON)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                if initial.isInstall {
+                    Section(caps: "Install") {
+                        Text(initial.summary ?? "A tool on this computer")
+                    }
+                    if let reason = initial.reason {
+                        Section(caps: "Why") {
+                            Text(reason)
+                        }
+                    }
+                    Section {
+                        CodeBlock(text: "$ " + (initial.command ?? "(no command)"))
+                            .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                    } header: {
+                        Text("RUNS")
+                    } footer: {
+                        Text("On this computer, as you, outside the sandbox. The package manager may run the package's install scripts with your permissions.")
+                    }
+                } else {
+                    Section(caps: "Connector") {
+                        Text(initial.connectorName)
+                    }
+                    Section(caps: "Tool") {
+                        Text(initial.tool).font(.body.monospaced())
+                    }
+                    Section(caps: "Arguments") {
+                        CodeBlock(text: initial.arguments.isNull ? "(none)" : initial.arguments.prettyJSON)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                    }
                 }
                 Section(caps: "Session") {
                     if let s = model.session(initial.sessionId) {
@@ -53,7 +72,7 @@ struct ApprovalView: View {
                     }
                 }
             }
-            .navigationTitle("\(ApprovalRequestRow.humanize(initial.tool)) on \(initial.connectorName)?")
+            .navigationTitle(initial.isInstall ? "Install a Tool?" : "\(ApprovalRequestRow.humanize(initial.tool)) on \(initial.connectorName)?")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -69,7 +88,7 @@ struct ApprovalView: View {
                 HStack(spacing: 10) {
                     Button("Deny") { answer(false) }
                         .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red, height: 50))
-                    Button("Approve") { answer(true) }
+                    Button(initial.isInstall ? "Install" : "Approve") { answer(true) }
                         .buttonStyle(CapsuleButtonStyle(fill: .accentColor, height: 50))
                 }
                 .disabled(sending || current == nil || !model.link.isOnline)

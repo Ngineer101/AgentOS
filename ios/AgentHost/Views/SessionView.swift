@@ -779,6 +779,73 @@ struct ApprovalRequestRow: View {
 
     var body: some View {
         let pending = stillPending
+        if let install = pending ?? approval, install.isInstall {
+            installCard(install, pending: pending)
+        } else {
+            connectorCard(pending)
+        }
+    }
+
+    /// An agent asking to install a tool on the computer: what, why, the
+    /// exact command, and that it runs as you outside the sandbox.
+    private func installCard(_ a: PendingApprovalModel, pending: PendingApprovalModel?) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.orange)
+                    .frame(width: 30, height: 30)
+                    .background(Palette.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(a.summary ?? "Install a tool on this computer?")
+                        .font(.headline)
+                    Text(pending == nil ? "Answered" : "Runs as you, outside the sandbox · \(expiresText(a))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let reason = a.reason {
+                Text("“\(reason)”").font(.subheadline)
+            }
+            if let command = a.command {
+                Text("$ \(command)")
+                    .font(.footnote.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .textSelection(.enabled)
+            }
+            if let pending {
+                Text("The package manager may run the package's install scripts with your permissions. Install only what you expected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("Deny") { answer(pending, approve: false) }
+                        .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red))
+                    Button("Install") { answer(pending, approve: true) }
+                        .buttonStyle(CapsuleButtonStyle(fill: .accentColor))
+                }
+                .disabled(sending || !model.link.isOnline)
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Palette.red)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.cell, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Palette.orange.opacity(pending == nil ? 0 : 0.6), lineWidth: 0.75)
+        )
+    }
+
+    private func expiresText(_ a: PendingApprovalModel) -> String {
+        "expires " + dateFromMillis(a.expiresAt).formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+    }
+
+    private func connectorCard(_ pending: PendingApprovalModel?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 Text(connector.prefix(1).uppercased())

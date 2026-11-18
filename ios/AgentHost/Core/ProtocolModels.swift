@@ -312,15 +312,35 @@ struct PendingApprovalModel: Codable, Identifiable, Hashable {
     var arguments: JSONValue
     var requestedAt: Int64
     var expiresAt: Int64
+    /// The host's one-line description, when it has one ("Install
+    /// agent-desktop 1.3.1 with npm, on this computer").
+    var summary: String?
 
     var id: String { approvalId }
+
+    /// An agent asking to install a tool on the computer (the host's own
+    /// tool, not a connector): runs as the user, outside the sandbox.
+    var isInstall: Bool { connectorId == "agenthost" }
+
+    private func argument(_ key: String) -> String? {
+        guard case let .object(o) = arguments else { return nil }
+        return o[key]?.string
+    }
+
+    /// The exact command an install runs.
+    var command: String? { argument("command") }
+    /// Why the agent asks.
+    var reason: String? { argument("reason").flatMap { $0.isEmpty ? nil : $0 } }
+
+    /// One line for lists and banners.
+    var listLine: String { summary ?? "\(connectorName) · \(tool)" }
 
     enum CodingKeys: String, CodingKey {
         case approvalId = "approval_id"
         case sessionId = "session_id"
         case connectorId = "connector_id"
         case connectorName = "connector_name"
-        case tool, arguments
+        case tool, arguments, summary
         case requestedAt = "requested_at"
         case expiresAt = "expires_at"
     }

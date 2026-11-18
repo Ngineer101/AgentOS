@@ -7,6 +7,7 @@ import Foundation
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
 ///                                         archive-confirm | pair
+///     -AgentHostDemoInstall               the waiting approval is a tool install
 struct DemoData {
     enum Screen: String {
         case sessions, session, dictating, new, picker, settings, pair, archived
@@ -121,6 +122,26 @@ struct DemoData {
             expiresAt: now + 9 * min + 30_000
         )
         approvals = [approval]
+        // -AgentHostDemoInstall: the agent asks to install a tool instead.
+        if ProcessInfo.processInfo.arguments.contains("-AgentHostDemoInstall") {
+            approvals = [PendingApprovalModel(
+                approvalId: "demo-approval",
+                sessionId: Self.flakySession,
+                connectorId: "agenthost",
+                connectorName: "AgentHost",
+                tool: "install_tool",
+                arguments: .object([
+                    "command": .string("npm install --global agent-desktop@1.3.1"),
+                    "manager": .string("npm"),
+                    "package": .string("agent-desktop"),
+                    "version": .string("1.3.1"),
+                    "reason": .string("You asked me to set up agent-desktop so you can drive desktop apps from the terminal."),
+                ]),
+                requestedAt: now - min,
+                expiresAt: now + 9 * min + 30_000,
+                summary: "Install agent-desktop 1.3.1 with npm, on this computer"
+            )]
+        }
 
         // 14:02 today, for the prompt's time stamp.
         let start = Calendar.current.date(bySettingHour: 14, minute: 2, second: 0, of: Date()) ?? Date()
