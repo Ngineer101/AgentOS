@@ -939,3 +939,101 @@ fn session_rename_round_trips_through_the_host() {
     assert_eq!(app.session_title(app.session(&sid).unwrap()), "Quick task");
     assert!(app.error.is_none(), "{:?}", app.error);
 }
+
+#[test]
+fn subagents_group_children_under_their_calls() {
+    let app = demo("subagents");
+    let agents = app.subagents("ses_6");
+    assert_eq!(agents.len(), 2);
+    let (done, live) = (&agents[0], &agents[1]);
+    assert_eq!((done.title(), done.agent_type.as_str(), done.status.as_str()), ("Review auth handling", "Explore", "completed"));
+    assert_eq!(done.steps(), 9);
+    assert!(done.report.starts_with("Found **2 issues**"));
+    assert!(done.items.iter().any(|i| matches!(i, model::SubItem::Message(m) if m.contains("compares the token"))));
+    assert_eq!((live.title(), live.status.as_str(), live.steps()), ("Profile the hot paths", "running", 4));
+    assert!(live.prompt.starts_with("Measure request latency"));
+    // The message sits between the third and fourth steps.
+    assert!(matches!(&live.items[3], model::SubItem::Message(_)) && matches!(&live.items[4], model::SubItem::Step { call_id, .. } if call_id == "p4"));
+    // Without a description it's "Subagent"; tool_name alone marks the call.
+    let ev = |seq, kind, p: serde_json::Value| Event { session_id: "x".into(), seq, kind, payload: p, ts: seq * 1000 };
+    let evs = vec![
+        ev(1, EventType::ToolCall, serde_json::json!({"tool_call_id": "a", "tool_name": "Task", "name": "Task"})),
+        ev(2, EventType::ToolCall, serde_json::json!({"tool_call_id": "c", "parent_tool_call_id": "a", "name": "ls"})),
+        ev(3, EventType::ToolCall, serde_json::json!({"tool_call_id": "d", "name": "pwd"})),
+    ];
+    let a = model::subagents_of(&evs, true);
+    assert_eq!((a.len(), a[0].title(), a[0].steps()), (1, "Subagent", 1));
+    // A turn that ended without its result stopped the agent.
+    assert_eq!(model::subagents_of(&evs, false)[0].status, "stopped");
+}
+
+#[test]
+fn subagent_children_leave_the_main_transcript() {
+    let app = demo("subagents");
+    let events = &app.transcripts["ses_6"].events;
+    let children: Vec<_> = events.iter().filter(|e| model::is_child_event(e)).collect();
+    // 9 + 4 calls, 9 + 3 results, 2 messages.
+    assert_eq!(children.len(), 27);
+    assert!(children.iter().all(|e| e.kind != EventType::ToolCall || !model::is_subagent_call(&e.payload)));
+    // The subagent calls themselves and their results stay in the main flow (as the cards).
+    assert!(events.iter().filter(|e| model::is_subagent_call(&e.payload)).all(|e| !model::is_child_event(e)));
+    assert!(!events.iter().any(|e| e.kind == EventType::ToolResult && e.payload["tool_call_id"] == "ag1" && model::is_child_event(e)));
+}
+
+#[test]
+fn running_agents_and_commands_are_counted() {
+    let mut app = demo("subagents");
+    assert_eq!(app.running_work("ses_6"), (1, 0));
+    assert_eq!(model::running_label(1, 0).as_deref(), Some("1 agent running"));
+    assert_eq!(model::running_label(2, 0).as_deref(), Some("2 agents running"));
+    assert_eq!(model::running_label(1, 1).as_deref(), Some("1 agent and 1 command running"));
+    assert_eq!(model::running_label(0, 2).as_deref(), Some("2 commands running"));
+    assert_eq!(model::running_label(0, 0), None);
+    // A background command still running counts too.
+    let tr = app.transcripts.get_mut("ses_6").unwrap();
+    let seq = tr.last_seq + 1;
+    tr.events.push(Event { session_id: "ses_6".into(), seq, kind: EventType::ToolCall, payload: serde_json::json!({"tool_call_id": "bg", "name": "cargo watch", "kind": "execute", "background": true}), ts: 0 });
+    assert_eq!(app.running_work("ses_6"), (1, 1));
+    // When the session stops, nothing runs.
+    app.sessions.iter_mut().find(|x| x.session_id == "ses_6").unwrap().state = SessionState::Idle;
+    assert_eq!(app.running_work("ses_6"), (0, 0));
+    assert_eq!(app.subagents("ses_6")[1].status, "stopped");
+}
+
+#[test]
+fn agent_panel_opens_closes_and_follows_events() {
+    let mut app = demo("subagents");
+    app.open_agent("ses_6", "ag2");
+    assert!(app.agent_visible() && app.trailing_visible());
+    // It stands in for the side pane while it's open.
+    app.side_open = true;
+    assert!(!app.side_visible());
+    // A new step and the result arrive: the panel's agent has them.
+    let note = |params: serde_json::Value| bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: agenthost_proto::methods::N_EVENT.into(), params });
+    let seq = app.transcripts["ses_6"].last_seq;
+    app.apply(note(serde_json::json!({"session_id": "ses_6", "seq": seq + 1, "type": "subagent.message", "payload": {"parent_tool_call_id": "ag2", "text": "The lookup costs 40 µs per frame."}, "ts": 0})));
+    app.apply(note(serde_json::json!({"session_id": "ses_6", "seq": seq + 2, "type": "tool.result", "payload": {"tool_call_id": "ag2", "status": "completed", "output": "**tunnel.rs** is the slowest handler."}, "ts": 0})));
+    let a = app.subagent("ses_6", "ag2").unwrap();
+    assert!(matches!(a.items.last(), Some(model::SubItem::Message(m)) if m.contains("40 µs")));
+    assert_eq!((a.status.as_str(), a.report.as_str()), ("completed", "**tunnel.rs** is the slowest handler."));
+    assert_eq!(app.running_work("ses_6"), (0, 0));
+    assert_eq!(model::plain_lines(&a.report), vec!["tunnel.rs is the slowest handler."]);
+    // Escape closes it, and the side pane (once it has questions) comes back.
+    app.side_pending.insert("ses_6".into(), "why?".into());
+    assert!(!app.side_visible());
+    let mut tx = rune::Tx::default();
+    let esc = rune::KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() };
+    assert!(commands::on_key(&mut app, &esc, &mut tx));
+    assert!(!app.agent_visible() && app.side_visible());
+    // Another session closes it.
+    app.open_agent("ses_6", "ag1");
+    app.open_session("ses_1");
+    assert!(app.agent_open.is_none());
+}
+
+#[test]
+fn markdown_reports_read_as_plain_lines() {
+    assert_eq!(model::plain_lines("## Findings\n\n- **One** [link](https://x.y) `code`\n\n```\nx\n```\n---"), vec!["Findings", "One link code", "x"]);
+    assert_eq!(model::span_label(38_000), "38s");
+    assert_eq!(model::span_label(72_000), "1m 12s");
+}

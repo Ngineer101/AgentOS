@@ -65,3 +65,5 @@ icon!(POPOVER_ARROW_MAC, "ah-pop-arrow-mac", 20.0, r##"<path d="M0 10.6L10 20L20
 icon!(POPOVER_ARROW_GNOME, "ah-pop-arrow-gnome", 16.0, r##"<path d="M0 8.6L8 16L16 8.6z" fill="#36363a"/><path d="M0.5 8.6L8 15.5L15.5 8.6" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1" fill="none"/>"##);
 // Send's stop while the agent works.
 icon!(STOP_SM, "ah-stop-sm", 12.0, r#"<rect x="2" y="2" width="8" height="8" rx="1.6" fill="currentColor"/>"#);
+// A subagent: a four-point sparkle.
+icon!(SPARKLE, "ah-sparkle", 14.0, r#"<path d="M7 1.2C7.5 4.4 9.1 6.2 12.8 7 9.1 7.8 7.5 9.6 7 12.8 6.5 9.6 4.9 7.8 1.2 7 4.9 6.2 6.5 4.4 7 1.2z" fill="currentColor"/>"#);

@@ -371,6 +371,89 @@ fn pairing(s: &mut App, confirm: bool) {
     });
 }
 
+/// "Audit the relay worker": two subagents started together, one done with a report, one
+/// still running (4 steps, the last under way, and something it said).
+fn subagents(s: &mut App) {
+    base(s);
+    let sid = "ses_6";
+    let t0 = now();
+    s.sessions.insert(
+        0,
+        Session {
+            session_id: sid.into(),
+            workspace_id: "ws_relay".into(),
+            agent: AgentKind::Claude,
+            profile_id: Some("prof_work".into()),
+            state: SessionState::Running,
+            state_reason: None,
+            acp_session_id: Some("x".into()),
+            title: Some("Audit the relay worker".into()),
+            created_at: t0 - 120_000,
+            updated_at: t0 - 5_000,
+            last_seq: 0,
+            archived_at: None,
+            worktree: Some(SessionWorktree { path: "/home/nico/.local/share/agenthost/worktrees/ses_6".into(), branch: "agenthost/audit-relay".into() }),
+            config_options: config_options(),
+            side_questions: true,
+        },
+    );
+    let call = |id: &str, parent: &str, name: &str, kind: &str, args: Value| json!({"tool_call_id": id, "name": name, "kind": kind, "arguments": args, "source": "sandbox", "tool_name": if kind == "execute" { "Bash" } else { "Read" }, "parent_tool_call_id": parent});
+    let done = |id: &str, parent: &str, out: &str| json!({"tool_call_id": id, "status": "completed", "output": out, "parent_tool_call_id": parent});
+    let read = |p: &str| json!({"file_path": p});
+    let report = "Found **2 issues**: the pairing token is compared with `==`, and revoked devices keep their socket for 30 s.\n\n## Findings\n\n1. **Timing-unsafe compare** in `handlers/pair.rs:88`: `if token == expected` leaks the match length. Use `subtle::ConstantTimeEq`.\n2. **Revocation lag** in `handlers/tunnel.rs`: a revoked device's socket stays open until its next 30 s heartbeat. Close it when `device.revoke` lands.\n\nNothing else stood out: every handler checks the session token before it reads the body.";
+    let mut evs: Vec<(i64, EventType, Value)> = vec![
+        (0, EventType::SessionState, json!({"state": "created"})),
+        (1_000, EventType::Prompt, json!({"text": "Check the worker for auth bugs and slow paths."})),
+        (4_000, EventType::AgentMessage, json!({"text": "I'll split this up: one agent reviews auth, another profiles the hot paths."})),
+        (5_000, EventType::ToolCall, json!({"tool_call_id": "ag1", "name": "Review auth handling", "kind": "other", "tool_name": "Agent", "source": "sandbox", "arguments": {"description": "Review auth handling", "subagent_type": "Explore"}, "subagent": {"description": "Review auth handling", "agent_type": "Explore", "prompt": "Review how relay-worker authenticates devices and sessions: pairing tokens, session tokens, revocation. Report concrete bugs with file and line, and say what you checked that was fine."}})),
+        (5_200, EventType::ToolCall, json!({"tool_call_id": "ag2", "name": "Profile the hot paths", "kind": "other", "tool_name": "Agent", "source": "sandbox", "arguments": {"description": "Profile the hot paths", "subagent_type": "general-purpose"}, "subagent": {"description": "Profile the hot paths", "agent_type": "general-purpose", "prompt": "Measure request latency in relay-worker and find the slowest handler."}})),
+    ];
+    // The auth review: nine steps, then its report.
+    let a1 = [
+        ("s1", "Read handlers/pair.rs", "read", read("relay-worker/src/handlers/pair.rs")),
+        ("s2", "Read handlers/tunnel.rs", "read", read("relay-worker/src/handlers/tunnel.rs")),
+        ("s3", "rg -n \"token\" src", "execute", json!({"command": "rg -n \"token\" src"})),
+        ("s4", "Read auth.rs", "read", read("relay-worker/src/auth.rs")),
+        ("s5", "Read handlers/devices.rs", "read", read("relay-worker/src/handlers/devices.rs")),
+        ("s6", "rg -n \"revoke\" src", "execute", json!({"command": "rg -n \"revoke\" src"})),
+        ("s7", "Read heartbeat.rs", "read", read("relay-worker/src/heartbeat.rs")),
+        ("s8", "Read session.rs", "read", read("relay-worker/src/session.rs")),
+        ("s9", "cargo test -p relay-worker auth", "execute", json!({"command": "cargo test -p relay-worker auth"})),
+    ];
+    for (i, (id, name, kind, args)) in a1.into_iter().enumerate() {
+        let at = 7_000 + i as i64 * 7_000;
+        evs.push((at, EventType::ToolCall, call(id, "ag1", name, kind, args)));
+        evs.push((at + 2_500, EventType::ToolResult, done(id, "ag1", if kind == "execute" { "ok" } else { "(file contents)" })));
+        if i == 3 {
+            evs.push((at + 3_000, EventType::SubagentMessage, json!({"parent_tool_call_id": "ag1", "text": "The pairing check compares the token with ==. Looking at revocation next."})));
+        }
+    }
+    evs.push((77_000, EventType::ToolResult, json!({"tool_call_id": "ag1", "status": "completed", "output": report})));
+    // The profiler: three steps done, a benchmark under way.
+    let a2 = [
+        ("p1", "Read handlers/tunnel.rs", "read", read("relay-worker/src/handlers/tunnel.rs"), Some("(file contents)")),
+        ("p2", "Read handlers/pair.rs", "read", read("relay-worker/src/handlers/pair.rs"), Some("(file contents)")),
+        ("p3", "rg -n \"await\" src/handlers", "execute", json!({"command": "rg -n \"await\" src/handlers"}), Some("src/handlers/tunnel.rs:41:    let peer = registry.lookup(&id).await?;\nsrc/handlers/tunnel.rs:57:    sink.send(frame).await?;\nsrc/handlers/pair.rs:30:    let row = db.get(&code).await?;")),
+        ("p4", "cargo bench -p relay-worker", "execute", json!({"command": "cargo bench -p relay-worker"}), None),
+    ];
+    for (i, (id, name, kind, args, out)) in a2.into_iter().enumerate() {
+        let at = 80_000 + i as i64 * 6_000;
+        evs.push((at, EventType::ToolCall, call(id, "ag2", name, kind, args)));
+        if let Some(o) = out {
+            evs.push((at + 2_000, EventType::ToolResult, done(id, "ag2", o)));
+        }
+        if i == 2 {
+            evs.push((at + 3_000, EventType::SubagentMessage, json!({"parent_tool_call_id": "ag2", "text": "tunnel.rs awaits the registry lookup on every frame. Benchmarking to see how much it costs."})));
+        }
+    }
+    evs.sort_by_key(|e| e.0);
+    let events: Vec<Event> = evs.into_iter().enumerate().map(|(i, (at, kind, p))| ev(sid, i as i64 + 1, at, kind, p)).collect();
+    let tr = s.transcripts.entry(sid.into()).or_default();
+    tr.last_seq = events.len() as i64;
+    tr.events = events;
+    s.screen = Screen::Session(sid.into());
+}
+
 pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("session", |s| {
         session(s);
@@ -535,6 +618,23 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("offline", |s| {
         session(s);
         s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
+    }),
+    // Two subagents started together: one done, one running.
+    ("subagents", subagents),
+    // The agent panel on the running one, and on the finished one with its report.
+    ("subagents-panel-running", |s| {
+        subagents(s);
+        s.open_agent("ses_6", "ag2");
+    }),
+    ("subagents-panel-done", |s| {
+        subagents(s);
+        s.open_agent("ses_6", "ag1");
+    }),
+    // A step opened in the panel.
+    ("subagents-panel-step", |s| {
+        subagents(s);
+        s.open_agent("ses_6", "ag2");
+        s.expanded.insert("p3".into());
     }),
     ("side-panel", |s| {
         session(s);

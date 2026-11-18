@@ -59,12 +59,35 @@ pub fn screen(s: &App, id: &str, t: &Theme, k: &Kit) -> El {
         }
     }
     let mut lines = col().key("transcript-rows").gap(if t.mac() { 16.0 } else { 14.0 }).py(20.0);
+    // Subagents started together share a row of cards; what they do stays in their panel.
+    let mut agents: Vec<String> = vec![];
+    let mut agents_key = String::new();
+    let flush = |lines: El, agents: &mut Vec<String>, key: &str| {
+        if agents.is_empty() {
+            return lines;
+        }
+        let g = crate::agents::group(s, id, agents, t).key(key.to_string());
+        agents.clear();
+        lines.child(g)
+    };
     for (i, e) in events.iter().enumerate() {
+        if crate::model::is_child_event(e) {
+            continue;
+        }
+        if e.kind == EventType::ToolCall && crate::model::is_subagent_call(&e.payload) {
+            if agents.is_empty() {
+                agents_key = format!("ev-{}", e.seq);
+            }
+            agents.push(str_of(&e.payload["tool_call_id"]));
+            continue;
+        }
         let next_ts = events.get(i + 1).map(|n| n.ts);
         if let Some(r) = event_row(s, sess, e, next_ts, &results, t, k) {
+            lines = flush(lines, &mut agents, &agents_key);
             lines = lines.child(r.key(format!("ev-{}", e.seq)));
         }
     }
+    lines = flush(lines, &mut agents, &agents_key);
     if let Some(live) = tr.map(|t| t.live.as_str()).filter(|l| !l.is_empty()) {
         lines = lines.child(reply(live, true, t, k).key("live"));
     }
@@ -138,6 +161,11 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
             if ev.key == rune::Key::Up && ev.mods == rune::Mods::default() && s.prompt.text.is_empty() {
                 return s.recall_last_prompt();
             }
+            // Escape closes the agent panel.
+            if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && s.menu.is_none() {
+                s.close_agent();
+                return true;
+            }
             // Tab completes the slash command on offer.
             if ev.key == rune::Key::Tab && ev.mods == rune::Mods::default() {
                 let side = s.current().is_some_and(|x| x.side_questions);
@@ -186,6 +214,8 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         .child(send_button(s, sess, t));
     if let Some(sug) = slash_menu(s, sess, t) {
         area = area.child(sug);
+    } else if let Some(p) = crate::agents::running_pill(s, id, t) {
+        area = area.child(p);
     }
     let area = area.child(boxc.child(actions));
     column(t, area)
@@ -633,7 +663,7 @@ fn file_chips(s: &App, id: &str, t: &Theme) -> Option<El> {
 // Transcript rows
 // ---------------------------------------------------------------------------
 
-fn str_of(v: &Value) -> String {
+pub(crate) fn str_of(v: &Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 
@@ -659,7 +689,7 @@ fn prompt_body(p: &Value, t: &Theme) -> Vec<El> {
 }
 
 /// Seconds between two event times, "8.4 s" style.
-fn secs(from: i64, to: i64) -> Option<String> {
+pub(crate) fn secs(from: i64, to: i64) -> Option<String> {
     let ms = to - from;
     (ms > 0).then(|| if ms < 10_000 { format!("{:.1} s", ms as f64 / 1000.0) } else { format!("{} s", ms / 1000) })
 }
@@ -685,7 +715,7 @@ fn arg_lines(args: &Value) -> String {
     }
 }
 
-fn pre(t: &Theme, body: String) -> El {
+pub(crate) fn pre(t: &Theme, body: String) -> El {
     text(body).font(TextStyle::new(t.fs_mono_small, 400.0).mono().lh((t.fs_mono_small * 1.55).round())).color(t.text2).wrap().selectable(true)
 }
 
@@ -742,6 +772,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
         EventType::ToolResult => return None, // shown with its call
         // Side questions live in their own pane.
         EventType::SideQuestion | EventType::SideMessage | EventType::SideEnd => return None,
+        // A subagent's words are in its panel, never in the main reply.
+        EventType::SubagentMessage => return None,
         EventType::NetDenied => {
             let host = str_of(&p["host"]);
             let ws = sess.workspace_id.clone();

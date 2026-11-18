@@ -152,6 +152,11 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.menu = None;
         return true;
     }
+    // Escape closes the agent panel when nothing over it takes the key.
+    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() {
+        s.close_agent();
+        return true;
+    }
     for cmd in KEYED {
         if cmd != Cmd::Send && matches(look, cmd, ev, tx) {
             run(s, cmd, tx);
@@ -248,7 +253,13 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
         Cmd::Settings => s.open_settings(Tab::General),
         Cmd::ToggleSide => {
             if session.is_some_and(|x| s.has_side(&x.session_id)) {
-                s.side_open = !s.side_open;
+                // The agent panel stands in for the side pane: the toggle brings the side back.
+                if s.agent_visible() {
+                    s.close_agent();
+                    s.side_open = true;
+                } else {
+                    s.side_open = !s.side_open;
+                }
             }
         }
         Cmd::Archive => {

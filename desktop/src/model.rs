@@ -127,6 +127,166 @@ pub struct SideTurn {
     pub error: Option<String>,
 }
 
+/// A subagent: an `Agent`/`Task` tool call, the calls made inside it, what it said, and
+/// (once its call has a result) its report.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Subagent {
+    pub call_id: String,
+    pub description: String,
+    pub agent_type: String,
+    pub prompt: String,
+    pub started: i64,
+    /// When its result arrived.
+    pub ended: Option<i64>,
+    /// "running", "stopped" (the turn ended without a result), "completed", "failed"…
+    pub status: String,
+    pub report: String,
+    /// Its tool calls and messages, in order.
+    pub items: Vec<SubItem>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SubItem {
+    /// A tool call made inside the subagent: its call event's seq and id.
+    Step { seq: i64, call_id: String },
+    Message(String),
+}
+
+impl Subagent {
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+    pub fn steps(&self) -> usize {
+        self.items.iter().filter(|i| matches!(i, SubItem::Step { .. })).count()
+    }
+    /// The title: its description, else "Subagent".
+    pub fn title(&self) -> &str {
+        if self.description.trim().is_empty() { "Subagent" } else { self.description.trim() }
+    }
+}
+
+/// A `tool.call` payload that starts a subagent.
+pub fn is_subagent_call(p: &Value) -> bool {
+    p["subagent"].is_object() || matches!(p["tool_name"].as_str(), Some("Agent" | "Task"))
+}
+
+/// An event that belongs to a subagent, not the main transcript.
+pub fn is_child_event(e: &Event) -> bool {
+    e.kind == EventType::SubagentMessage || (matches!(e.kind, EventType::ToolCall | EventType::ToolResult) && e.payload["parent_tool_call_id"].as_str().is_some_and(|p| !p.is_empty()))
+}
+
+/// The subagents in `events`. `active`: the session is still working (else a subagent without
+/// a result has stopped).
+pub fn subagents_of(events: &[Event], active: bool) -> Vec<Subagent> {
+    let mut out: Vec<Subagent> = vec![];
+    for e in events {
+        let p = &e.payload;
+        match e.kind {
+            EventType::ToolCall if is_subagent_call(p) => {
+                let sa = &p["subagent"];
+                let desc = sa["description"].as_str().or(p["arguments"]["description"].as_str()).unwrap_or("");
+                let kind = sa["agent_type"].as_str().or(p["arguments"]["subagent_type"].as_str()).unwrap_or("");
+                let prompt = sa["prompt"].as_str().or(p["arguments"]["prompt"].as_str()).unwrap_or("");
+                out.push(Subagent {
+                    call_id: p["tool_call_id"].as_str().unwrap_or("").to_string(),
+                    description: desc.to_string(),
+                    agent_type: kind.to_string(),
+                    prompt: prompt.to_string(),
+                    started: e.ts,
+                    status: "running".into(),
+                    ..Default::default()
+                });
+            }
+            EventType::ToolResult => {
+                let cid = p["tool_call_id"].as_str().unwrap_or("");
+                if let Some(a) = out.iter_mut().find(|a| a.call_id == cid) {
+                    a.ended = Some(e.ts);
+                    a.status = p["status"].as_str().unwrap_or("completed").to_string();
+                    a.report = p["output"].as_str().unwrap_or("").to_string();
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        let parent = p["parent_tool_call_id"].as_str().unwrap_or("");
+        if parent.is_empty() {
+            continue;
+        }
+        let Some(a) = out.iter_mut().find(|a| a.call_id == parent) else { continue };
+        match e.kind {
+            EventType::ToolCall => a.items.push(SubItem::Step { seq: e.seq, call_id: p["tool_call_id"].as_str().unwrap_or("").to_string() }),
+            EventType::SubagentMessage => {
+                let t = p["text"].as_str().unwrap_or("").trim();
+                if !t.is_empty() {
+                    a.items.push(SubItem::Message(t.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !active {
+        for a in &mut out {
+            if a.running() {
+                a.status = "stopped".into();
+            }
+        }
+    }
+    out
+}
+
+/// Markdown as plain lines: no headings' hashes, list marks, emphasis, code fences or link
+/// targets. Blank lines go.
+pub fn plain_lines(md: &str) -> Vec<String> {
+    let mut out = vec![];
+    for line in md.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with("```") || l.chars().all(|c| matches!(c, '-' | '*' | '_' | '=' | '|' | ' ' | ':')) {
+            continue;
+        }
+        let l = l.trim_start_matches('#').trim_start_matches('>').trim_start();
+        let l = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")).or_else(|| l.strip_prefix("+ ")).unwrap_or(l);
+        // [text](url) → text
+        let mut s = String::new();
+        let mut rest = l;
+        while let Some(i) = rest.find('[') {
+            match (rest[i..].find("]("), rest[i..].find(')')) {
+                (Some(j), Some(k)) if j < k => {
+                    s.push_str(&rest[..i]);
+                    s.push_str(&rest[i + 1..i + j]);
+                    rest = &rest[i + k + 1..];
+                }
+                _ => {
+                    s.push_str(&rest[..=i]);
+                    rest = &rest[i + 1..];
+                }
+            }
+        }
+        s.push_str(rest);
+        let s: String = s.replace("**", "").replace("__", "").replace('`', "");
+        if !s.trim().is_empty() {
+            out.push(s.trim().to_string());
+        }
+    }
+    out
+}
+
+/// "38s", "1m 12s".
+pub fn span_label(ms: i64) -> String {
+    let s = (ms / 1000).max(0);
+    if s < 60 { format!("{s}s") } else if s < 3600 { format!("{}m {}s", s / 60, s % 60) } else { format!("{}h {}m", s / 3600, (s % 3600) / 60) }
+}
+
+/// "1 agent running", "2 agents and 1 command running".
+pub fn running_label(agents: usize, commands: usize) -> Option<String> {
+    let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+    match (agents, commands) {
+        (0, 0) => None,
+        (a, 0) => Some(format!("{} running", n(a, "agent", "agents"))),
+        (0, c) => Some(format!("{} running", n(c, "command", "commands"))),
+        (a, c) => Some(format!("{} and {} running", n(a, "agent", "agents"), n(c, "command", "commands"))),
+    }
+}
+
 impl SideThread {
     /// The tab's title: the first question.
     pub fn title(&self) -> &str {
@@ -386,6 +546,10 @@ pub struct App {
     /// The session whose title the header is renaming in place, and the field.
     pub session_rename: Option<String>,
     pub title_edit: TextEdit,
+    /// The subagent shown in the agent panel: (session, its Agent/Task call id).
+    pub agent_open: Option<(String, String)>,
+    /// The agent panel shows the task's whole prompt.
+    pub agent_task_open: bool,
 }
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
@@ -473,6 +637,8 @@ pub fn init() -> App {
         rename_error: None,
         session_rename: None,
         title_edit: TextEdit::new(""),
+        agent_open: None,
+        agent_task_open: false,
         effort_drag: None,
     }
 }
@@ -768,6 +934,9 @@ impl App {
         }
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
+        if self.agent_open.as_ref().is_some_and(|(s, _)| s != id) {
+            self.agent_open = None;
+        }
         self.ensure_subscribed(id);
     }
 
@@ -1499,7 +1668,63 @@ impl App {
 
     /// The side pane is on screen for the open session.
     pub fn side_visible(&self) -> bool {
-        self.side_open && matches!(&self.screen, Screen::Session(id) if self.has_side(id))
+        self.side_open && !self.agent_visible() && matches!(&self.screen, Screen::Session(id) if self.has_side(id))
+    }
+
+    /// A trailing pane (side questions or a subagent) is on screen.
+    pub fn trailing_visible(&self) -> bool {
+        self.side_visible() || self.agent_visible()
+    }
+
+    // ---- subagents -------------------------------------------------------------------------
+
+    /// A session's subagents, from its events, in the order they started.
+    pub fn subagents(&self, session: &str) -> Vec<Subagent> {
+        let Some(tr) = self.transcripts.get(session) else { return vec![] };
+        let active = self.session(session).is_some_and(|x| matches!(x.state, SessionState::Created | SessionState::Starting | SessionState::Running | SessionState::WaitingApproval));
+        subagents_of(&tr.events, active)
+    }
+
+    /// One subagent of a session by its call id.
+    pub fn subagent(&self, session: &str, call_id: &str) -> Option<Subagent> {
+        self.subagents(session).into_iter().find(|a| a.call_id == call_id)
+    }
+
+    /// Subagents still running, and background commands still running, in a session.
+    pub fn running_work(&self, session: &str) -> (usize, usize) {
+        let agents = self.subagents(session).iter().filter(|a| a.running()).count();
+        let Some(tr) = self.transcripts.get(session) else { return (agents, 0) };
+        let active = self.session(session).is_some_and(|x| matches!(x.state, SessionState::Created | SessionState::Starting | SessionState::Running | SessionState::WaitingApproval));
+        if !active {
+            return (agents, 0);
+        }
+        let done: HashSet<&str> = tr.events.iter().filter(|e| e.kind == EventType::ToolResult).filter_map(|e| e.payload["tool_call_id"].as_str()).collect();
+        let commands = tr
+            .events
+            .iter()
+            .filter(|e| e.kind == EventType::ToolCall && e.payload["background"] == true && !is_subagent_call(&e.payload))
+            .filter(|e| e.payload["tool_call_id"].as_str().is_some_and(|c| !done.contains(c)))
+            .count();
+        (agents, commands)
+    }
+
+    /// The agent panel is on screen for the open session.
+    pub fn agent_visible(&self) -> bool {
+        match (&self.agent_open, &self.screen) {
+            (Some((sid, _)), Screen::Session(cur)) => sid == cur,
+            _ => false,
+        }
+    }
+
+    pub fn open_agent(&mut self, session: &str, call_id: &str) {
+        if self.agent_open.as_ref().is_none_or(|(s, c)| s != session || c != call_id) {
+            self.agent_task_open = false;
+        }
+        self.agent_open = Some((session.to_string(), call_id.to_string()));
+    }
+
+    pub fn close_agent(&mut self) {
+        self.agent_open = None;
     }
 
     /// Close a side tab here (the conversation stays in the session).

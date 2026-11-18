@@ -16,8 +16,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         body = body.child(sidebar(s, &t));
     }
     body = body.child(main_pane(s, &t, &k, cx));
-    if s.side_visible() {
-        if let Screen::Session(id) = &s.screen {
+    if let Screen::Session(id) = &s.screen {
+        if s.agent_visible() {
+            if let Some((_, call)) = &s.agent_open {
+                body = body.child(crate::agents::pane(s, id, call, &t, &k));
+            }
+        } else if s.side_visible() {
             body = body.child(crate::side::pane(s, id, &t, &k));
         }
     }
@@ -369,8 +373,12 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     // The status, then the login: a profile's name alone says which ("Your turn · Work · 3m").
     let status = Status::of(x.state);
     let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
-    let sub = vec![status.word().to_string(), profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)];
-    let sub = sub.join(" · ");
+    // "Working · 2 agents running" while subagents run.
+    let agents = if status == Status::Working { s.running_work(&x.session_id).0 } else { 0 };
+    let sub = match crate::model::running_label(agents, 0) {
+        Some(r) => format!("{} · {r}", status.word()),
+        None => [status.word().to_string(), profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)].join(" · "),
+    };
     let (title_c, sub_c) = if selected && mac {
         (Color::WHITE, Color::WHITE.alpha(0.8))
     } else if ended {

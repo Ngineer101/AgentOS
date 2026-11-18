@@ -12,6 +12,7 @@ mod session;
 mod settings;
 mod sheet;
 mod side;
+mod agents;
 mod toast;
 mod view;
 #[cfg(test)]
@@ -64,6 +65,13 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
         }
         tx.wake_after(std::time::Duration::from_millis(100));
         return true;
+    }
+    // A running subagent's clock moves every second.
+    if let model::Screen::Session(id) = &s.screen {
+        if s.running_work(id).0 > 0 {
+            tx.wake_after(std::time::Duration::from_secs(1));
+            return true;
+        }
     }
     // Keep "3m ago" labels fresh.
     tx.wake_after(std::time::Duration::from_secs(30));
