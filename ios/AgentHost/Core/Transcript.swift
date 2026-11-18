@@ -69,6 +69,8 @@ enum TranscriptRow: Identifiable {
     case agentMessage(seq: Int64, text: String)
     case thought(seq: Int64, text: String)
     case tool(ToolRow)
+    /// A call that started a subagent, with the steps it took.
+    case subagent(SubagentRun)
     case approvalRequested(seq: Int64, approval: PendingApprovalModel?, connector: String, tool: String)
     case approvalResolved(seq: Int64, decision: String, device: String, timedOut: Bool)
     case netDenied(seq: Int64, host: String, port: Int64?, reason: String)
@@ -81,6 +83,7 @@ enum TranscriptRow: Identifiable {
         case let .agentMessage(seq, _): return "e\(seq)"
         case let .thought(seq, _): return "e\(seq)"
         case let .tool(t): return "t\(t.callId)-\(t.seq)"
+        case let .subagent(a): return "a\(a.callId)"
         case let .approvalRequested(seq, _, _, _): return "e\(seq)"
         case let .approvalResolved(seq, _, _, _): return "e\(seq)"
         case let .netDenied(seq, _, _, _): return "e\(seq)"
@@ -106,13 +109,151 @@ struct ToolRow {
     var exitCode: Int64?
 }
 
+/// A subagent: the `Agent`/`Task` call that started it, what it did (its
+/// own tool calls and messages, which stay out of the main transcript) and,
+/// once its call has a result, its report.
+struct SubagentRun {
+    enum Step {
+        case tool(ToolRow)
+        case message(seq: Int64, text: String)
+    }
+
+    var seq: Int64
+    var callId: String
+    var description: String
+    var agentType: String
+    var prompt: String
+    var background: Bool
+    var startedAt: Int64
+    var endedAt: Int64?
+    /// `nil` while running; otherwise `completed`, `failed` or `denied`.
+    var status: String?
+    var report: String?
+    var steps: [Step] = []
+
+    var isRunning: Bool { status == nil }
+    var failed: Bool { status != nil && status != "completed" }
+    var title: String { description.isEmpty ? "Subagent" : description }
+    var toolSteps: [ToolRow] { steps.compactMap { if case let .tool(t) = $0 { return t }; return nil } }
+    var stepCount: Int { toolSteps.count }
+    var latestTool: ToolRow? { toolSteps.last }
+
+    /// "Explore agent".
+    var agentLabel: String { agentType.isEmpty ? "Agent" : "\(agentType) agent" }
+
+    /// Milliseconds it ran (so far, given `now`).
+    func elapsed(now: Int64) -> Int64 { max(0, (endedAt ?? now) - startedAt) }
+
+    /// Is this `tool.call` payload one that starts a subagent?
+    static func starts(_ p: JSONValue) -> Bool {
+        if case .object = p["subagent"] { return true }
+        let tool = p["tool_name"].string ?? ""
+        return tool == "Agent" || tool == "Task"
+    }
+}
+
+/// "38s", "1m 12s", "1h 4m".
+func formatDuration(ms: Int64) -> String {
+    let s = ms / 1000
+    if s < 60 { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+    return "\(s / 3600)h \((s % 3600) / 60)m"
+}
+
+/// The first few lines of Markdown as plain text, for a preview.
+func markdownPreview(_ text: String, lines: Int = 3) -> String {
+    var out: [String] = []
+    var inFence = false
+    for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        var line = raw.trimmingCharacters(in: .whitespaces)
+        if line.hasPrefix("```") || line.hasPrefix("~~~") { inFence.toggle(); continue }
+        if inFence || line.isEmpty || line.allSatisfy({ "-*_=|: ".contains($0) }) { continue }
+        while let f = line.first, "#>".contains(f) { line = String(line.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        for m in ["- ", "* ", "+ "] where line.hasPrefix(m) { line = "• " + line.dropFirst(2) }
+        for token in ["**", "__", "`"] { line = line.replacingOccurrences(of: token, with: "") }
+        // [text](url) → text
+        while let open = line.range(of: "]("), let lb = line[..<open.lowerBound].lastIndex(of: "["),
+              let close = line[open.upperBound...].firstIndex(of: ")") {
+            let label = line[line.index(after: lb)..<open.lowerBound]
+            line.replaceSubrange(lb...close, with: label)
+        }
+        out.append(line)
+        if out.count == lines { break }
+    }
+    return out.joined(separator: "\n")
+}
+
 /// Turn raw events into rows, laid out like the desktop transcript:
-/// tool results are merged into their tool-call rows.
+/// tool results are merged into their tool-call rows. A subagent is one
+/// row; its own tool calls and messages go into that row, not the main
+/// flow.
 func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
     var rows: [TranscriptRow] = []
     var toolIndex: [String: Int] = [:]
+    /// A subagent's call id → its row.
+    var agentIndex: [String: Int] = [:]
+    /// A child tool call's id → (its subagent's row, its step).
+    var childIndex: [String: (Int, Int)] = [:]
+    func withAgent(_ id: String, _ f: (inout SubagentRun) -> Void) -> Bool {
+        guard let i = agentIndex[id], case var .subagent(a) = rows[i] else { return false }
+        f(&a)
+        rows[i] = .subagent(a)
+        return true
+    }
+    func toolRow(_ e: HostEvent) -> ToolRow {
+        let p = e.payload
+        return ToolRow(
+            seq: e.seq,
+            callId: p["tool_call_id"].string ?? "seq\(e.seq)",
+            name: p["name"].string ?? "tool",
+            source: p["source"].string ?? "sandbox",
+            connectorName: p["connector_name"].string,
+            arguments: p["arguments"],
+            status: nil,
+            output: nil,
+            truncated: false,
+            sandboxDenied: false,
+            exitCode: nil
+        )
+    }
+    func applyResult(_ p: JSONValue, to row: inout ToolRow) {
+        row.status = p["status"].string
+        row.output = p["output"].string
+        row.truncated = p["truncated"].bool ?? false
+        row.sandboxDenied = p["sandbox_denied"].bool ?? false
+        row.exitCode = p["exit_code"].int
+    }
     for e in events {
         let p = e.payload
+        // A subagent's own steps: into its row, never the main flow.
+        let parent = p["parent_tool_call_id"].string ?? ""
+        let isChildResult = e.type == EventKind.toolResult && childIndex[p["tool_call_id"].string ?? ""] != nil
+        if isChildResult || (!parent.isEmpty &&
+            [EventKind.toolCall, EventKind.toolResult, EventKind.subagentMessage].contains(e.type)) {
+            switch e.type {
+            case EventKind.toolCall:
+                // (A subagent inside a subagent is one more step of the outer one.)
+                let row = toolRow(e)
+                _ = withAgent(parent) { a in
+                    childIndex[row.callId] = (agentIndex[parent]!, a.steps.count)
+                    a.steps.append(.tool(row))
+                }
+            case EventKind.toolResult:
+                let id = p["tool_call_id"].string ?? ""
+                if let (i, step) = childIndex[id], case var .subagent(a) = rows[i],
+                   step < a.steps.count, case var .tool(t) = a.steps[step] {
+                    applyResult(p, to: &t)
+                    a.steps[step] = .tool(t)
+                    rows[i] = .subagent(a)
+                }
+            default:
+                let text = p["text"].string ?? ""
+                if !text.isEmpty {
+                    _ = withAgent(parent) { $0.steps.append(.message(seq: e.seq, text: text)) }
+                }
+            }
+            continue
+        }
         switch e.type {
         case EventKind.prompt:
             rows.append(.prompt(
@@ -127,30 +268,35 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
         case EventKind.agentThought:
             rows.append(.thought(seq: e.seq, text: p["text"].string ?? ""))
         case EventKind.toolCall:
-            let id = p["tool_call_id"].string ?? "seq\(e.seq)"
-            let row = ToolRow(
-                seq: e.seq,
-                callId: id,
-                name: p["name"].string ?? "tool",
-                source: p["source"].string ?? "sandbox",
-                connectorName: p["connector_name"].string,
-                arguments: p["arguments"],
-                status: nil,
-                output: nil,
-                truncated: false,
-                sandboxDenied: false,
-                exitCode: nil
-            )
-            toolIndex[id] = rows.count
-            rows.append(.tool(row))
+            let row = toolRow(e)
+            if SubagentRun.starts(p) {
+                let sub = p["subagent"]
+                let args = p["arguments"]
+                agentIndex[row.callId] = rows.count
+                rows.append(.subagent(SubagentRun(
+                    seq: e.seq,
+                    callId: row.callId,
+                    description: sub["description"].string ?? args["description"].string ?? "",
+                    agentType: sub["agent_type"].string ?? args["subagent_type"].string ?? "",
+                    prompt: sub["prompt"].string ?? args["prompt"].string ?? "",
+                    background: p["background"].bool ?? args["run_in_background"].bool ?? false,
+                    startedAt: e.ts
+                )))
+            } else {
+                toolIndex[row.callId] = rows.count
+                rows.append(.tool(row))
+            }
         case EventKind.toolResult:
             let id = p["tool_call_id"].string ?? ""
+            if withAgent(id, { a in
+                a.status = p["status"].string ?? "completed"
+                a.report = p["output"].string
+                a.endedAt = e.ts
+            }) {
+                break
+            }
             if let i = toolIndex[id], case var .tool(row) = rows[i] {
-                row.status = p["status"].string
-                row.output = p["output"].string
-                row.truncated = p["truncated"].bool ?? false
-                row.sandboxDenied = p["sandbox_denied"].bool ?? false
-                row.exitCode = p["exit_code"].int
+                applyResult(p, to: &row)
                 rows[i] = .tool(row)
             } else {
                 // A result whose call we never saw: show it on its own.
@@ -197,6 +343,15 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
                 fix: p["fix"].string
             ))
         case EventKind.turnEnd:
+            // A subagent the turn waited on can't outlive it (one in the
+            // background can): if it never reported, it was stopped.
+            for i in agentIndex.values {
+                if case var .subagent(a) = rows[i], a.isRunning, !a.background {
+                    a.status = "interrupted"
+                    a.endedAt = e.ts
+                    rows[i] = .subagent(a)
+                }
+            }
             let stop = p["stop_reason"].string ?? "end_turn"
             let detail = p["host_reason"].string ?? p["error"].string
             rows.append(.turnEnd(seq: e.seq, stopReason: stop, detail: detail))
@@ -205,6 +360,34 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
         }
     }
     return rows
+}
+
+/// The subagents still running in these events.
+func runningSubagents(_ events: [HostEvent]) -> [SubagentRun] {
+    buildRows(events).compactMap { if case let .subagent(a) = $0, a.isRunning { return a }; return nil }
+}
+
+/// How many subagents are still running, without building the rows (for
+/// the sessions list).
+func runningSubagentCount(_ events: [HostEvent]) -> Int {
+    var running: [String: Bool] = [:]  // call id → background
+    for e in events {
+        let p = e.payload
+        switch e.type {
+        case EventKind.toolCall:
+            if (p["parent_tool_call_id"].string ?? "").isEmpty, SubagentRun.starts(p),
+               let id = p["tool_call_id"].string {
+                running[id] = p["background"].bool ?? p["arguments"]["run_in_background"].bool ?? false
+            }
+        case EventKind.toolResult:
+            if let id = p["tool_call_id"].string { running[id] = nil }
+        case EventKind.turnEnd:
+            running = running.filter { $0.value }
+        default:
+            break
+        }
+    }
+    return running.count
 }
 
 /// A device as people read it: its name. Older events say "iPhone (dev_…)";

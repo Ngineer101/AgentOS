@@ -37,6 +37,8 @@ struct SessionView: View {
     /// "Rename Session…" (an alert with a text field).
     @State private var renaming = false
     @State private var renameText = ""
+    /// The subagent whose sheet is open.
+    @State private var subagentShown: SubagentRef?
 
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
@@ -189,7 +191,8 @@ struct SessionView: View {
                     ForEach(groupActivity(rows)) { item in
                         switch item {
                         case let .row(row):
-                            TranscriptRowView(row: row) { a in approvalShown = a }
+                            TranscriptRowView(row: row, onApproval: { a in approvalShown = a },
+                                              onSubagent: { id in subagentShown = SubagentRef(id: id) })
                         case let .activity(_, group):
                             ActivityGroupRow(rows: group)
                         }
@@ -294,6 +297,10 @@ struct SessionView: View {
             ApprovalView(approvalId: a.approvalId, initial: a)
                 .environmentObject(model)
         }
+        .sheet(item: $subagentShown) { ref in
+            SubagentSheet(sessionId: sessionId, callId: ref.id)
+                .environmentObject(model)
+        }
         .onAppear {
             model.open(sessionId)
             #if DEBUG
@@ -319,6 +326,9 @@ struct SessionView: View {
             }
             if model.isDemo, DemoData.opensTitleMenu {
                 DemoMenuOpener.openTitleMenu()
+            }
+            if model.isDemo, let id = DemoData.opensSubagent {
+                subagentShown = SubagentRef(id: id)
             }
             #endif
         }
@@ -384,6 +394,11 @@ struct SessionView: View {
                     .font(.footnote)
                     .foregroundStyle(Palette.red)
                     .padding(.horizontal, 6)
+            }
+            let agents = runningAgents
+            if !agents.isEmpty && !dictation.isListening && !dictation.isFinishing {
+                SubagentsRunningPill(agents: agents) { id in subagentShown = SubagentRef(id: id) }
+                    .padding(.leading, 4)
             }
             if dictation.isListening || dictation.isFinishing {
                 DictationPanel(
@@ -549,6 +564,12 @@ struct SessionView: View {
         }
     }
 
+    /// Subagents still at work (none once the session has stopped).
+    private var runningAgents: [SubagentRun] {
+        guard !isTerminal, !isArchived else { return [] }
+        return rows.compactMap { if case let .subagent(a) = $0, a.isRunning { return a }; return nil }
+    }
+
     private var canSend: Bool {
         guard canPrompt else { return false }
         if let q = sideQuestion { return !q.isEmpty }
@@ -683,6 +704,7 @@ struct TranscriptRowView: View {
     @EnvironmentObject private var model: AppModel
     let row: TranscriptRow
     var onApproval: (PendingApprovalModel) -> Void
+    var onSubagent: (String) -> Void = { _ in }
 
     var body: some View {
         switch row {
@@ -716,6 +738,9 @@ struct TranscriptRowView: View {
 
         case let .tool(t):
             ToolCallRow(tool: t)
+
+        case let .subagent(a):
+            SubagentCard(run: a) { onSubagent(a.callId) }
 
         case let .approvalRequested(_, approval, connector, tool):
             ApprovalRequestRow(approval: approval, connector: connector, tool: tool, onOpen: onApproval)
@@ -1873,6 +1898,328 @@ struct SideQuestionsSheet: View {
             selection = rest.isEmpty ? nil : rest[min(i, rest.count - 1)]
         }
         withAnimation { model.closeSide(id) }
+    }
+}
+
+// MARK: - Subagents
+
+/// Which subagent's sheet is open (its call id).
+struct SubagentRef: Identifiable, Hashable {
+    let id: String
+}
+
+/// "general-purpose agent · 4 steps · 38s"; the time counts up while it runs.
+struct SubagentMetaText: View {
+    let run: SubagentRun
+    var showsSteps = true
+    var showsState = false
+
+    var body: some View {
+        if run.isRunning {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(text(now: Int64(ctx.date.timeIntervalSince1970 * 1000)))
+            }
+        } else {
+            Text(text(now: run.endedAt ?? run.startedAt))
+        }
+    }
+
+    private func text(now: Int64) -> String {
+        var parts = [run.agentLabel]
+        if showsState {
+            parts.append(run.isRunning ? "running" : run.status == "completed" ? "done"
+                         : run.status == "interrupted" ? "stopped" : "failed")
+        }
+        if showsSteps, run.stepCount > 0 {
+            parts.append(run.stepCount == 1 ? "1 step" : "\(run.stepCount) steps")
+        }
+        if run.background { parts.append("background") }
+        parts.append(formatDuration(ms: run.elapsed(now: now)))
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// Running, done or failed, for a subagent.
+struct SubagentStatusIcon: View {
+    let run: SubagentRun
+
+    var body: some View {
+        if run.isRunning {
+            ProgressView().controlSize(.mini)
+        } else if run.failed {
+            Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.red)
+        } else {
+            Image(systemName: "checkmark").font(.caption.weight(.semibold)).foregroundStyle(.green)
+        }
+    }
+}
+
+/// A subagent as one card in the conversation: its task, type, steps,
+/// time and status. Running, the step it's on; done, the start of its
+/// report. Tap for its steps and full report.
+struct SubagentCard: View {
+    let run: SubagentRun
+    var onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "sparkle")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Palette.fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(run.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        SubagentStatusIcon(run: run)
+                            .frame(width: 16, height: 16)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    SubagentMetaText(run: run)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    preview
+                        .padding(.top, 5)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.cell, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.06), lineWidth: 0.5))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Subagent: \(run.title), \(run.isRunning ? "running" : run.failed ? "failed" : "done")")
+        .accessibilityHint("Shows its steps and report")
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if run.isRunning {
+            if let line = latestLine {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill").font(.system(size: 7))
+                    Text(line)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(.secondary)
+            }
+        } else if let report = run.report, !report.isEmpty {
+            Text(markdownPreview(report))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+        }
+    }
+
+    /// What it is doing now: its latest step.
+    private var latestLine: String? {
+        switch run.steps.last {
+        case let .tool(t)?: return t.summary.text
+        case let .message(_, text)?: return markdownPreview(text, lines: 1)
+        case nil: return nil
+        }
+    }
+}
+
+/// "1 agent running" above the composer: tap to open it (or, with
+/// several, pick one).
+struct SubagentsRunningPill: View {
+    let agents: [SubagentRun]
+    var onOpen: (String) -> Void
+
+    var body: some View {
+        Group {
+            if agents.count == 1, let a = agents.first {
+                Button { onOpen(a.callId) } label: { label }
+                    .buttonStyle(.plain)
+            } else {
+                Menu {
+                    ForEach(agents, id: \.callId) { a in
+                        Button { onOpen(a.callId) } label: {
+                            Text(a.title)
+                            Text(a.agentLabel)
+                        }
+                    }
+                } label: { label }
+                .buttonStyle(.plain)
+            }
+        }
+        .accessibilityLabel(title)
+        .accessibilityHint(agents.count == 1 ? "Opens it" : "Choose one to open")
+    }
+
+    private var title: String {
+        agents.count == 1 ? "1 agent running" : "\(agents.count) agents running"
+    }
+
+    private var label: some View {
+        HStack(spacing: 7) {
+            ProgressView().controlSize(.mini)
+            Text(title)
+                .font(.footnote)
+                .foregroundStyle(.primary)
+            Image(systemName: "chevron.up")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(Palette.cell, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+        .contentShape(Capsule())
+    }
+}
+
+/// One subagent: its task, each step it took and what it said, and once
+/// it's done, its report. Updates live.
+struct SubagentSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let sessionId: String
+    let callId: String
+    @State private var taskExpanded = false
+
+    private var run: SubagentRun? {
+        for r in buildRows(model.transcripts[sessionId]?.events ?? []) {
+            if case let .subagent(a) = r, a.callId == callId { return a }
+        }
+        return nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let run {
+                    content(run)
+                } else {
+                    ContentUnavailableView("Subagent Not Found", systemImage: "sparkle")
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        ToolbarIcon(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
+                ToolbarItem(placement: .principal) {
+                    if let run {
+                        VStack(spacing: 1) {
+                            Text(run.title)
+                                .font(.headline)
+                                .lineLimit(1)
+                            SubagentMetaText(run: run, showsSteps: false, showsState: true)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func content(_ run: SubagentRun) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if !run.prompt.isEmpty { taskBox(run.prompt) }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel("Steps")
+                    if run.steps.isEmpty {
+                        Text(run.isRunning ? "Starting…" : "No steps")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(run.steps.enumerated()), id: \.offset) { _, step in
+                        switch step {
+                        case let .tool(t):
+                            ToolCallRow(tool: t)
+                        case let .message(_, text):
+                            MarkdownView(text: text)
+                                .equatable()
+                                .font(.footnote)
+                                .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                if run.isRunning {
+                    Text("The report appears here when it finishes.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionLabel(run.failed ? "Result" : "Report")
+                        if let report = run.report, !report.isEmpty {
+                            MarkdownView(text: report)
+                                .equatable()
+                        } else {
+                            Text(run.status == "interrupted" ? "Stopped before it reported." : "No report.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Text("Stopping the turn (\(Image(systemName: "stop.fill")) in the composer) stops its agents too.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
+            }
+            .padding(16)
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func taskBox(_ prompt: String) -> some View {
+        let long = prompt.count > 280 || prompt.split(separator: "\n").count > 6
+        return VStack(alignment: .leading, spacing: 6) {
+            sectionLabel("Task")
+            Text(prompt)
+                .font(.subheadline)
+                .lineLimit(taskExpanded || !long ? nil : 6)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if long {
+                Button(taskExpanded ? "Show less" : "Show more") {
+                    withAnimation(.snappy(duration: 0.2)) { taskExpanded.toggle() }
+                }
+                .font(.footnote.weight(.medium))
+            }
+        }
+        .padding(14)
+        .background(Palette.fill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 

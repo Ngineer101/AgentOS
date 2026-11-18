@@ -8,11 +8,12 @@ import UIKit
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
 ///                                         archive-confirm | pair | side | config | paste |
-///                                         quick | plain | btw
+///                                         quick | plain | btw | subagents
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 ///     -AgentHostDemoTitleMenu             the session opens with its title menu open
 ///     -AgentHostDemoRename                the session opens with "Rename Session" shown
+///     -AgentHostDemoSubagent done|running the `subagents` screen opens that subagent's sheet
 struct DemoData {
     enum Screen: String {
         case sessions, session, dictating, new, picker, settings, pair, archived
@@ -34,6 +35,8 @@ struct DemoData {
         case plain
         /// A side question (`/btw …`) being typed in the composer.
         case btw
+        /// A turn with two subagents in parallel: one done, one running.
+        case subagents
     }
 
     var screen: Screen
@@ -51,6 +54,7 @@ struct DemoData {
     static let quickSession = "demo-rust"
     static let archivedSession = "demo-quic"
     static let plainSession = "demo-notes-tidy"
+    static let subagentSession = "demo-audit"
 
     /// The screen asked for on the command line (nil without `-AgentHostDemo`).
     static var requestedScreen: Screen? {
@@ -75,6 +79,15 @@ struct DemoData {
     /// `-AgentHostDemoRename`: the session screen asks for a new title.
     static var opensRename: Bool {
         requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoRename")
+    }
+
+    /// `-AgentHostDemoSubagent done|running`: the call id of the subagent
+    /// whose sheet the `subagents` screen opens.
+    static var opensSubagent: String? {
+        guard requestedScreen == .subagents else { return nil }
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-AgentHostDemoSubagent"), i + 1 < args.count else { return nil }
+        return args[i + 1] == "done" ? "agent-auth" : "agent-perf"
     }
 
     /// The draft on the `btw` screen.
@@ -173,6 +186,8 @@ struct DemoData {
                          "Add OAuth refresh", ago: 5), branch: "agenthost/oauth-refresh"),
             live(session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
                          "Review the relay worker", ago: 120), branch: "agenthost/review-relay-worker"),
+            live(session(Self.subagentSession, "ws-relay", "claude", "claude-work", SessionStateName.running,
+                         "Audit the relay worker", ago: 0, lastSeq: 19), branch: "audit-relay"),
             // Untitled, no worktree (notes is not a git repository): called "notes".
             live(session(Self.plainSession, "ws-notes", "claude", "claude-personal", SessionStateName.idle,
                          nil, ago: 8, lastSeq: 2)),
@@ -344,7 +359,74 @@ struct DemoData {
             ]),
         ] { _ = tidy.ingest(e) }
 
-        transcripts = [Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
+        var audit = Transcript(sessionId: Self.subagentSession)
+        let a0 = now - 135_000
+        let sid = Self.subagentSession
+        func call(_ seq: Int64, _ ts: Int64, _ id: String, parent: String, _ name: String,
+                  _ args: [String: JSONValue]) -> HostEvent {
+            Self.event(sid, seq, EventKind.toolCall, ts, [
+                "tool_call_id": .string(id), "name": .string(name), "tool_name": .string(name),
+                "source": .string("sandbox"), "parent_tool_call_id": .string(parent), "arguments": .object(args),
+            ])
+        }
+        func result(_ seq: Int64, _ ts: Int64, _ id: String, parent: String, _ out: String) -> HostEvent {
+            Self.event(sid, seq, EventKind.toolResult, ts, [
+                "tool_call_id": .string(id), "parent_tool_call_id": .string(parent),
+                "status": .string("completed"), "output": .string(out),
+            ])
+        }
+        let authPrompt = "Review the relay worker's auth: pairing tokens, device revocation and the WebSocket handshake. Report each issue with the file and line, and how bad it is."
+        let perfPrompt = "Measure request latency in relay-worker and find the slowest handler. Report numbers and a suggested fix."
+        for e in [
+            Self.event(sid, 1, EventKind.prompt, a0, [
+                "text": .string("Check the worker for auth bugs and slow paths."), "device": .string("Nico's iPhone"),
+            ]),
+            Self.event(sid, 2, EventKind.agentMessage, a0 + 4000, [
+                "text": .string("I'll split this up: one agent reviews auth, another profiles the hot paths."),
+            ]),
+            Self.event(sid, 3, EventKind.toolCall, a0 + 5000, [
+                "tool_call_id": .string("agent-auth"), "name": .string("Task"), "tool_name": .string("Agent"),
+                "source": .string("agent"),
+                "arguments": .object(["description": .string("Review auth handling"), "prompt": .string(authPrompt)]),
+                "subagent": .object(["description": .string("Review auth handling"),
+                                     "agent_type": .string("Explore"), "prompt": .string(authPrompt)]),
+            ]),
+            Self.event(sid, 4, EventKind.toolCall, now - 38_000, [
+                "tool_call_id": .string("agent-perf"), "name": .string("Task"), "tool_name": .string("Agent"),
+                "source": .string("agent"),
+                "arguments": .object(["description": .string("Profile the hot paths"), "prompt": .string(perfPrompt)]),
+                "subagent": .object(["description": .string("Profile the hot paths"),
+                                     "agent_type": .string("general-purpose"), "prompt": .string(perfPrompt)]),
+            ]),
+            call(5, a0 + 9000, "auth-1", parent: "agent-auth", "Read", ["file_path": .string("crates/relay/src/pair.rs")]),
+            result(6, a0 + 10_000, "auth-1", parent: "agent-auth", "…"),
+            call(7, a0 + 12_000, "auth-2", parent: "agent-auth", "Grep",
+                 ["command": .string("rg -n \"token ==\" crates/relay")]),
+            result(8, a0 + 13_000, "auth-2", parent: "agent-auth", "src/pair.rs:88: if token == expected {"),
+            call(9, a0 + 20_000, "auth-3", parent: "agent-auth", "Read", ["file_path": .string("crates/relay/src/devices.rs")]),
+            result(10, a0 + 21_000, "auth-3", parent: "agent-auth", "…"),
+            Self.event(sid, 11, EventKind.toolResult, a0 + 77_000, [
+                "tool_call_id": .string("agent-auth"), "status": .string("completed"),
+                "output": .string("Found **2 issues**: the pairing token is compared with `==`, and revoked devices keep their socket for 30 s.\n\n## Issues\n\n1. **Timing-unsafe token check** — `crates/relay/src/pair.rs:88` compares the pairing token with `==`. Use `subtle::ConstantTimeEq`. *Medium.*\n2. **Revocation lag** — `devices.rs` only re-checks revocation on the 30 s heartbeat, so a revoked device keeps its socket until then. Close its sockets when it's revoked. *High.*\n\nThe WebSocket handshake checks the origin and the token's expiry correctly."),
+            ]),
+            call(12, now - 34_000, "perf-1", parent: "agent-perf", "Read",
+                 ["file_path": .string("src/handlers/tunnel.rs")]),
+            result(13, now - 33_000, "perf-1", parent: "agent-perf", "…"),
+            call(14, now - 31_000, "perf-2", parent: "agent-perf", "Read",
+                 ["file_path": .string("src/handlers/pair.rs")]),
+            result(15, now - 30_000, "perf-2", parent: "agent-perf", "…"),
+            call(16, now - 28_000, "perf-3", parent: "agent-perf", "Grep",
+                 ["command": .string("rg -n \"await\" src/handlers")]),
+            result(17, now - 27_000, "perf-3", parent: "agent-perf", "src/handlers/tunnel.rs:41: kv.get(key).await"),
+            Self.event(sid, 18, EventKind.subagentMessage, now - 20_000, [
+                "parent_tool_call_id": .string("agent-perf"),
+                "text": .string("The tunnel handler awaits a KV read on every frame. Benchmarking before and after caching it."),
+            ]),
+            call(19, now - 12_000, "perf-4", parent: "agent-perf", "Bash",
+                 ["command": .string("cargo bench -p relay-worker")]),
+        ] { _ = audit.ingest(e) }
+
+        transcripts = [Self.subagentSession: audit, Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
                        Self.plainSession: tidy]
     }
 

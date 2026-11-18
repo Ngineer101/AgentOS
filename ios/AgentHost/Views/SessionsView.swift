@@ -176,6 +176,7 @@ struct SessionsView: View {
         case .archiveConfirm: archiving = model.session(DemoData.flakySession)
         case .side, .config, .paste, .quick, .btw: path = [.session(DemoData.quickSession)]
         case .plain: path = [.session(DemoData.plainSession)]
+        case .subagents: path = [.session(DemoData.subagentSession)]
         case .sessions, .pair: break
         }
     }
@@ -397,6 +398,11 @@ struct SessionRow: View {
     private var subtitle: String {
         let agent = model.agentLabel(session)
         if status == .needsYou { return "\(status.label) · \(agent)" }
+        // "Working · 2 agents running" while subagents run.
+        if status == .working {
+            let n = runningSubagentCount(model.transcripts[session.sessionId]?.events ?? [])
+            if n > 0 { return "\(status.label) · \(n == 1 ? "1 agent" : "\(n) agents") running" }
+        }
         return "\(status.label) · \(agent) · \(shortAge(session.updatedAt))"
     }
 

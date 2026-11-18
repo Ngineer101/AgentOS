@@ -69,6 +69,10 @@ enum EventKind {
     static let sideMessage = "side.message"
     /// `{side_id, stop_reason, error?}`: the side answer is complete.
     static let sideEnd = "side.end"
+    /// `{parent_tool_call_id, text}`: what a subagent said (not part of
+    /// the main reply). Its tool calls are `tool.call`/`tool.result` with
+    /// `parent_tool_call_id`.
+    static let subagentMessage = "subagent.message"
 }
 
 /// `SessionState` values.
