@@ -174,7 +174,8 @@ struct SessionsView: View {
         case .archived: path = [.settings, .archived]
         case .archivedSession: path = [.settings, .archived, .session(DemoData.archivedSession)]
         case .archiveConfirm: archiving = model.session(DemoData.flakySession)
-        case .side, .config, .paste: path = [.session(DemoData.quickSession)]
+        case .side, .config, .paste, .quick, .btw: path = [.session(DemoData.quickSession)]
+        case .plain: path = [.session(DemoData.plainSession)]
         case .sessions, .pair: break
         }
     }

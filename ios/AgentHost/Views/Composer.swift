@@ -785,6 +785,9 @@ struct ComposerTextView: UIViewRepresentable {
     var maxLines = 6
     /// Space around the text (the placeholder follows).
     var insets = UIEdgeInsets(top: 11, left: 16, bottom: 11, right: 0)
+    /// A leading command shown as a tinted token (`/btw` for a side
+    /// question) when the text starts with it.
+    var tokenPrefix: String? = nil
     /// Pasted images and files; nil when the host can't take attachments.
     var onPasteItems: (([NSItemProvider]) -> Void)?
 
@@ -813,6 +816,7 @@ struct ComposerTextView: UIViewRepresentable {
         if v.textContainerInset != insets { v.textContainerInset = insets }
         v.placeholder = placeholder
         v.accessibilityLabel = placeholder
+        v.tokenPrefix = tokenPrefix
         v.onPasteItems = isEnabled ? onPasteItems : nil
         if isFocused, isEnabled, !v.isFirstResponder, v.window != nil {
             DispatchQueue.main.async { v.becomeFirstResponder() }
@@ -840,6 +844,7 @@ struct ComposerTextView: UIViewRepresentable {
         func textViewDidChange(_ v: UITextView) {
             parent.text = v.text
             (v as? PastingTextView)?.updatePlaceholder()
+            (v as? PastingTextView)?.styleToken()
         }
 
         func textViewDidBeginEditing(_ v: UITextView) {
@@ -862,7 +867,43 @@ final class PastingTextView: UITextView {
     }
 
     override var text: String! {
-        didSet { updatePlaceholder() }
+        didSet {
+            updatePlaceholder()
+            styleToken()
+        }
+    }
+
+    var tokenPrefix: String? {
+        didSet { if oldValue != tokenPrefix { styleToken() } }
+    }
+
+    /// Whether the text starts with the token, alone or before a space.
+    private var startsWithToken: Bool {
+        guard let p = tokenPrefix, let t = text, t.count >= p.count,
+              t.prefix(p.count).lowercased() == p.lowercased() else { return false }
+        return t.count == p.count || t[t.index(t.startIndex, offsetBy: p.count)].isWhitespace
+    }
+
+    /// The token in the tint colour and semibold; the rest as typed.
+    func styleToken() {
+        guard markedTextRange == nil else { return }
+        let base = font ?? UIFont.preferredFont(forTextStyle: .body)
+        let storage = textStorage
+        let full = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
+        storage.addAttributes([.font: base, .foregroundColor: UIColor.label], range: full)
+        if startsWithToken, let p = tokenPrefix {
+            let bold = UIFont.systemFont(ofSize: base.pointSize, weight: .semibold)
+            storage.addAttributes([.font: bold, .foregroundColor: tintColor ?? .systemBlue],
+                                  range: NSRange(location: 0, length: (p as NSString).length))
+        }
+        storage.endEditing()
+        typingAttributes = [.font: base, .foregroundColor: UIColor.label]
+    }
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        styleToken()
     }
 
     private var placeholderLeading: NSLayoutConstraint!

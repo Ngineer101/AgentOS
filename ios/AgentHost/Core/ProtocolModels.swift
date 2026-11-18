@@ -15,6 +15,10 @@ enum RPC {
     /// Hide a session from the list (ending it first if live), and back.
     static let sessionArchive = "session.archive"
     static let sessionUnarchive = "session.unarchive"
+    /// Give a session a title of its own (`title` nil or blank clears it).
+    static let sessionRename = "session.rename"
+    /// `MAX_SESSION_TITLE` in `crates/proto`: the longest title, in characters.
+    static let maxSessionTitle = 120
     /// Change one of the agent's session settings (model, effort, …).
     static let sessionSetConfig = "session.set_config"
     /// Ask a side question (`/btw`) in a fork of the conversation.
@@ -161,6 +165,12 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var id: String { sessionId }
     var isArchived: Bool { archivedAt != nil }
     var branch: String? { worktree.flatMap { $0.branch.isEmpty ? nil : $0.branch } }
+    /// The branch without the host's "agenthost/" prefix ("fix-flaky-resume").
+    var shortBranch: String? {
+        guard let b = branch else { return nil }
+        let prefix = "agenthost/"
+        return b.hasPrefix(prefix) && b.count > prefix.count ? String(b.dropFirst(prefix.count)) : b
+    }
     var canAskSideQuestions: Bool { sideQuestions ?? false }
 
     /// The setting the composer shows for a category (`model`, `thought_level`).

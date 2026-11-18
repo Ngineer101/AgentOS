@@ -7,9 +7,12 @@ import UIKit
 ///     -AgentHostDemo                      sessions list, no pairing, no network
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
-///                                         archive-confirm | pair | side | config | paste
+///                                         archive-confirm | pair | side | config | paste |
+///                                         quick | plain | btw
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
+///     -AgentHostDemoTitleMenu             the session opens with its title menu open
+///     -AgentHostDemoRename                the session opens with "Rename Session" shown
 struct DemoData {
     enum Screen: String {
         case sessions, session, dictating, new, picker, settings, pair, archived
@@ -25,6 +28,12 @@ struct DemoData {
         case config
         /// An image pasted into the composer (an attachment chip).
         case paste
+        /// An untitled quick task (titled "Quick task", no worktree).
+        case quick
+        /// An untitled session in a project without a worktree.
+        case plain
+        /// A side question (`/btw …`) being typed in the composer.
+        case btw
     }
 
     var screen: Screen
@@ -41,6 +50,7 @@ struct DemoData {
     static let flakySession = "demo-flaky"
     static let quickSession = "demo-rust"
     static let archivedSession = "demo-quic"
+    static let plainSession = "demo-notes-tidy"
 
     /// The screen asked for on the command line (nil without `-AgentHostDemo`).
     static var requestedScreen: Screen? {
@@ -56,6 +66,19 @@ struct DemoData {
     static var opensModelSheet: Bool {
         requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoModelSheet")
     }
+
+    /// `-AgentHostDemoTitleMenu`: the session screen opens its title menu.
+    static var opensTitleMenu: Bool {
+        requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoTitleMenu")
+    }
+
+    /// `-AgentHostDemoRename`: the session screen asks for a new title.
+    static var opensRename: Bool {
+        requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoRename")
+    }
+
+    /// The draft on the `btw` screen.
+    static let sideDraft = "/btw does the relay crate's MSRV allow async closures?"
 
     static func fromLaunchArguments() -> DemoData? {
         guard let screen = requestedScreen else { return nil }
@@ -93,7 +116,7 @@ struct DemoData {
         ]
 
         func session(_ id: String, _ ws: String, _ agent: String, _ profile: String?, _ state: String,
-                     _ title: String, ago: Int64, lastSeq: Int64 = 0, reason: String? = nil,
+                     _ title: String?, ago: Int64, lastSeq: Int64 = 0, reason: String? = nil,
                      archivedAgo: Int64? = nil) -> SessionInfo {
             SessionInfo(sessionId: id, workspaceId: ws, agent: agent, profileId: profile, state: state,
                         stateReason: reason, title: title, createdAt: now - ago * min - 10 * min,
@@ -102,8 +125,10 @@ struct DemoData {
         }
         let claudeConfig = [
             SessionConfigOption(
-                id: "model", name: "Model", description: nil, category: "model", currentValue: "opus",
+                id: "model", name: "Model", description: nil, category: "model", currentValue: "default",
                 options: [
+                    SessionConfigValue(value: "default", name: "Default (recommended)",
+                                       description: "Opus 4.5 for complex work, Sonnet 4.5 otherwise"),
                     SessionConfigValue(value: "opus", name: "Opus 4.5", description: "Most capable for complex work"),
                     SessionConfigValue(value: "sonnet", name: "Sonnet 4.5", description: "Best for everyday tasks"),
                     SessionConfigValue(value: "haiku", name: "Haiku 4.5", description: "Fastest for quick answers"),
@@ -139,14 +164,18 @@ struct DemoData {
             return s
         }
         sessions = [
+            // Untitled: called "Quick task".
             live(session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
-                         "What changed in Rust 1.92?", ago: 3, lastSeq: 4)),
+                         nil, ago: 3, lastSeq: 4)),
             live(session(Self.flakySession, "ws-relay", "claude", "claude-work", SessionStateName.waitingApproval,
                          "Fix the flaky resume test", ago: 1, lastSeq: 10), branch: "agenthost/fix-flaky-resume"),
             live(session("demo-oauth", "ws-relay", "codex", "codex", SessionStateName.running,
                          "Add OAuth refresh", ago: 5), branch: "agenthost/oauth-refresh"),
             live(session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
                          "Review the relay worker", ago: 120), branch: "agenthost/review-relay-worker"),
+            // Untitled, no worktree (notes is not a git repository): called "notes".
+            live(session(Self.plainSession, "ws-notes", "claude", "claude-personal", SessionStateName.idle,
+                         nil, ago: 8, lastSeq: 2)),
             session("demo-import", "ws-notes", "claude", nil, SessionStateName.failed,
                     "Import old notes", ago: 50, reason: "The agent exited (code 1)"),
             session("demo-weekly", "ws-notes", "claude", nil, SessionStateName.ended,
@@ -305,7 +334,18 @@ struct DemoData {
             ]),
         ] { _ = quic.ingest(e) }
 
-        transcripts = [Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic]
+        var tidy = Transcript(sessionId: Self.plainSession)
+        for e in [
+            Self.event(Self.plainSession, 1, EventKind.prompt, now - 9 * min, [
+                "text": .string("Merge the duplicate meeting notes from last week."), "device": .string("Nico's iPhone"),
+            ]),
+            Self.event(Self.plainSession, 2, EventKind.agentMessage, now - 8 * min, [
+                "text": .string("Merged `2025-11-10 standup.md` into `2025-11-10.md` and removed the duplicate. Nothing else changed."),
+            ]),
+        ] { _ = tidy.ingest(e) }
+
+        transcripts = [Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
+                       Self.plainSession: tidy]
     }
 
     /// The demo's answer to any side question asked.

@@ -207,6 +207,40 @@ final class AppModel: ObservableObject {
         return a.label
     }
 
+    /// The agent and the login a session runs as: ("Claude Code", "Personal"),
+    /// or a nil login for the agent's default one. A profile named after its
+    /// agent ("Claude-Personal") loses that prefix.
+    func agentAndLogin(_ s: SessionInfo) -> (agent: String, login: String?) {
+        let info = s.profileId.flatMap { pid in hostInfo?.agents.first { $0.profileId == pid } }
+        let agent = info?.displayName ?? agentDisplayName(s.agent)
+        guard let raw = info?.profileName?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
+            return (agent, nil)
+        }
+        var login = raw
+        for prefix in [s.agent, agent, agent.split(separator: " ").first.map(String.init) ?? ""] where !prefix.isEmpty {
+            guard login.count > prefix.count, login.lowercased().hasPrefix(prefix.lowercased()) else { continue }
+            let rest = login.dropFirst(prefix.count)
+            if let sep = rest.first, "-_ ·:".contains(sep) {
+                let trimmed = rest.dropFirst().trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { login = trimmed; break }
+            }
+        }
+        return (agent, login)
+    }
+
+    /// "Claude Code (Personal)", or "Claude Code" for the default login.
+    func agentLoginLabel(_ s: SessionInfo) -> String {
+        let (agent, login) = agentAndLogin(s)
+        return login.map { "\(agent) (\($0))" } ?? agent
+    }
+
+    /// What a session is called where it is shown on its own: its title, or
+    /// the workspace's name ("Quick task" in Quick tasks).
+    func sessionTitle(_ s: SessionInfo) -> String {
+        if let t = s.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
+        return isQuickTasks(s.workspaceId) ? "Quick task" : workspaceName(s.workspaceId)
+    }
+
     func workspaceName(_ id: String) -> String {
         workspaces.first { $0.workspaceId == id }?.name ?? "Workspace"
     }
@@ -908,6 +942,29 @@ final class AppModel: ObservableObject {
         }
         #endif
         let s: SessionInfo = try await call(RPC.sessionArchive, ["session_id": sessionId])
+        upsert(s)
+    }
+
+    /// Give a session a title of its own; blank clears it (the session is
+    /// then called after its workspace). At most `RPC.maxSessionTitle`
+    /// characters.
+    func rename(_ sessionId: String, title: String) async throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count > RPC.maxSessionTitle {
+            throw ComposerError(message: "A session title has at most \(RPC.maxSessionTitle) characters.")
+        }
+        let newTitle: String? = trimmed.isEmpty ? nil : trimmed
+        #if DEBUG
+        if isDemo, var s = session(sessionId) {
+            s.title = newTitle
+            upsert(s)
+            return
+        }
+        #endif
+        let s: SessionInfo = try await call(
+            RPC.sessionRename,
+            ["session_id": sessionId, "title": newTitle.map { $0 as Any } ?? NSNull()]
+        )
         upsert(s)
     }
 

@@ -5,8 +5,8 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// The live transcript of one session, laid out for a narrow screen: glass
-/// back and menu buttons, the title with "agent · login · workspace" under
-/// it, and a glass composer at the bottom.
+/// back and menu buttons, the title (with a menu: agent, workspace, branch,
+/// rename) and "status · branch" under it, and the composer at the bottom.
 struct SessionView: View {
     @EnvironmentObject private var model: AppModel
     let sessionId: String
@@ -34,6 +34,9 @@ struct SessionView: View {
     @State private var voiceAccessProblem: String?
     /// The "Select model" sheet (model, effort, fast mode).
     @State private var showModelSheet = false
+    /// "Rename Session…" (an alert with a text field).
+    @State private var renaming = false
+    @State private var renameText = ""
 
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
@@ -63,18 +66,88 @@ struct SessionView: View {
         return waiting.contains { !shown.contains($0.approvalId) }
     }
 
+    /// The session's own title, else its workspace ("Quick task").
     private var title: String {
         guard let s = session else { return "Session" }
-        return s.title ?? model.agentLabel(s)
+        return model.sessionTitle(s)
     }
 
-    /// "Your turn · Claude Code · relay". The session's branch is shown by
-    /// the composer.
-    private var subtitle: String? {
+    /// "● Your turn · ⑂ fix-flaky-resume" with a worktree, else
+    /// "● Your turn · Claude Code (Personal)". The dot has the status's
+    /// colour, as in the list.
+    private var subtitle: Text? {
         guard let s = session else { return nil }
-        let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
-        let status = s.isArchived ? "Archived" : SessionStateName.label(s.state)
-        return [status, model.agentLabel(s), place].joined(separator: " · ")
+        let status = SessionStatus(state: s.state)
+        let label = s.isArchived ? "Archived" : status.label
+        let dotColor: Color = s.isArchived || status == .ended ? Color(uiColor: .tertiaryLabel) : status.color
+        let dot = Text(Image(systemName: "circle.fill"))
+            .font(.system(size: 6))
+            .foregroundColor(dotColor)
+            .baselineOffset(1)
+        let detail: Text
+        if let branch = s.shortBranch {
+            detail = Text(Image(systemName: "arrow.triangle.branch")).font(.caption2) + Text(" \(branch)")
+        } else {
+            detail = Text(model.agentLoginLabel(s))
+        }
+        return dot + Text(" \(label) · ") + detail
+    }
+
+    /// The title menu: what the session runs as and where, then Copy
+    /// Branch Name and Rename Session….
+    @ViewBuilder
+    private var titleMenu: some View {
+        if let s = session {
+            let who = model.agentAndLogin(s)
+            let quick = model.isQuickTasks(s.workspaceId)
+            Section {
+                Button {} label: {
+                    Text(who.agent)
+                    Text(who.login.map { "\($0) login" } ?? "Default login")
+                }
+                Button {} label: {
+                    Text(quick ? "Quick task" : model.workspaceName(s.workspaceId))
+                    Text(quick ? "A fresh folder of its own" : abbreviatedPath(model.workspace(s.workspaceId)?.path ?? ""))
+                }
+                if let branch = s.branch {
+                    Button {} label: {
+                        Text(branch)
+                        Text("Own worktree")
+                        Image(systemName: "arrow.triangle.branch")
+                    }
+                }
+            }
+            Section {
+                if let branch = s.branch {
+                    Button {
+                        UIPasteboard.general.string = branch
+                    } label: {
+                        Label("Copy Branch Name", systemImage: "doc.on.doc")
+                    }
+                }
+                Button {
+                    startRename()
+                } label: {
+                    Label("Rename Session…", systemImage: "pencil")
+                }
+                // Archived sessions are read only here.
+                .disabled(isArchived || !model.link.isOnline)
+            }
+        }
+    }
+
+    private func startRename() {
+        renameText = session?.title ?? ""
+        renaming = true
+    }
+
+    /// "/home/nico/Code/relay" → "~/Code/relay".
+    private func abbreviatedPath(_ path: String) -> String {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        if parts.count >= 3, parts[0].isEmpty, parts[1] == "home" || parts[1] == "Users" {
+            return (["~"] + parts.dropFirst(3)).joined(separator: "/")
+        }
+        return path
     }
 
     var body: some View {
@@ -166,7 +239,7 @@ struct SessionView: View {
         }
         .background(Color.black)
         .navigationBarTitleDisplayMode(.inline)
-        .navTitle(title, subtitle: subtitle)
+        .sessionTitleBar(title, subtitle: subtitle) { titleMenu }
         .toolbar {
             if !sides.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -238,9 +311,33 @@ struct SessionView: View {
                 sideSelection = sides.first?.id
                 showSides = true
             }
+            if model.isDemo, DemoData.requestedScreen == .btw {
+                draft = DemoData.sideDraft
+            }
+            if model.isDemo, DemoData.opensRename {
+                startRename()
+            }
+            if model.isDemo, DemoData.opensTitleMenu {
+                DemoMenuOpener.openTitleMenu()
+            }
             #endif
         }
         .onDisappear { dictation.cancel() }
+        .alert("Rename Session", isPresented: $renaming) {
+            TextField(session.map { model.isQuickTasks($0.workspaceId) ? "Quick task" : model.workspaceName($0.workspaceId) } ?? "Title",
+                      text: $renameText)
+                .submitLabel(.done)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                let t = renameText
+                Task { await run { try await model.rename(sessionId, title: t) } }
+            }
+        } message: {
+            Text("Leave it empty to name the session after its workspace.")
+        }
+        .onChange(of: renameText) { _, t in
+            if t.count > RPC.maxSessionTitle { renameText = String(t.prefix(RPC.maxSessionTitle)) }
+        }
         .alert("Voice Input Is Off", isPresented: Binding(
             get: { voiceAccessProblem != nil },
             set: { if !$0 { voiceAccessProblem = nil } }
@@ -331,29 +428,26 @@ struct SessionView: View {
         }
     }
 
-    /// One rounded box: where the session works, the attachments, the
-    /// field, and a row with attach, dictate, the model and send.
+    /// One rounded box with only what you act on: the attachments, the
+    /// field, and a row with attach, dictate, the model and send. (Where
+    /// the session works is in the title and its menu.) A side question's
+    /// leading `/btw` is shown as a tinted token in the field.
     private var composerBox: some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-        let hasContext = contextLine != nil
         let hasChips = !composer.attachments.isEmpty
         return VStack(alignment: .leading, spacing: 0) {
-            if let line = contextLine {
-                line
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-            }
             if hasChips {
                 AttachmentChipsRow(attachments: composer.attachments) { composer.remove($0) }
                     .contentMargins(.horizontal, 12, for: .scrollContent)
-                    .padding(.top, hasContext ? 8 : 12)
+                    .padding(.top, 12)
             }
             ComposerTextView(
                 text: $draft,
                 isFocused: $promptFocused,
                 placeholder: placeholder,
                 isEnabled: canPrompt,
-                insets: UIEdgeInsets(top: hasContext || hasChips ? 6 : 13, left: 16, bottom: 6, right: 16),
+                insets: UIEdgeInsets(top: hasChips ? 6 : 13, left: 16, bottom: 6, right: 16),
+                tokenPrefix: session?.canAskSideQuestions == true ? "/btw" : nil,
                 onPasteItems: canAttach ? { providers in
                     reportSkipped(composer.addItemProviders(providers, model: model))
                 } : nil
@@ -370,31 +464,6 @@ struct SessionView: View {
         .onTapGesture {
             if canPrompt { promptFocused = true }
         }
-    }
-
-    /// "relay  ⎇ agenthost/fix-flaky-resume", or that this is a side question.
-    private var contextLine: AnyView? {
-        guard let s = session else { return nil }
-        let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
-        return AnyView(
-            HStack(spacing: 10) {
-                Text(place)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                if sideQuestion != nil {
-                    Label("Side question", systemImage: "bubble.left.and.text.bubble.right")
-                        .labelStyle(ContextLabelStyle())
-                        .accessibilityHint("Asked in a fork of the conversation; the agent is not interrupted.")
-                } else if let branch = s.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .labelStyle(ContextLabelStyle())
-                        .accessibilityLabel("Branch \(branch)")
-                }
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .accessibilityElement(children: .combine)
-        )
     }
 
     private var composerControls: some View {
@@ -1328,8 +1397,9 @@ extension SessionInfo {
     var hasModelSettings: Bool { modelOption != nil || effortOption != nil || fastOption != nil }
 }
 
-/// The label of the composer's model button: the agent's glyph, the model
-/// ("Opus 4.5"), and a bolt when fast mode is on.
+/// The label of the composer's model button: the model ("Opus 4.5",
+/// "Default" for "Default (recommended)"), a bolt when fast mode is on,
+/// and a small chevron. The Select model sheet has the full names.
 struct ModelChip: View {
     let title: String
     let fast: Bool
@@ -1338,14 +1408,22 @@ struct ModelChip: View {
     /// Nil when the session has no model, effort or fast setting.
     init?(session s: SessionInfo) {
         guard s.hasModelSettings else { return nil }
-        title = s.modelOption?.currentName ?? s.effortOption.map { "Effort: \($0.currentName)" } ?? "Model"
+        title = s.modelOption.map { Self.shortName($0.currentName) }
+            ?? s.effortOption.map { "Effort: \($0.currentName)" } ?? "Model"
         fast = s.isFastMode
     }
 
+    /// "Default (recommended)" → "Default"; a name that is only a
+    /// parenthetical stays as it is.
+    static func shortName(_ name: String) -> String {
+        let t = name.trimmingCharacters(in: .whitespaces)
+        guard t.hasSuffix(")"), let open = t.lastIndex(of: "(") else { return t }
+        let head = t[..<open].trimmingCharacters(in: .whitespaces)
+        return head.isEmpty ? t : head
+    }
+
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "cpu")
-                .font(.footnote)
+        HStack(spacing: 4) {
             Text(title)
                 .font(.subheadline)
                 .lineLimit(1)
@@ -1353,6 +1431,9 @@ struct ModelChip: View {
                 Image(systemName: "bolt.fill")
                     .font(.caption)
             }
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
         }
         .foregroundStyle(.secondary)
         .opacity(isEnabled ? 1 : 0.5)
@@ -1363,20 +1444,6 @@ struct ModelChip: View {
         .accessibilityLabel("Model")
         .accessibilityValue(fast ? "\(title), fast mode" : title)
         .accessibilityHint("Choose the model and effort")
-    }
-}
-
-/// The composer's context line: a small glyph and a name, truncated in the
-/// middle (branch names keep their start and end).
-struct ContextLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 4) {
-            configuration.icon
-                .font(.caption2.weight(.semibold))
-            configuration.title
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
     }
 }
 
@@ -1808,3 +1875,105 @@ struct SideQuestionsSheet: View {
         withAnimation { model.closeSide(id) }
     }
 }
+
+// MARK: - Title bar
+
+extension View {
+    /// The session's title with a menu behind it (a small chevron by the
+    /// title) and a styled subtitle. A principal `Menu` rather than the
+    /// system title menu and `navigationSubtitle`, which drop the
+    /// subtitle's coloured status dot and branch glyph.
+    func sessionTitleBar<M: View>(_ title: String, subtitle: Text?, @ViewBuilder menu: () -> M) -> some View {
+        let content = menu()
+        return navigationTitle(title)
+            .toolbar {
+                SessionTitleItem(title: title, subtitle: subtitle, menu: content)
+            }
+    }
+}
+
+/// The principal toolbar item of `sessionTitleBar`, without the glass
+/// capsule iOS 26 would put behind it.
+struct SessionTitleItem<M: View>: ToolbarContent {
+    let title: String
+    let subtitle: Text?
+    let menu: M
+
+    var body: some ToolbarContent {
+        if #available(iOS 26, *) {
+            item.sharedBackgroundVisibility(.hidden)
+        } else {
+            item
+        }
+    }
+
+    private var item: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Menu {
+                menu
+            } label: {
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(title)
+                            .font(.headline)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let subtitle {
+                        subtitle
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+            }
+            .accessibilityHint("Shows the session's details")
+        }
+    }
+}
+
+#if DEBUG
+/// Screenshots: open the navigation bar's title menu, which can't be
+/// opened from code otherwise. DEBUG builds only.
+enum DemoMenuOpener {
+    @MainActor
+    static func openTitleMenu(attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            guard let window = UIApplication.shared.connectedScenes
+                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+            let target = window.bounds.width / 2
+            var best: (UIView, UIContextMenuInteraction, CGFloat)?
+            func visit(_ v: UIView) {
+                if let i = v.interactions.compactMap({ $0 as? UIContextMenuInteraction }).first {
+                    let f = v.convert(v.bounds, to: window)
+                    if f.minY < 140, f.width < window.bounds.width * 0.8 {
+                        let d = abs(f.midX - target)
+                        if best == nil || d < best!.2 { best = (v, i, d) }
+                    }
+                }
+                v.subviews.forEach(visit)
+            }
+            visit(window)
+            guard let (view, interaction, _) = best else {
+                if attempt < 5 { openTitleMenu(attempt: attempt + 1) }
+                return
+            }
+            let sel = NSSelectorFromString("_presentMenuAtLocation:")
+            if interaction.responds(to: sel) {
+                typealias Present = @convention(c) (AnyObject, Selector, CGPoint) -> Void
+                let imp = interaction.method(for: sel)
+                unsafeBitCast(imp, to: Present.self)(interaction, sel, CGPoint(x: view.bounds.midX, y: 0))
+            } else if #available(iOS 17.4, *), let control = view as? UIControl {
+                control.performPrimaryAction()
+            }
+        }
+    }
+}
+#endif
