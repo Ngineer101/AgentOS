@@ -65,6 +65,8 @@ fn ensure_quick_workspace(store: &Store, cfg: &HostConfig) -> Result<()> {
         },
         connectors,
         created_at: 0,
+        default_agent: None,
+        default_profile_id: None,
     })
 }
 

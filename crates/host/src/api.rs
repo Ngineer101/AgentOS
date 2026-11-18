@@ -314,11 +314,14 @@ impl Conn {
 
             m::SESSION_LIST => {
                 let lp: SessionListParams = params(p)?;
-                let list = h
+                let list: Vec<Session> = h
                     .ctx
                     .store
                     .session_list(lp.workspace_id.as_deref())
-                    .map_err(internal)?;
+                    .map_err(internal)?
+                    .into_iter()
+                    .filter(|s| s.archived_at.is_some() == lp.archived)
+                    .collect();
                 if lp.watch {
                     self.watch_sessions(lp.workspace_id.clone());
                 }
@@ -351,6 +354,18 @@ impl Conn {
                 let r: SessionRef = params(p)?;
                 h.sessions.end(&r.session_id).await?;
                 Ok(json!({"ok": true}))
+            }
+            m::SESSION_ARCHIVE => {
+                let r: SessionRef = params(p)?;
+                to_value(h.sessions.set_archived(&r.session_id, true).await?)
+            }
+            m::SESSION_UNARCHIVE => {
+                let r: SessionRef = params(p)?;
+                to_value(h.sessions.set_archived(&r.session_id, false).await?)
+            }
+            m::WORKSPACE_SET_DEFAULT_AGENT => {
+                let dp: WorkspaceDefaultAgentParams = params(p)?;
+                to_value(workspace_set_default_agent(&h, dp)?)
             }
 
             m::EVENTS_SUBSCRIBE => {
@@ -642,9 +657,51 @@ pub fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcEr
             .map(|c| c.connector_id)
             .collect(),
         created_at: now_ms(),
+        default_agent: None,
+        default_profile_id: None,
     };
     h.ctx.store.workspace_insert(&w).map_err(internal)?;
     Ok(w)
+}
+
+fn workspace_set_default_agent(
+    h: &Host,
+    p: WorkspaceDefaultAgentParams,
+) -> Result<Workspace, RpcError> {
+    h.ctx
+        .store
+        .workspace_get(&p.workspace_id)
+        .map_err(internal)?
+        .ok_or_else(|| RpcError::not_found("no such workspace"))?;
+    let profile = match (p.agent, p.profile_id.as_deref()) {
+        (None, _) => None,
+        (Some(a), Some(id)) if id != a.as_str() => {
+            let prof = h
+                .ctx
+                .store
+                .profile_get(id)
+                .map_err(internal)?
+                .ok_or_else(|| RpcError::not_found(format!("no agent profile {id}")))?;
+            if prof.agent != a {
+                return Err(RpcError::invalid_params(format!(
+                    "profile {} is not a {} profile",
+                    prof.name,
+                    a.display_name()
+                )));
+            }
+            Some(prof.profile_id)
+        }
+        _ => None,
+    };
+    h.ctx
+        .store
+        .workspace_set_default_agent(&p.workspace_id, p.agent, profile.as_deref())
+        .map_err(internal)?;
+    h.ctx
+        .store
+        .workspace_get(&p.workspace_id)
+        .map_err(internal)?
+        .ok_or_else(|| RpcError::not_found("no such workspace"))
 }
 
 fn workspace_update(h: &Host, p: WorkspaceUpdateParams) -> Result<Workspace, RpcError> {

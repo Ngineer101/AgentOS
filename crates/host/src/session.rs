@@ -163,6 +163,7 @@ impl SessionManager {
             workspace_id: ws.workspace_id.clone(),
             agent: p.agent,
             profile_id: profile_id.clone(),
+            archived_at: None,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -186,8 +187,31 @@ impl SessionManager {
             .ok()
             .flatten()
             .unwrap_or(s);
+        // The first login started in a workspace becomes its default.
+        if ws.default_agent.is_none() {
+            let _ = self.ctx.store.workspace_set_default_agent(
+                &ws.workspace_id,
+                Some(p.agent),
+                profile_id.as_deref(),
+            );
+        }
         self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
         self.spawn_actor(s.clone(), ws, false);
+        Ok(s)
+    }
+
+    /// Archive (ending it first if it is live) or unarchive a session.
+    pub async fn set_archived(&self, session_id: &str, archived: bool) -> Result<Session, RpcError> {
+        self.get(session_id)?;
+        if archived {
+            self.end(session_id).await?;
+        }
+        self.ctx
+            .store
+            .session_set_archived(session_id, archived.then(now_ms))
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        let s = self.get(session_id)?;
+        self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
         Ok(s)
     }
 

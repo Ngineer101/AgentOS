@@ -270,6 +270,13 @@ pub struct Workspace {
     #[serde(default)]
     pub connectors: Vec<String>,
     pub created_at: i64,
+    /// The login new sessions here start with: set by the first session
+    /// started in the workspace, changed with `workspace.set_default_agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<AgentKind>,
+    /// With `default_agent`: its profile, `None` for the agent's default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_profile_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +386,10 @@ pub struct Session {
     pub updated_at: i64,
     /// Sequence number of the newest event (0 when there are none).
     pub last_seq: i64,
+    /// When the user archived it: hidden from `session.list` unless asked
+    /// for (`archived: true`). Archived sessions have ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -685,9 +696,25 @@ pub struct IdParams {
 pub struct SessionListParams {
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// Keep sending `session.changed` notifications after the snapshot.
+    /// Keep sending `session.changed` notifications after the snapshot
+    /// (archived sessions included, so clients can drop them).
     #[serde(default)]
     pub watch: bool,
+    /// List the archived sessions instead of the others.
+    #[serde(default)]
+    pub archived: bool,
+}
+
+/// `workspace.set_default_agent`: the login new sessions in the workspace
+/// start with. `agent: null` clears it (the next session sets it again).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceDefaultAgentParams {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// A profile of `agent`; omitted or the agent's own name for its default login.
+    #[serde(default)]
+    pub profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

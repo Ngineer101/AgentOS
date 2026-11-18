@@ -21,6 +21,12 @@ pub const SESSION_CREATE: &str = "session.create";
 pub const SESSION_PROMPT: &str = "session.prompt";
 pub const SESSION_CANCEL: &str = "session.cancel";
 pub const SESSION_END: &str = "session.end";
+/// End a session if it is live and hide it from the session list.
+pub const SESSION_ARCHIVE: &str = "session.archive";
+/// Show an archived session in the session list again.
+pub const SESSION_UNARCHIVE: &str = "session.unarchive";
+/// The login new sessions in a workspace start with.
+pub const WORKSPACE_SET_DEFAULT_AGENT: &str = "workspace.set_default_agent";
 
 pub const EVENTS_SUBSCRIBE: &str = "events.subscribe";
 pub const EVENTS_UNSUBSCRIBE: &str = "events.unsubscribe";
@@ -127,7 +133,8 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST => Read,
-        SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | EVENTS_SUBSCRIBE
+        SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
+        | SESSION_UNARCHIVE | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE
         // Bounded by the project folders, which only an admin sets.
@@ -180,6 +187,9 @@ mod tests {
             AGENT_PROFILE_LIST,
             PROJECT_BROWSE,
             PROJECT_CREATE,
+            SESSION_ARCHIVE,
+            SESSION_UNARCHIVE,
+            WORKSPACE_SET_DEFAULT_AGENT,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

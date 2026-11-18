@@ -200,6 +200,12 @@ enum WsCmd {
     Rm {
         workspace: String,
     },
+    /// Show or set the login new sessions here start with (agent or
+    /// agent:profile; "none" clears it).
+    Default {
+        workspace: String,
+        agent: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -210,6 +216,9 @@ enum SessionCmd {
         /// Keep printing changes.
         #[arg(long)]
         watch: bool,
+        /// List archived sessions instead.
+        #[arg(long)]
+        archived: bool,
     },
     /// Start a session.
     New {
@@ -242,6 +251,14 @@ enum SessionCmd {
         session: String,
     },
     End {
+        session: String,
+    },
+    /// End a session (if live) and hide it from the list.
+    Archive {
+        session: String,
+    },
+    /// Show an archived session in the list again.
+    Unarchive {
         session: String,
     },
 }
@@ -671,6 +688,38 @@ async fn run(cli: Cli) -> Result<()> {
                     );
                 }
             }
+            WsCmd::Default { workspace, agent } => {
+                let w = resolve_workspace(&c, &workspace).await?;
+                let w = match agent.as_deref() {
+                    None => w,
+                    Some("none") => {
+                        c.call::<Workspace>(
+                            m::WORKSPACE_SET_DEFAULT_AGENT,
+                            json!({"workspace_id": w.workspace_id, "agent": null}),
+                        )
+                        .await?
+                    }
+                    Some(a) => {
+                        let (kind, profile) = resolve_agent(&c, a).await?;
+                        c.call::<Workspace>(
+                            m::WORKSPACE_SET_DEFAULT_AGENT,
+                            json!({"workspace_id": w.workspace_id, "agent": kind, "profile_id": profile}),
+                        )
+                        .await?
+                    }
+                };
+                match w.default_agent {
+                    Some(a) => println!(
+                        "{}: {}{}",
+                        w.name,
+                        a,
+                        w.default_profile_id
+                            .map(|p| format!(" (profile {p})"))
+                            .unwrap_or_default()
+                    ),
+                    None => println!("{}: no default yet (the next session sets it)", w.name),
+                }
+            }
             WsCmd::Rm { workspace } => {
                 let w = resolve_workspace(&c, &workspace).await?;
                 c.request(m::WORKSPACE_REMOVE, json!({"workspace_id": w.workspace_id}))
@@ -679,13 +728,20 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Cmd::Session(s) => match s {
-            SessionCmd::List { workspace, watch } => {
+            SessionCmd::List {
+                workspace,
+                watch,
+                archived,
+            } => {
                 let ws = match &workspace {
                     Some(w) => Some(resolve_workspace(&c, w).await?.workspace_id),
                     None => None,
                 };
                 let list: Vec<Session> = c
-                    .call(m::SESSION_LIST, json!({"workspace_id": ws, "watch": watch}))
+                    .call(
+                        m::SESSION_LIST,
+                        json!({"workspace_id": ws, "watch": watch, "archived": archived}),
+                    )
                     .await?;
                 let names: Vec<Workspace> = c
                     .call(m::WORKSPACE_LIST, json!({}))
@@ -781,6 +837,14 @@ async fn run(cli: Cli) -> Result<()> {
                 c.request(m::SESSION_END, json!({"session_id": session}))
                     .await?;
             }
+            SessionCmd::Archive { session } => {
+                c.request(m::SESSION_ARCHIVE, json!({"session_id": session}))
+                    .await?;
+            }
+            SessionCmd::Unarchive { session } => {
+                c.request(m::SESSION_UNARCHIVE, json!({"session_id": session}))
+                    .await?;
+            }
         },
         Cmd::Run {
             workspace,
@@ -874,8 +938,14 @@ async fn run(cli: Cli) -> Result<()> {
                             .ok_or_else(|| anyhow!("give a workspace and agent, or --session"))?,
                     )
                     .await?;
-                    let (kind, profile) =
-                        resolve_agent(&c, agent.as_deref().unwrap_or("codex")).await?;
+                    // No agent given: the workspace's default, else Codex.
+                    let (kind, profile) = match agent.as_deref() {
+                        Some(a) => resolve_agent(&c, a).await?,
+                        None => match w.default_agent {
+                            Some(k) => (k, w.default_profile_id.clone()),
+                            None => (AgentKind::Codex, None),
+                        },
+                    };
                     let s = c
                         .create_session_as(&w.workspace_id, kind, profile.as_deref())
                         .await?;

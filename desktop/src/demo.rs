@@ -29,6 +29,8 @@ fn base(s: &mut App) {
             network: NetworkProfile { presets: vec![NetworkPreset::Web], custom_hosts: vec![] },
             connectors: vec!["con_gh".into()],
             created_at: 0,
+            default_agent: None,
+            default_profile_id: None,
         },
         Workspace {
             workspace_id: "ws_relay".into(),
@@ -38,6 +40,8 @@ fn base(s: &mut App) {
             network: NetworkProfile { presets: vec![NetworkPreset::Packages], custom_hosts: vec!["docs.rs".into()] },
             connectors: vec!["con_gh".into()],
             created_at: t,
+            default_agent: Some(AgentKind::Claude),
+            default_profile_id: Some("prof_work".into()),
         },
         Workspace {
             workspace_id: "ws_notes".into(),
@@ -47,6 +51,8 @@ fn base(s: &mut App) {
             network: NetworkProfile::default(),
             connectors: vec![],
             created_at: t,
+            default_agent: None,
+            default_profile_id: None,
         },
         Workspace {
             workspace_id: "ws_demo".into(),
@@ -56,6 +62,8 @@ fn base(s: &mut App) {
             network: NetworkProfile::default(),
             connectors: vec![],
             created_at: t,
+            default_agent: None,
+            default_profile_id: None,
         },
     ];
     let sess = |id: &str, ws: &str, agent, profile: Option<&str>, state, title: &str, ago_ms: i64| Session {
@@ -70,6 +78,7 @@ fn base(s: &mut App) {
         created_at: t - ago_ms,
         updated_at: t - ago_ms,
         last_seq: 0,
+        archived_at: None,
     };
     s.sessions = vec![
         sess("ses_q", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), SessionState::Idle, "What changed in Rust 1.92?", 180_000),

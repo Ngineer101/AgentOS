@@ -166,9 +166,10 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
         updated_at: r.get(8)?,
         last_seq: r.get(9)?,
         profile_id: r.get(10)?,
+        archived_at: r.get(11)?,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -182,7 +183,12 @@ fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
 const PROFILE_COLS: &str = "profile_id, agent, name, config_dir, created_at";
 
 /// Columns added after the first release, for databases created before them.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[("sessions", "profile_id", "TEXT")];
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("sessions", "profile_id", "TEXT"),
+    ("sessions", "archived_at", "INTEGER"),
+    ("workspaces", "default_agent", "TEXT"),
+    ("workspaces", "default_profile_id", "TEXT"),
+];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
@@ -193,9 +199,14 @@ fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
         network: json_parse(&r.get::<_, String>(4)?)?,
         connectors: json_parse(&r.get::<_, String>(5)?)?,
         created_at: r.get(6)?,
+        default_agent: match r.get::<_, Option<String>>(7)? {
+            Some(a) => Some(enum_parse(&a)?),
+            None => None,
+        },
+        default_profile_id: r.get(8)?,
     })
 }
-const WS_COLS: &str = "workspace_id, name, path, kind, network, connectors, created_at";
+const WS_COLS: &str = "workspace_id, name, path, kind, network, connectors, created_at, default_agent, default_profile_id";
 
 fn row_event(r: &Row) -> rusqlite::Result<Event> {
     Ok(Event {
@@ -375,7 +386,7 @@ impl Store {
 
     pub fn workspace_insert(&self, w: &Workspace) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO workspaces ({WS_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
+            &format!("INSERT INTO workspaces ({WS_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"),
             params![
                 w.workspace_id,
                 w.name,
@@ -383,7 +394,9 @@ impl Store {
                 enum_str(&w.kind),
                 serde_json::to_string(&w.network)?,
                 serde_json::to_string(&w.connectors)?,
-                w.created_at
+                w.created_at,
+                w.default_agent.as_ref().map(enum_str),
+                w.default_profile_id
             ],
         )?;
         Ok(())
@@ -393,7 +406,7 @@ impl Store {
     pub fn workspace_ensure(&self, w: &Workspace) -> Result<()> {
         let db = self.db();
         db.execute(
-            &format!("INSERT OR IGNORE INTO workspaces ({WS_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
+            &format!("INSERT OR IGNORE INTO workspaces ({WS_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"),
             params![
                 w.workspace_id,
                 w.name,
@@ -401,7 +414,9 @@ impl Store {
                 enum_str(&w.kind),
                 serde_json::to_string(&w.network)?,
                 serde_json::to_string(&w.connectors)?,
-                w.created_at
+                w.created_at,
+                w.default_agent.as_ref().map(enum_str),
+                w.default_profile_id
             ],
         )?;
         // The folder follows the data folder if that moved.
@@ -490,7 +505,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -502,7 +517,8 @@ impl Store {
                 s.created_at,
                 s.updated_at,
                 s.last_seq,
-                s.profile_id
+                s.profile_id,
+                s.archived_at
             ],
         )?;
         Ok(())
@@ -519,6 +535,28 @@ impl Store {
             .optional()?)
     }
 
+    /// Archive (`Some(time)`) or unarchive (`None`) a session.
+    pub fn session_set_archived(&self, id: &str, at: Option<i64>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET archived_at = ?2 WHERE session_id = ?1",
+            params![id, at],
+        )? > 0)
+    }
+
+    pub fn workspace_set_default_agent(
+        &self,
+        id: &str,
+        agent: Option<AgentKind>,
+        profile_id: Option<&str>,
+    ) -> Result<()> {
+        self.db().execute(
+            "UPDATE workspaces SET default_agent = ?2, default_profile_id = ?3 WHERE workspace_id = ?1",
+            params![id, agent.as_ref().map(enum_str), profile_id],
+        )?;
+        Ok(())
+    }
+
+    /// Every session (archived ones included), or one workspace's.
     pub fn session_list(&self, workspace_id: Option<&str>) -> Result<Vec<Session>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
@@ -962,6 +1000,8 @@ mod tests {
             network: NetworkProfile::default(),
             connectors: vec![],
             created_at: 0,
+            default_agent: None,
+            default_profile_id: None,
         };
         st.workspace_insert(&w).unwrap();
         let s = Session {
@@ -969,6 +1009,7 @@ mod tests {
             workspace_id: "ws_1".into(),
             agent: AgentKind::Fake,
             profile_id: None,
+            archived_at: None,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
