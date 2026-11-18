@@ -988,6 +988,18 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     if !reason.is_empty() {
         card = card.child(text(format!("“{reason}”")).font(t.font()).color(t.text).wrap());
     }
+    // What will be posted (a pull request's description), as the user reads it.
+    if let Some(details) = a["details"].as_str().map(str::trim).filter(|d| !d.is_empty()) {
+        card = card.child(
+            col()
+                .w_full()
+                .px(11.0)
+                .py(9.0)
+                .radius(if mac { 7.0 } else { 8.0 })
+                .border(0.5, t.text2.alpha(0.3))
+                .child(text(details.to_string()).font(t.font()).color(t.text).wrap()),
+        );
+    }
     card = card.child(col().w_full().px(11.0).py(9.0).radius(if mac { 7.0 } else { 8.0 }).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
     card = card.child(
         text(note)
