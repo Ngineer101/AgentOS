@@ -25,6 +25,8 @@ pub const SESSION_END: &str = "session.end";
 pub const SESSION_ARCHIVE: &str = "session.archive";
 /// Show an archived session in the session list again.
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
+/// Give a session a title of its own (or clear it).
+pub const SESSION_RENAME: &str = "session.rename";
 /// Change one of the agent's session settings (model, effort, …).
 pub const SESSION_SET_CONFIG: &str = "session.set_config";
 /// Ask a side question (`/btw`) in a fork of the conversation.
@@ -140,7 +142,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
-        | SESSION_UNARCHIVE | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
+        | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE
         // Bounded by the project folders, which only an admin sets.
@@ -199,6 +201,7 @@ mod tests {
             WORKSPACE_SET_DEFAULT_AGENT,
             SESSION_SET_CONFIG,
             SESSION_SIDE_ASK,
+            SESSION_RENAME,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

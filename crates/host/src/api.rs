@@ -367,6 +367,10 @@ impl Conn {
                 let r: SessionRef = params(p)?;
                 to_value(h.sessions.set_archived(&r.session_id, true).await?)
             }
+            m::SESSION_RENAME => {
+                let r: agenthost_proto::SessionRenameParams = params(p)?;
+                to_value(h.sessions.rename(&r.session_id, r.title.as_deref())?)
+            }
             m::SESSION_UNARCHIVE => {
                 let r: SessionRef = params(p)?;
                 to_value(h.sessions.set_archived(&r.session_id, false).await?)

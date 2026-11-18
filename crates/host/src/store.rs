@@ -559,6 +559,13 @@ impl Store {
             .optional()?)
     }
 
+    pub fn session_set_title(&self, id: &str, title: Option<&str>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET title = ?2 WHERE session_id = ?1",
+            params![id, title],
+        )? > 0)
+    }
+
     /// Archive (`Some(time)`) or unarchive (`None`) a session.
     pub fn session_set_archived(&self, id: &str, at: Option<i64>) -> Result<bool> {
         Ok(self.db().execute(

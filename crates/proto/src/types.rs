@@ -436,6 +436,17 @@ pub struct SessionConfigValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionRenameParams {
+    pub session_id: String,
+    /// The new title; empty or omitted clears it.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Longest session title, in characters.
+pub const MAX_SESSION_TITLE: usize = 120;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionSetConfigParams {
     pub session_id: String,
     pub config_id: String,

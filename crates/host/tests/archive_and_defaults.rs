@@ -122,3 +122,34 @@ async fn the_first_login_becomes_the_workspace_default() {
             .contains(&methods::required_capability(method).unwrap()));
     }
 }
+
+#[tokio::test]
+async fn sessions_can_be_renamed_and_the_title_cleared() {
+    let th = TestHost::start().await;
+    let (c, _n) = th.client().await;
+    let ws = th.workspace_id(&c).await;
+    let s = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    wait_state(&c, &s.session_id, SessionState::Idle, T).await;
+
+    let r: Session = c
+        .call(m::SESSION_RENAME, json!({"session_id": s.session_id, "title": "  Fix the flaky test "}))
+        .await
+        .unwrap();
+    assert_eq!(r.title.as_deref(), Some("Fix the flaky test"));
+    let again: Session = c
+        .call(m::SESSION_GET, json!({"session_id": s.session_id}))
+        .await
+        .unwrap();
+    assert_eq!(again.title.as_deref(), Some("Fix the flaky test"));
+
+    // Blank clears it; too long is refused.
+    let r: Session = c
+        .call(m::SESSION_RENAME, json!({"session_id": s.session_id, "title": " "}))
+        .await
+        .unwrap();
+    assert_eq!(r.title, None);
+    assert!(c
+        .request(m::SESSION_RENAME, json!({"session_id": s.session_id, "title": "x".repeat(MAX_SESSION_TITLE + 1)}))
+        .await
+        .is_err());
+}

@@ -271,6 +271,25 @@ impl SessionManager {
         Ok(s)
     }
 
+    /// Give a session a title of its own, or clear it (`None` or blank).
+    pub fn rename(&self, session_id: &str, title: Option<&str>) -> Result<Session, RpcError> {
+        self.get(session_id)?;
+        let title = title.map(str::trim).filter(|t| !t.is_empty());
+        if title.is_some_and(|t| t.chars().count() > agenthost_proto::MAX_SESSION_TITLE) {
+            return Err(RpcError::invalid_params(format!(
+                "a session title has at most {} characters",
+                agenthost_proto::MAX_SESSION_TITLE
+            )));
+        }
+        self.ctx
+            .store
+            .session_set_title(session_id, title)
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        let s = self.get(session_id)?;
+        self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
+        Ok(s)
+    }
+
     /// Record a prompt (once per prompt id) and hand it to the actor.
     pub fn prompt(
         &self,
