@@ -1149,13 +1149,37 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
         return d;
     }
     let changed = c.tools.iter().filter(|x| x.policy_override.is_some()).count();
+    // The tool list can be long: collapsed until asked for.
+    let tools_key = format!("tools-{}", c.connector_id);
+    let open = s.expanded.contains(&tools_key);
+    let k2 = tools_key.clone();
+    let summary = if changed > 0 {
+        format!("{} tools · {changed} changed from the default", c.tools.len())
+    } else {
+        format!("{} tools", c.tools.len())
+    };
     d = d.child(el().h(8.0)).child(
         row()
+            .key(tools_key)
             .w_full()
+            .gap(6.0)
+            .center_y()
+            .role("button")
+            .label(if open { "Hide tools" } else { "Show tools" })
+            .focusable(true)
+            .on_press(move |s: &mut App| {
+                if !s.expanded.remove(&k2) {
+                    s.expanded.insert(k2.clone());
+                }
+            })
+            .child(icon(if open { &ic::CHEVRON_D } else { &ic::CHEVRON_R }, 10.0).color(t.text2))
             .child(t.group_title("Tools"))
             .child(el().grow(1.0))
-            .child(t.faint(format!("{} tools · {changed} changed from the default", c.tools.len()))),
+            .child(t.faint(summary)),
     );
+    if !open {
+        return d;
+    }
     let head_cell = |s: &str, w: Option<f32>| {
         let e = text(s.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(t.text2);
         match w {

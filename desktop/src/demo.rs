@@ -393,6 +393,12 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.settings = Some(Tab::Connectors);
         s.sel_conn = Some("con_gh".into());
     }),
+    ("settings-connectors-tools", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_gh".into());
+        s.expanded.insert("tools-con_gh".into());
+    }),
     ("settings-connectors-add", |s| {
         base(s);
         s.settings = Some(Tab::Connectors);
