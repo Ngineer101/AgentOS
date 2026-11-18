@@ -192,12 +192,11 @@ pub fn policy_for(
 
 /// The policy of a session working in its own git worktree, with `cwd` the
 /// workspace's folder inside it. The worktree is writable instead of the
-/// workspace (which stays readable), and so are the parts of the
-/// repository's `.git` that committing in a worktree writes to: objects,
-/// refs, reflogs and the worktree's own folder in `.git/worktrees`. Not the
-/// rest of `.git`: its config and hooks run outside the sandbox the next time
-/// you use git, and a file at the top of `.git` (`commondir`, say) can point
-/// your own checkout at a config the agent wrote. The worktree's `.git` file
+/// workspace (which stays readable), and so is the repository's `.git`,
+/// which committing, branching, fetching and packing refs in a worktree all
+/// write to. Not the entries at its top that run something outside the
+/// sandbox the next time you use git, or point your checkout elsewhere
+/// ([`crate::worktree::PROTECTED_GIT_ENTRIES`]); the worktree's `.git` file
 /// and the pointers in its own folder stay read-only for the same reason.
 pub fn policy_for_worktree(
     cfg: &HostConfig,
@@ -210,13 +209,10 @@ pub fn policy_for_worktree(
     let mut p = policy_for(cfg, agent, cwd, temp_dir, profile);
     p.write.retain(|w| w != cwd);
     let common = &git.common_dir;
-    let mut own = vec![
-        git.root.clone(),
-        common.join("objects"),
-        common.join("refs"),
-        common.join("logs"),
-        git.admin_dir.clone(),
-    ];
+    let mut own = vec![git.root.clone(), common.clone()];
+    if !git.admin_dir.starts_with(common) {
+        own.push(git.admin_dir.clone());
+    }
     own.append(&mut p.write);
     p.write = own;
     p.deny_write = vec![
@@ -224,6 +220,15 @@ pub fn policy_for_worktree(
         git.admin_dir.join("commondir"),
         git.admin_dir.join("gitdir"),
     ];
+    // On Linux only what exists can be protected (the host made the ones
+    // that matter exist); Seatbelt protects missing paths too.
+    let protect = |p: &Path| cfg!(target_os = "macos") || p.exists();
+    for f in crate::worktree::PROTECTED_GIT_ENTRIES {
+        let path = common.join(f);
+        if protect(&path) {
+            p.deny_write.push(path);
+        }
+    }
     // Read by git only when the main config turns it on, which the agent
     // can't; denied anyway while it is there.
     for f in ["config", "config.worktree"] {
@@ -843,19 +848,23 @@ mod tests {
             admin_dir: PathBuf::from("/work/repo/.git/worktrees/ses_1"),
         };
         let p = policy_for_worktree(&cfg, &spec, &root.join("sub"), Path::new("/tmp/ah/s1"), &NetworkProfile::default(), &git);
-        for w in ["/work/repo/.git/objects", "/work/repo/.git/refs", "/work/repo/.git/logs", "/work/repo/.git/worktrees/ses_1"] {
-            assert!(p.write.contains(&PathBuf::from(w)), "{w}");
-        }
+        assert!(p.write.contains(&PathBuf::from("/work/repo/.git")));
         assert!(p.write.contains(&root));
-        // Not the workspace, not .git itself (config, hooks, commondir …).
-        assert!(!p.write.iter().any(|w| w == Path::new("/work/repo") || w == Path::new("/work/repo/.git")));
+        // Not the workspace; not what in .git runs something or points elsewhere.
+        assert!(!p.write.iter().any(|w| w == Path::new("/work/repo")));
+        if cfg!(target_os = "macos") {
+            for f in ["config", "hooks", "commondir", "modules", "config.worktree"] {
+                assert!(p.deny_write.contains(&PathBuf::from("/work/repo/.git").join(f)), "{f}");
+            }
+        }
         assert!(!p.write.contains(&root.join("sub")));
         assert!(p.deny_write.contains(&root.join(".git")));
         assert!(p.deny_write.contains(&PathBuf::from("/work/repo/.git/worktrees/ses_1/commondir")));
         // Other worktrees are hidden; its own is readable again.
         assert!(p.deny_read.contains(&cfg.worktrees_dir()));
         assert!(p.allow_read.contains(&root));
-        assert_eq!(compile_srt(&p, 1, 2)["filesystem"]["denyWrite"].as_array().unwrap().len(), 3);
+        let expected = if cfg!(target_os = "macos") { 3 + crate::worktree::PROTECTED_GIT_ENTRIES.len() } else { 3 };
+        assert_eq!(compile_srt(&p, 1, 2)["filesystem"]["denyWrite"].as_array().unwrap().len(), expected);
 
         // A quick task can read the folder it writes.
         let scratch = cfg.scratch_dir().join("ses_2");

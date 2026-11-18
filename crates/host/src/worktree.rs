@@ -185,6 +185,35 @@ pub struct GitAccess {
     pub admin_dir: PathBuf,
 }
 
+/// The files at the top of a repository's `.git` that a worktree session may
+/// not write: each can make your own git run something outside the sandbox
+/// (`config`, `hooks`, a submodule's config under `modules`) or point your
+/// checkout at a config the agent wrote (`commondir`).
+pub const PROTECTED_GIT_ENTRIES: &[&str] = &["config", "config.worktree", "hooks", "commondir", "modules"];
+
+/// Make the protected entries exist, so a Linux sandbox can mount them
+/// read-only (bubblewrap can only protect what exists, and its empty
+/// placeholder for a missing `commondir` would break git). A `commondir` of
+/// "." names the repository itself, which is what git assumes without one;
+/// `hooks` and `modules` are empty folders. Seatbelt protects missing paths
+/// as they are, so on macOS nothing is created.
+pub fn protect_common_dir(common: &Path) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    for d in ["hooks", "modules"] {
+        let p = common.join(d);
+        if std::fs::symlink_metadata(&p).is_err() {
+            std::fs::create_dir(&p).with_context(|| format!("create {}", p.display()))?;
+        }
+    }
+    let c = common.join("commondir");
+    if std::fs::symlink_metadata(&c).is_err() {
+        std::fs::write(&c, ".\n").with_context(|| format!("create {}", c.display()))?;
+    }
+    Ok(())
+}
+
 /// The `.git` folders a worktree uses.
 pub async fn access(root: &Path) -> Result<GitAccess> {
     let common = git(

@@ -38,6 +38,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Model and effort | Host ✅: the agent's ACP `configOptions` (select kind; `mode` left out, the host sets it) in `Session.config_options`, changed with `session.set_config`; the last choice per login is applied to new sessions. Tested with the fake agent; **not tried with the real Claude adapter** (shapes read from its source). Desktop and iOS: model and effort pickers in the composer; rendered with demo data |
 | Side questions (`/btw`) | Host ✅: `session.side_ask` forks the conversation (ACP `session/fork`, offered when the agent advertises it) and answers alongside a running turn; the fork's output never reaches the main transcript (`side.*` events); forks get no connectors. Tested with the fake agent; **not tried with a real agent**. Desktop: side panel with a tab per question; iOS: a sheet. Rendered with demo data |
 | Connector catalog and icons | Host ✅: `connector.search` queries integrations.sh (MCP servers only, icons as `data:` URLs); each connector gets its site's favicon (Google's favicon service, so the domain is sent there) when added. Rename refuses a tool prefix that clashes. Tested against a local server; **the real services were not called by the tests**. Desktop: search when adding, rename, icons (bearer tokens no longer offered). iOS: icons on approvals |
+| Pull requests | Host ✅: `agenthost__create_pull_request` (offered when `gh` is on the host's PATH) shows the title, description, base and head, and after approval runs `gh pr create` as you outside the sandbox (description on stdin, no prompts; git commands gh runs get hooks and fsmonitor off through git's environment config). Tested with a fake `gh`; **not tried against GitHub**. Desktop and iOS show the description on the approval |
 | Pushing and fetching | Host ✅: the gateway's built-in `agenthost__git_push` asks first (exact command, the agent's reason, a separate "Force-Push" label for `--force-with-lease`), `agenthost__git_fetch` runs without asking; both run git outside the sandbox with your credentials, in the session's worktree or workspace, only against remotes the repository has and branch names (no refspecs, deletes or URLs), with hooks and fsmonitor off and a 5-minute limit; logged to the audit log. Tested with a local bare remote (denied pushes nothing, approved pushes the branch, a planted `pre-push` hook doesn't run); **not tried against GitHub with real credentials**. Desktop and iOS: the built-in approval card takes its button label and warning from the host |
 | Voice input | Host ✅: NVIDIA Nemotron 3.5 ASR streaming 0.6B (int8, sherpa-onnx export, 475 MB) downloaded on request with a pinned SHA-256, run on the CPU through `sherpa-onnx` 2.0.1 (statically linked ONNX Runtime, about 36 MB in `agenthostd`). Download, checksum, unpacking and transcription through `voice.*` checked here (sample French and German clips: about 0.5–0.8 s for 3–5 s of audio after a 1.5 s first load). Desktop: microphone through `cpal` checked (records a WAV); the full speak → text path not tried with a voice. iOS: uses iOS dictation (Speech framework, on device where supported) instead of the host model, so nothing is downloaded for the phone; builds for the simulator, not tried with a voice |
 
@@ -130,10 +131,12 @@ is refused. The host listened on no TCP port throughout.
   (`agenthost/<id>`), made by the host from `HEAD`; the session works there
   (in the same subfolder when the workspace is one), your checkout stays
   read-only to it, and other sessions' worktrees are unreadable. Inside the
-  sandbox only the parts of the repository's `.git` a worktree writes to are
-  writable (`objects`, `refs`, `logs`, its own `worktrees/<name>`), never the
-  top of `.git` (`config`, `hooks`, a planted `commondir`) nor the worktree's
-  `.git` pointer. Archiving removes a worktree without uncommitted changes
+  sandbox the repository's `.git` is writable (commits, branches, fetched
+  refs, `packed-refs`), except what would run something outside the sandbox
+  or point your checkout elsewhere: `config`, `config.worktree`, `hooks`,
+  `commondir` and `modules`, and the worktree's `.git` pointer. On Linux,
+  where only existing paths can be protected, the host creates a `commondir`
+  of "." (the repository itself) and empty `hooks` and `modules` folders. Archiving removes a worktree without uncommitted changes
   (the branch stays); unarchiving or resuming brings it back from the branch.
   Outside git (or in a repository without commits) sessions share the folder;
   on Linux the host creates `sandbox-runtime`'s read-only placeholders itself

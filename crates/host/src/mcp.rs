@@ -48,6 +48,8 @@ pub const INSTALL_TOOL: &str = "agenthost__install_tool";
 pub const GIT_PUSH_TOOL: &str = "agenthost__git_push";
 /// Fetch with the user's git credentials (changes nothing on the remote).
 pub const GIT_FETCH_TOOL: &str = "agenthost__git_fetch";
+/// Open a pull request with the user's GitHub CLI, after they approve.
+pub const PR_TOOL: &str = "agenthost__create_pull_request";
 
 struct SessionReg {
     session_id: String,
@@ -98,6 +100,29 @@ pub fn exposed_name(slug: &str, tool: &str) -> String {
 
 pub fn slug(name: &str) -> String {
     agenthost_proto::connector_slug(name)
+}
+
+/// The definition of `agenthost__create_pull_request`.
+fn pr_tool_def() -> Value {
+    json!({
+        "name": PR_TOOL,
+        "description": "[AgentHost] Open a GitHub pull request with the user's own GitHub CLI login, which your sandbox can't read \
+             (so `gh pr create` inside it fails). The user sees the title and description and approves or denies it. \
+             Push the branch first (agenthost__git_push).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "One-line title."},
+                "body": {"type": "string", "description": "The description, in Markdown."},
+                "base": {"type": "string", "description": "The branch to merge into (optional; the repository's default branch)."},
+                "head": {"type": "string", "description": "The branch with the changes (optional; the branch checked out in this session's folder)."},
+                "draft": {"type": "boolean", "description": "Open it as a draft."},
+                "reason": {"type": "string", "description": "One sentence for the user: why open it now."}
+            },
+            "required": ["title", "body"]
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true, "title": "Open a pull request as the user"}
+    })
 }
 
 /// The definitions of `agenthost__git_push` and `agenthost__git_fetch`.
@@ -428,6 +453,9 @@ impl Gateway {
         if name == INSTALL_TOOL {
             return self.install_tool(session_id, args).await;
         }
+        if name == PR_TOOL {
+            return self.pr_tool(session_id, args).await;
+        }
         if name == GIT_PUSH_TOOL || name == GIT_FETCH_TOOL {
             return self.git_tool(session_id, name == GIT_PUSH_TOOL, args).await;
         }
@@ -587,6 +615,9 @@ impl Gateway {
     /// The host's own tools, as listed to agents.
     fn builtin_tools(&self) -> Vec<Value> {
         let mut tools = git_tools();
+        if crate::installer::find("gh", self.ctx.cfg.install_bin_dir.as_deref()).is_some() {
+            tools.push(pr_tool_def());
+        }
         let found = crate::installer::available(self.ctx.cfg.install_bin_dir.as_deref());
         if found.is_empty() {
             return tools;
@@ -626,6 +657,94 @@ impl Gateway {
         }
         let ws = self.ctx.store.workspace_get(&s.workspace_id).ok()??;
         Some(std::path::PathBuf::from(ws.path))
+    }
+
+    /// `agenthost__create_pull_request`: the title and description shown,
+    /// approved, then `gh pr create` as the user.
+    async fn pr_tool(self: &Arc<Self>, session_id: &str, args: Value) -> Value {
+        let call_id = new_id("mcp");
+        let tool = "create_pull_request";
+        let s = |k: &str| args[k].as_str().map(str::to_string);
+        let base = json!({
+            "tool_call_id": call_id, "name": tool, "exposed_name": PR_TOOL, "arguments": args,
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "tool_kind": ToolKind::Write, "policy": ToolPolicy::Ask
+        });
+        let _ = self.ctx.append(session_id, EventType::ToolCall, base);
+        let finish = |status: &str, output: &str| {
+            let (out, truncated) = truncate(output, crate::session::TOOL_OUTPUT_LIMIT);
+            let _ = self.ctx.append(
+                session_id,
+                EventType::ToolResult,
+                json!({"tool_call_id": call_id, "name": tool, "status": status, "output": out, "truncated": truncated, "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID}),
+            );
+        };
+        if self.rate_limited(session_id) {
+            finish("failed", "rate limit reached");
+            return text_result("agenthost: too many calls this minute; try again shortly", true);
+        }
+        let Some(program) = crate::installer::find("gh", self.ctx.cfg.install_bin_dir.as_deref()) else {
+            finish("failed", "the GitHub CLI (gh) is not installed on this computer");
+            return text_result("agenthost: the GitHub CLI (gh) is not installed on the user's computer", true);
+        };
+        let Some(dir) = self.session_git_dir(session_id) else {
+            finish("failed", "no such session");
+            return text_result("agenthost: this session's folder is unknown", true);
+        };
+        let plan = crate::gitremote::plan_pr(
+            &dir,
+            &program,
+            &s("title").unwrap_or_default(),
+            &s("body").unwrap_or_default(),
+            s("base").as_deref(),
+            s("head").as_deref(),
+            args["draft"].as_bool().unwrap_or(false),
+        )
+        .await;
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("agenthost: {e}"), true);
+            }
+        };
+        let (details, _) = truncate(&plan.body, 4000);
+        let shown = json!({
+            "command": plan.command(),
+            "title": plan.title,
+            "base": plan.base,
+            "head": plan.head,
+            "draft": plan.draft,
+            "details": details,
+            "reason": s("reason").unwrap_or_default(),
+            "runs": "on this computer, as you, outside the sandbox",
+            "approve_label": "Open Pull Request",
+            "ask_title": "Open a Pull Request?",
+            "note": "Posts to GitHub as you, with your GitHub CLI login. Push the branch first.",
+        });
+        let decision = self
+            .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+            .await;
+        self.ctx.audit.log(
+            "pr.decision",
+            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision}),
+        );
+        if decision != ApprovalDecision::Approve {
+            finish("denied", "the user denied this pull request");
+            return text_result("The user denied this pull request.", true);
+        }
+        let out = crate::gitremote::run_pr(&plan).await;
+        self.ctx.audit.log(
+            "pr.done",
+            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "ok": out.ok}),
+        );
+        let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
+        finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        if out.ok {
+            text_result(&format!("Opened the pull request with the user's GitHub CLI:\n{output}"), false)
+        } else {
+            text_result(&format!("`gh pr create` failed:\n{output}"), true)
+        }
     }
 
     /// `agenthost__git_push` (asks first) and `agenthost__git_fetch` (doesn't).

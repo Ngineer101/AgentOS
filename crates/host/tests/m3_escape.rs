@@ -378,7 +378,16 @@ async fn worktree_sessions_in_the_sandbox() {
     let o = sh_in(&c, &mut n, &a.session_id, &format!("echo evil > {}/hooks/pre-commit; echo rc=$?", git_dir.display())).await;
     check("the repository's hooks are read-only", !git_dir.join("hooks/pre-commit").exists(), o);
     let o = sh_in(&c, &mut n, &a.session_id, &format!("echo {} > {}/commondir; echo rc=$?", repo.display(), git_dir.display())).await;
-    check("nothing new at the top of .git", !git_dir.join("commondir").exists(), o);
+    // On Linux the host made it "." (the repository itself) so it can be protected.
+    check(
+        "commondir can't point your checkout elsewhere",
+        std::fs::read_to_string(git_dir.join("commondir")).map(|c| c.trim() == ".").unwrap_or(true),
+        o,
+    );
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("mkdir -p {0}/modules/x && echo '[core]' > {0}/modules/x/config; echo rc=$?", git_dir.display())).await;
+    check("submodule configs are read-only", !git_dir.join("modules/x/config").exists(), o);
+    let o = sh_in(&c, &mut n, &a.session_id, "git branch scratch && git pack-refs --all && git branch -d scratch && git update-ref refs/heads/main HEAD && echo refs-ok").await;
+    check("packing, deleting and moving branches work", o.contains("refs-ok"), o);
     let o = sh_in(&c, &mut n, &a.session_id, "echo 'gitdir: /tmp' > .git; echo rc=$?").await;
     check(
         "the worktree's .git pointer is read-only",

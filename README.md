@@ -102,8 +102,10 @@ after you approve (a registry package name and plain version only, no shell,
 one at a time, logged to the audit log). Pushing works the same way: the
 sandbox can't read your git credentials, so `agenthost__git_push` asks you
 to approve the exact `git push` and the host runs it with your credentials
-(fetching runs without asking); nothing from the repository, such as its
-hooks, runs outside the sandbox. The host listens on no network port. See
+(fetching runs without asking), and `agenthost__create_pull_request` opens
+a pull request with your GitHub CLI after you approve its title and
+description; nothing from the repository, such as its hooks, runs outside
+the sandbox. The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development

@@ -201,7 +201,7 @@ pub fn plan(manager: &str, package: &str, version: Option<&str>) -> Result<Plan,
 }
 
 /// Where a program is: `bin_dir` when given (tests), else the host's PATH.
-fn find(program: &str, bin_dir: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn find(program: &str, bin_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(d) = bin_dir {
         let p = d.join(program);
         return p.is_file().then_some(p);
