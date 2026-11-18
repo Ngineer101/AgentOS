@@ -110,7 +110,11 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var hostInfo: HostInfoModel?
     @Published private(set) var workspaces: [WorkspaceInfo] = []
+    /// The sessions in the list (not archived).
     @Published private(set) var sessions: [SessionInfo] = []
+    /// Archived sessions, loaded when Settings → Archived Sessions is shown
+    /// (nil until then). Not cached.
+    @Published private(set) var archivedSessions: [SessionInfo]?
     @Published private(set) var approvals: [PendingApprovalModel] = []
     @Published private(set) var deviceName: String?
     @Published private(set) var transcripts: [String: Transcript] = [:]
@@ -193,7 +197,11 @@ final class AppModel: ObservableObject {
     }
 
     func session(_ id: String) -> SessionInfo? {
-        sessions.first { $0.sessionId == id }
+        sessions.first { $0.sessionId == id } ?? archivedSessions?.first { $0.sessionId == id }
+    }
+
+    func workspace(_ id: String) -> WorkspaceInfo? {
+        workspaces.first { $0.workspaceId == id }
     }
 
     /// Sessions grouped by workspace: Quick tasks first, then most recent
@@ -401,6 +409,7 @@ final class AppModel: ObservableObject {
         hostInfo = nil
         workspaces = []
         sessions = []
+        archivedSessions = nil
         approvals = []
         deviceName = nil
         transcripts = [:]
@@ -579,7 +588,10 @@ final class AppModel: ObservableObject {
             workspaces = ws
         }
         if let list: [SessionInfo] = try? await call(RPC.sessionList, ["watch": true]) {
-            sessions = list
+            sessions = list.filter { !$0.isArchived }
+        }
+        if archivedSessions != nil {
+            await refreshArchived()
         }
         if let devices: [DeviceModel] = try? await call(RPC.deviceList, [:]),
            let me = devices.first(where: { $0.deviceId == credentials?.deviceId }) {
@@ -587,6 +599,22 @@ final class AppModel: ObservableObject {
         }
         await refreshApprovals()
         scheduleSave()
+    }
+
+    /// Load the archived sessions (Settings → Archived Sessions).
+    func refreshArchived() async {
+        #if DEBUG
+        if isDemo { return }
+        #endif
+        if let list: [SessionInfo] = try? await call(RPC.sessionList, ["archived": true]) {
+            archivedSessions = list.filter(\.isArchived).sorted { ($0.archivedAt ?? 0) > ($1.archivedAt ?? 0) }
+        }
+    }
+
+    func refreshWorkspaces() async {
+        if let list: [WorkspaceInfo] = try? await call(RPC.workspaceList, [:]) {
+            workspaces = list
+        }
     }
 
     func refreshApprovals() async {
@@ -624,7 +652,10 @@ final class AppModel: ObservableObject {
     /// The user opened a session: subscribe (once per connection) from the
     /// last seq this device has.
     func open(_ sessionId: String) {
-        watched.insert(sessionId)
+        // Archived sessions are read once, not followed after reconnects.
+        if session(sessionId)?.isArchived != true {
+            watched.insert(sessionId)
+        }
         if transcripts[sessionId] == nil {
             transcripts[sessionId] = Transcript(sessionId: sessionId)
         }
@@ -663,6 +694,11 @@ final class AppModel: ObservableObject {
                                 createdAt: now, updatedAt: now, lastSeq: 0)
             upsert(s)
             transcripts[s.sessionId] = Transcript(sessionId: s.sessionId)
+            if let i = workspaces.firstIndex(where: { $0.workspaceId == workspaceId }),
+               workspaces[i].defaultAgent == nil {
+                workspaces[i].defaultAgent = agent
+                workspaces[i].defaultProfileId = profileId == agent ? nil : profileId
+            }
             return s
         }
         #endif
@@ -671,6 +707,8 @@ final class AppModel: ObservableObject {
         let s: SessionInfo = try await call(RPC.sessionCreate, params)
         upsert(s)
         open(s.sessionId)
+        // The host may have set the workspace's default login.
+        Task { await refreshWorkspaces() }
         return s
     }
 
@@ -735,6 +773,54 @@ final class AppModel: ObservableObject {
         try await send(RPC.sessionEnd, ["session_id": sessionId])
     }
 
+    /// Archive a session (the host ends it first if it is live). It leaves
+    /// the list and stops being followed.
+    func archive(_ sessionId: String) async throws {
+        #if DEBUG
+        if isDemo, var s = session(sessionId) {
+            s.archivedAt = Int64(Date().timeIntervalSince1970 * 1000)
+            s.state = SessionStateName.ended
+            upsert(s)
+            return
+        }
+        #endif
+        let s: SessionInfo = try await call(RPC.sessionArchive, ["session_id": sessionId])
+        upsert(s)
+    }
+
+    func unarchive(_ sessionId: String) async throws {
+        #if DEBUG
+        if isDemo, var s = session(sessionId) {
+            s.archivedAt = nil
+            upsert(s)
+            return
+        }
+        #endif
+        let s: SessionInfo = try await call(RPC.sessionUnarchive, ["session_id": sessionId])
+        upsert(s)
+    }
+
+    /// Make a login the default for new sessions in a workspace (`agent` nil
+    /// clears it; `profileId` nil or the agent's name: its default login).
+    func setDefaultLogin(workspaceId: String, agent: String?, profileId: String?) async throws {
+        #if DEBUG
+        if isDemo, let i = workspaces.firstIndex(where: { $0.workspaceId == workspaceId }) {
+            workspaces[i].defaultAgent = agent
+            workspaces[i].defaultProfileId = profileId == agent ? nil : profileId
+            return
+        }
+        #endif
+        var params: [String: Any] = ["workspace_id": workspaceId, "agent": agent.map { $0 as Any } ?? NSNull()]
+        if let profileId { params["profile_id"] = profileId }
+        let w: WorkspaceInfo = try await call(RPC.workspaceSetDefaultAgent, params)
+        if let i = workspaces.firstIndex(where: { $0.workspaceId == w.workspaceId }) {
+            workspaces[i] = w
+        } else {
+            workspaces.append(w)
+        }
+        scheduleSave()
+    }
+
     func respond(_ approvalId: String, approve: Bool) async throws {
         #if DEBUG
         if isDemo {
@@ -774,7 +860,7 @@ final class AppModel: ObservableObject {
                s.state == SessionStateName.waitingApproval || before == SessionStateName.waitingApproval {
                 Task { await refreshApprovals() }
             }
-            if !SessionStateName.isTerminal(s.state) {
+            if !SessionStateName.isTerminal(s.state) && !s.isArchived {
                 Task { await subscribe(s.sessionId) }
             }
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
@@ -864,11 +950,24 @@ final class AppModel: ObservableObject {
         scheduleSave()
     }
 
+    /// Archived sessions go to `archivedSessions` (when loaded) and stop
+    /// being re-subscribed; unarchived ones come back to the list.
     private func upsert(_ s: SessionInfo) {
-        if let i = sessions.firstIndex(where: { $0.sessionId == s.sessionId }) {
-            sessions[i] = s
+        if s.isArchived {
+            sessions.removeAll { $0.sessionId == s.sessionId }
+            watched.remove(s.sessionId)
+            if var list = archivedSessions {
+                list.removeAll { $0.sessionId == s.sessionId }
+                list.insert(s, at: 0)
+                archivedSessions = list
+            }
         } else {
-            sessions.append(s)
+            archivedSessions?.removeAll { $0.sessionId == s.sessionId }
+            if let i = sessions.firstIndex(where: { $0.sessionId == s.sessionId }) {
+                sessions[i] = s
+            } else {
+                sessions.append(s)
+            }
         }
         scheduleSave()
     }
@@ -879,7 +978,7 @@ final class AppModel: ObservableObject {
         if let s = TranscriptCache.loadState() {
             hostInfo = s.hostInfo
             workspaces = s.workspaces
-            sessions = s.sessions
+            sessions = s.sessions.filter { !$0.isArchived }
             deviceName = s.deviceName
             watched = Set(s.watched)
             cachedAt = s.savedAt
@@ -957,6 +1056,7 @@ final class AppModel: ObservableObject {
         hostInfo = d.hostInfo
         workspaces = d.workspaces
         sessions = d.sessions
+        archivedSessions = d.archived
         approvals = d.approvals
         deviceName = d.deviceName
         transcripts = d.transcripts

@@ -4,10 +4,18 @@ import Foundation
 /// Sample data for screenshots, matching the designs. DEBUG builds only.
 ///
 ///     -AgentHostDemo                      sessions list, no pairing, no network
-///     -AgentHostDemoScreen <screen>       session | dictating | new | picker | settings | pair
+///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
+///                                         settings | archived | archived-session |
+///                                         archive-confirm | pair
 struct DemoData {
     enum Screen: String {
-        case sessions, session, dictating, new, picker, settings, pair
+        case sessions, session, dictating, new, picker, settings, pair, archived
+        /// New session with a login other than the workspace's default.
+        case newLogin = "new-login"
+        /// An archived session's transcript (read only, Unarchive).
+        case archivedSession = "archived-session"
+        /// The list, asking before archiving a live session.
+        case archiveConfirm = "archive-confirm"
     }
 
     var screen: Screen
@@ -16,11 +24,13 @@ struct DemoData {
     var hostInfo: HostInfoModel
     var workspaces: [WorkspaceInfo]
     var sessions: [SessionInfo]
+    var archived: [SessionInfo]
     var approvals: [PendingApprovalModel]
     var transcripts: [String: Transcript]
 
     static let flakySession = "demo-flaky"
     static let quickSession = "demo-rust"
+    static let archivedSession = "demo-quic"
 
     /// The screen asked for on the command line (nil without `-AgentHostDemo`).
     static var requestedScreen: Screen? {
@@ -59,16 +69,21 @@ struct DemoData {
         )
 
         workspaces = [
-            WorkspaceInfo(workspaceId: "ws-quick", name: "Quick tasks", path: "", kind: "scratch", createdAt: now),
-            WorkspaceInfo(workspaceId: "ws-relay", name: "relay", path: "/home/nico/Code/relay", kind: "project", createdAt: now),
-            WorkspaceInfo(workspaceId: "ws-notes", name: "notes", path: "/home/nico/notes", kind: "project", createdAt: now),
+            WorkspaceInfo(workspaceId: "ws-quick", name: "Quick tasks", path: "", kind: "scratch", createdAt: now,
+                          defaultAgent: "claude", defaultProfileId: "claude-personal"),
+            WorkspaceInfo(workspaceId: "ws-relay", name: "relay", path: "/home/nico/Code/relay", kind: "project", createdAt: now,
+                          defaultAgent: "claude", defaultProfileId: "claude-work"),
+            WorkspaceInfo(workspaceId: "ws-notes", name: "notes", path: "/home/nico/notes", kind: "project", createdAt: now,
+                          defaultAgent: "claude"),
         ]
 
         func session(_ id: String, _ ws: String, _ agent: String, _ profile: String?, _ state: String,
-                     _ title: String, ago: Int64, lastSeq: Int64 = 0) -> SessionInfo {
+                     _ title: String, ago: Int64, lastSeq: Int64 = 0, reason: String? = nil,
+                     archivedAgo: Int64? = nil) -> SessionInfo {
             SessionInfo(sessionId: id, workspaceId: ws, agent: agent, profileId: profile, state: state,
-                        stateReason: nil, title: title, createdAt: now - ago * min - 10 * min,
-                        updatedAt: now - ago * min, lastSeq: lastSeq)
+                        stateReason: reason, title: title, createdAt: now - ago * min - 10 * min,
+                        updatedAt: now - ago * min, lastSeq: lastSeq,
+                        archivedAt: archivedAgo.map { now - $0 * min })
         }
         sessions = [
             session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
@@ -79,8 +94,16 @@ struct DemoData {
                     "Add OAuth refresh", ago: 5),
             session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
                     "Review the relay worker", ago: 120),
+            session("demo-import", "ws-notes", "claude", nil, SessionStateName.failed,
+                    "Import old notes", ago: 50, reason: "The agent exited (code 1)"),
             session("demo-weekly", "ws-notes", "claude", nil, SessionStateName.ended,
                     "Weekly summary", ago: 26 * 60),
+        ]
+        archived = [
+            session(Self.archivedSession, "ws-relay", "codex", "codex", SessionStateName.ended,
+                    "Spike: QUIC transport", ago: 4 * 24 * 60, lastSeq: 3, archivedAgo: 3 * 24 * 60),
+            session("demo-notes-old", "ws-notes", "claude", "claude-personal", SessionStateName.ended,
+                    "Draft the release notes", ago: 9 * 24 * 60, archivedAgo: 8 * 24 * 60),
         ]
 
         let approval = PendingApprovalModel(
@@ -151,7 +174,22 @@ struct DemoData {
             ]),
         ] { _ = rust.ingest(e) }
 
-        transcripts = [Self.flakySession: flaky, Self.quickSession: rust]
+        var quic = Transcript(sessionId: Self.archivedSession)
+        let q0 = now - 4 * 24 * 60 * min
+        for e in [
+            Self.event(Self.archivedSession, 1, EventKind.prompt, q0, [
+                "text": .string("Could the relay use QUIC instead of WebSockets? Sketch it, don't merge anything."),
+                "device": .string("Nico's iPhone"),
+            ]),
+            Self.event(Self.archivedSession, 2, EventKind.agentMessage, q0 + 120_000, [
+                "text": .string("It could, but Cloudflare Workers can't accept raw QUIC yet, so the relay would need a separate host. I left the sketch in `spike/quic` and changed nothing else."),
+            ]),
+            Self.event(Self.archivedSession, 3, EventKind.sessionState, q0 + 200_000, [
+                "state": .string(SessionStateName.ended),
+            ]),
+        ] { _ = quic.ingest(e) }
+
+        transcripts = [Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic]
     }
 
     /// The text shown while dictating on the `dictating` screen.

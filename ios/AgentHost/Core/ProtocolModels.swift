@@ -12,6 +12,11 @@ enum RPC {
     static let sessionPrompt = "session.prompt"
     static let sessionCancel = "session.cancel"
     static let sessionEnd = "session.end"
+    /// Hide a session from the list (ending it first if live), and back.
+    static let sessionArchive = "session.archive"
+    static let sessionUnarchive = "session.unarchive"
+    /// The login new sessions in a workspace start with.
+    static let workspaceSetDefaultAgent = "workspace.set_default_agent"
     static let eventsSubscribe = "events.subscribe"
     static let eventsUnsubscribe = "events.unsubscribe"
     static let approvalList = "approval.list"
@@ -63,10 +68,39 @@ enum SessionStateName {
     static func isTerminal(_ s: String) -> Bool { s == ended || s == failed }
     static func isBusy(_ s: String) -> Bool { s == running || s == waitingApproval }
 
+    /// The status shown for a session state (see `SessionStatus`).
     static func label(_ s: String) -> String {
-        switch s {
-        case waitingApproval: return "Needs approval"
-        default: return s.prefix(1).uppercased() + s.dropFirst()
+        SessionStatus(state: s).label
+    }
+}
+
+/// The one status vocabulary, the same in the list and the session:
+/// Working (spinner), Needs you (orange), Failed (red), Your turn (tint
+/// dot: the agent finished its turn and waits for you), Ended (grey).
+enum SessionStatus: Equatable {
+    case working
+    case needsYou
+    case failed
+    case yourTurn
+    case ended
+
+    init(state: String) {
+        switch state {
+        case SessionStateName.created, SessionStateName.starting, SessionStateName.running: self = .working
+        case SessionStateName.waitingApproval: self = .needsYou
+        case SessionStateName.failed: self = .failed
+        case SessionStateName.ended: self = .ended
+        default: self = .yourTurn
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .working: return "Working"
+        case .needsYou: return "Needs approval"
+        case .failed: return "Failed"
+        case .yourTurn: return "Your turn"
+        case .ended: return "Ended"
         }
     }
 }
@@ -101,8 +135,12 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var createdAt: Int64
     var updatedAt: Int64
     var lastSeq: Int64
+    /// When it was archived (hidden from the list); archived sessions have
+    /// ended. Absent on older hosts.
+    var archivedAt: Int64? = nil
 
     var id: String { sessionId }
+    var isArchived: Bool { archivedAt != nil }
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -114,6 +152,7 @@ struct SessionInfo: Codable, Identifiable, Hashable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case lastSeq = "last_seq"
+        case archivedAt = "archived_at"
     }
 }
 
@@ -146,6 +185,11 @@ struct WorkspaceInfo: Codable, Identifiable, Hashable {
     var path: String
     var kind: String
     var createdAt: Int64
+    /// The login new sessions here start with (set by the host on the first
+    /// session; `defaultProfileId` nil: the agent's default login). Absent on
+    /// older hosts.
+    var defaultAgent: String? = nil
+    var defaultProfileId: String? = nil
 
     var id: String { workspaceId }
 
@@ -156,6 +200,8 @@ struct WorkspaceInfo: Codable, Identifiable, Hashable {
         case workspaceId = "workspace_id"
         case name, path, kind
         case createdAt = "created_at"
+        case defaultAgent = "default_agent"
+        case defaultProfileId = "default_profile_id"
     }
 }
 

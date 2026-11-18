@@ -11,6 +11,21 @@ struct SettingsView: View {
     var body: some View {
         List {
             hostSection
+            Section {
+                NavigationLink(value: Route.archived) {
+                    HStack(spacing: 12) {
+                        SettingsIcon(systemName: "archivebox.fill", color: .indigo)
+                        Text("Archived Sessions")
+                        Spacer(minLength: 8)
+                        if let n = model.archivedSessions?.count {
+                            Text("\(n)").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Swipe a session in the list to archive it. Archived sessions keep their transcripts.")
+            }
+
             securitySection
             agentsSection
             deviceSection
@@ -30,6 +45,9 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
         .refreshable { await model.refreshAll() }
+        .task {
+            if model.archivedSessions == nil { await model.refreshArchived() }
+        }
         .confirmationDialog("Unpair this iPhone?", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("Unpair", role: .destructive) { model.unpair() }
         } message: {

@@ -3,6 +3,7 @@ import SwiftUI
 enum Route: Hashable {
     case session(String)
     case settings
+    case archived
 }
 
 /// Sessions grouped by workspace (Quick tasks first) under a large title with
@@ -15,6 +16,8 @@ struct SessionsView: View {
     @State private var approvalShown: PendingApprovalModel?
     @State private var showApprovalList = false
     @State private var search = ""
+    /// Asking before archiving a live session.
+    @State private var archiving: SessionInfo?
 
     private var groups: [SessionGroup] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -65,6 +68,21 @@ struct SessionsView: View {
                             NavigationLink(value: Route.session(s.sessionId)) {
                                 SessionRow(session: s)
                             }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button {
+                                    archiving = s
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(.indigo)
+                            }
+                            .contextMenu {
+                                Button {
+                                    archiving = s
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                            }
                         }
                     } header: {
                         GroupHeader(model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName)
@@ -110,8 +128,11 @@ struct SessionsView: View {
                     SessionView(sessionId: id)
                 case .settings:
                     SettingsView()
+                case .archived:
+                    ArchivedSessionsView()
                 }
             }
+            .archiveFlow($archiving)
             .sheet(isPresented: $showNew) {
                 NewSessionView { created in
                     showNew = false
@@ -149,7 +170,10 @@ struct SessionsView: View {
         case .session: path = [.session(DemoData.flakySession)]
         case .dictating: path = [.session(DemoData.quickSession)]
         case .settings: path = [.settings]
-        case .new, .picker: showNew = true
+        case .new, .newLogin, .picker: showNew = true
+        case .archived: path = [.settings, .archived]
+        case .archivedSession: path = [.settings, .archived, .session(DemoData.archivedSession)]
+        case .archiveConfirm: archiving = model.session(DemoData.flakySession)
         case .sessions, .pair: break
         }
     }
@@ -334,12 +358,12 @@ struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
     var session: SessionInfo
 
-    private var quick: Bool { model.isQuickTasks(session.workspaceId) }
-    private var ended: Bool { session.state == SessionStateName.ended }
+    private var status: SessionStatus { SessionStatus(state: session.state) }
+    private var ended: Bool { status == .ended }
 
     var body: some View {
         HStack(spacing: 12) {
-            SessionStatusIcon(state: session.state, quickTask: quick)
+            SessionStatusIcon(state: session.state)
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.title ?? model.agentLabel(session))
                     .foregroundStyle(ended ? Color.secondary : Color.primary)
@@ -361,27 +385,18 @@ struct SessionRow: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// "Your turn · Claude Code · Work · 3m" (no age while it needs you).
     private var subtitle: String {
         let agent = model.agentLabel(session)
-        let age = shortAge(session.updatedAt)
-        switch session.state {
-        case SessionStateName.waitingApproval:
-            return "Needs approval · \(agent)"
-        case SessionStateName.idle where quick:
-            return "\(agent) · \(age)"
-        case SessionStateName.created, SessionStateName.starting:
-            return "Starting · \(agent)"
-        default:
-            return "\(SessionStateName.label(session.state)) · \(agent) · \(age)"
-        }
+        if status == .needsYou { return "\(status.label) · \(agent)" }
+        return "\(status.label) · \(agent) · \(shortAge(session.updatedAt))"
     }
 
     private var subtitleColor: Color {
-        switch session.state {
-        case SessionStateName.waitingApproval: return Palette.orange
-        case SessionStateName.failed: return Palette.red
-        case SessionStateName.ended: return Color(uiColor: .tertiaryLabel)
-        default: return .secondary
+        switch status {
+        case .needsYou, .failed: return status.color
+        case .ended: return Color(uiColor: .tertiaryLabel)
+        case .working, .yourTurn: return .secondary
         }
     }
 }

@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Start a session: Quick Task first, then the workspaces and "New
-/// Project…", an agent login (a default login or a profile), and an optional
-/// first message. A sheet with a prominent Start.
+/// Project…", and an agent login (a default login or a profile). Choosing a
+/// workspace picks its default login; picking another can make that the
+/// default. A sheet with a prominent Start.
 struct NewSessionView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -11,7 +12,8 @@ struct NewSessionView: View {
     @State private var workspaceId: String?
     /// The chosen login (`AgentStatusInfo.id`).
     @State private var agent: String?
-    @State private var firstMessage = ""
+    /// Make the chosen login the workspace's default after starting.
+    @State private var makeDefault = false
     @State private var starting = false
     @State private var pickingProject = false
     @State private var error: String?
@@ -29,6 +31,38 @@ struct NewSessionView: View {
             let a = last[$0.workspaceId] ?? 0, b = last[$1.workspaceId] ?? 0
             if a != b { return a > b }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private var selectedWorkspace: WorkspaceInfo? {
+        workspaceId.flatMap { model.workspace($0) }
+    }
+
+    /// The workspace's default login (`AgentStatusInfo.id`), if it is set
+    /// and on the host: `default_profile_id`, else the agent's own login.
+    private func defaultLogin(_ w: WorkspaceInfo?) -> AgentStatusInfo? {
+        guard let w, let agentKind = w.defaultAgent else { return nil }
+        let pid = w.defaultProfileId ?? agentKind
+        return agents.first { $0.agent == agentKind && ($0.profileId ?? $0.agent) == pid }
+            ?? (w.defaultProfileId == nil ? agents.first { $0.agent == agentKind && $0.profileName == nil } : nil)
+    }
+
+    /// A login other than the workspace's default is chosen.
+    private var differsFromDefault: Bool {
+        guard let d = defaultLogin(selectedWorkspace), let agent else { return false }
+        return d.id != agent
+    }
+
+    /// The workspace's default login when available, else keep the current
+    /// choice if it is still available, else the first available login.
+    private func chooseLogin() {
+        makeDefault = false
+        if let d = defaultLogin(selectedWorkspace), d.available {
+            agent = d.id
+        } else if let current = agent, agents.contains(where: { $0.id == current && $0.available }) {
+            return
+        } else {
+            agent = agents.first(where: { $0.available })?.id
         }
     }
 
@@ -67,19 +101,18 @@ struct NewSessionView: View {
                     if agents.isEmpty {
                         Text("Agent status appears once connected.").foregroundStyle(Color.secondary)
                     }
+                    let defaultId = defaultLogin(selectedWorkspace)?.id
                     ForEach(agents) { a in
                         Button {
                             if a.available { agent = a.id }
                         } label: {
-                            AgentChoiceRow(agent: a, selected: agent == a.id)
+                            AgentChoiceRow(agent: a, selected: agent == a.id, isDefault: a.id == defaultId)
                         }
                         .disabled(!a.available)
                     }
-                }
-
-                Section(caps: "First message") {
-                    TextField("Optional — you can also type it after starting", text: $firstMessage, axis: .vertical)
-                        .lineLimit(2...6)
+                    if differsFromDefault, let w = selectedWorkspace {
+                        Toggle("Make default for \(w.isQuickTasks ? "Quick tasks" : w.name)", isOn: $makeDefault)
+                    }
                 }
 
                 if let error {
@@ -93,6 +126,8 @@ struct NewSessionView: View {
                 ProjectPickerView { w in workspaceId = w.workspaceId }
                     .environmentObject(model)
             }
+            .onChange(of: workspaceId) { _, _ in chooseLogin() }
+            .onChange(of: agent) { _, _ in if !differsFromDefault { makeDefault = false } }
             .navigationTitle("New Session")
             .navigationBarTitleDisplayMode(.inline)
             .modifier(NewSessionToolbar(starting: starting, canStart: canStart, cancel: { dismiss() }, start: start))
@@ -103,13 +138,17 @@ struct NewSessionView: View {
                     workspaceId = workspaces.first(where: \.isQuickTasks)?.workspaceId
                         ?? (model.workspaces.count == 1 ? model.workspaces.first?.workspaceId : nil)
                 }
-                if agent == nil {
-                    agent = agents.first(where: { $0.available })?.id
-                }
+                chooseLogin()
                 #if DEBUG
                 if model.isDemo, DemoData.requestedScreen != nil {
                     workspaceId = "ws-relay"
                     if DemoData.requestedScreen == .picker { pickingProject = true }
+                    if DemoData.requestedScreen == .newLogin {
+                        // Let the workspace change pick its default first.
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        agent = "codex"
+                        makeDefault = true
+                    }
                 }
                 #endif
             }
@@ -123,15 +162,19 @@ struct NewSessionView: View {
               let login = agents.first(where: { $0.id == key }) else { return }
         starting = true
         error = nil
-        let message = firstMessage
+        let setDefault = makeDefault && differsFromDefault
         Task {
             do {
                 let s = try await model.createSession(
                     workspaceId: wid, agent: login.agent, profileId: login.profileId)
-                starting = false
-                if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    model.sendPrompt(sessionId: s.sessionId, text: message)
+                if setDefault {
+                    // The session is running either way; a failure here only
+                    // means the default stays as it was.
+                    try? await model.setDefaultLogin(
+                        workspaceId: wid, agent: login.agent, profileId: login.profileId)
                 }
+                await model.refreshWorkspaces()
+                starting = false
                 onCreated(s)
             } catch {
                 starting = false
@@ -233,13 +276,24 @@ struct WorkspaceChoiceRow: View {
 struct AgentChoiceRow: View {
     let agent: AgentStatusInfo
     let selected: Bool
+    var isDefault = false
 
     var body: some View {
         HStack(spacing: 12) {
             AgentBadge(agent: agent.agent, dimmed: !agent.available)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.label)
-                    .foregroundStyle(agent.available ? Color.primary : Color.secondary)
+                HStack(spacing: 6) {
+                    Text(agent.label)
+                        .foregroundStyle(agent.available ? Color.primary : Color.secondary)
+                    if isDefault {
+                        Text("Default")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.1), in: Capsule())
+                    }
+                }
                 if !agent.available {
                     Text(agent.problem ?? "Unavailable")
                         .font(.footnote)

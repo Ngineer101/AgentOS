@@ -61,7 +61,7 @@ must be reachable from the phone.
 
 For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
 transcripts and an approval; no pairing, lock or network) and optionally
-`-AgentHostDemoScreen session|dictating|new|picker|settings|pair`
+`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|archive-confirm|pair`
 (`App/DemoData.swift`; compiled out of Release builds):
 
 ```sh
@@ -91,6 +91,12 @@ call `device.revoke`, so the desktop should also revoke the device.
 Not in v1 (per the spec): push notifications, adding workspaces or
 connectors, policy changes, pairing other devices, multiple hosts, iPad
 layout.
+
+## Sessions: status, archive, default logins
+
+- One status vocabulary in the list and the session subtitle (`SessionStatus`): **Working** (created, starting, running; spinner), **Needs approval** (orange), **Failed** (red), **Your turn** (idle: the agent finished its turn; tint dot), **Ended** (grey).
+- **Archive**: swipe a session (or its context menu, or the Session "…" menu). A live session asks first, because `session.archive` ends it; an ended one is archived at once. Archived sessions leave the list and are no longer re-subscribed; `session.changed` with `archived_at` set or cleared moves them out of or back into the list. Settings → Archived Sessions lists them (`session.list {archived: true}`, loaded on demand, not cached), with search; a transcript opens read only with Unarchive (`session.unarchive`). There is no Delete: the host's event log is append-only.
+- **Default login per workspace** (`Workspace.default_agent` / `default_profile_id`, set by the host on a workspace's first session): New Session preselects it and marks it "Default"; picking another login offers "Make default for <workspace>", which calls `workspace.set_default_agent` after the session starts. Workspaces are refreshed after every new session.
 
 ## What is verified
 

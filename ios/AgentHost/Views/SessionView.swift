@@ -14,6 +14,8 @@ struct SessionView: View {
     @State private var draft = ""
     @State private var actionError: String?
     @State private var confirmEnd = false
+    @State private var archiving: SessionInfo?
+    @Environment(\.dismiss) private var dismiss
     @State private var approvalShown: PendingApprovalModel?
     @FocusState private var promptFocused: Bool
     @Environment(\.openURL) private var openURL
@@ -30,6 +32,7 @@ struct SessionView: View {
     private var session: SessionInfo? { model.session(sessionId) }
     private var rows: [TranscriptRow] { buildRows(model.transcripts[sessionId]?.events ?? []) }
     private var pending: [OutgoingPrompt] { model.outbox.filter { $0.sessionId == sessionId } }
+    private var isArchived: Bool { session?.isArchived ?? false }
     private var isTerminal: Bool { SessionStateName.isTerminal(session?.state ?? "") }
     private var isBusy: Bool { SessionStateName.isBusy(session?.state ?? "") }
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
@@ -51,11 +54,8 @@ struct SessionView: View {
     private var subtitle: String? {
         guard let s = session else { return nil }
         let place = model.isQuickTasks(s.workspaceId) ? "Quick task" : model.workspaceName(s.workspaceId)
-        var parts = [model.agentLabel(s), place]
-        if s.state == SessionStateName.ended || s.state == SessionStateName.failed {
-            parts.append(SessionStateName.label(s.state))
-        }
-        return parts.joined(separator: " · ")
+        let status = s.isArchived ? "Archived" : SessionStateName.label(s.state)
+        return [status, model.agentLabel(s), place].joined(separator: " · ")
     }
 
     var body: some View {
@@ -117,7 +117,13 @@ struct SessionView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-            .bottomGlassBar { promptBar }
+            .bottomGlassBar {
+                if isArchived {
+                    archivedBar
+                } else {
+                    promptBar
+                }
+            }
         }
         .background(Color.black)
         .navigationBarTitleDisplayMode(.inline)
@@ -137,12 +143,29 @@ struct SessionView: View {
                         Label("End Session", systemImage: "xmark.circle")
                     }
                     .disabled(!model.link.isOnline || isTerminal)
+                    Divider()
+                    if isArchived {
+                        Button {
+                            Task { await run { try await model.unarchive(sessionId) } }
+                        } label: {
+                            Label("Unarchive", systemImage: "tray.and.arrow.up")
+                        }
+                        .disabled(!model.link.isOnline)
+                    } else {
+                        Button {
+                            archiving = session
+                        } label: {
+                            Label("Archive", systemImage: "archivebox")
+                        }
+                        .disabled(!model.link.isOnline || session == nil)
+                    }
                 } label: {
                     ToolbarIcon(systemName: "ellipsis")
                 }
                 .accessibilityLabel("Session actions")
             }
         }
+        .archiveFlow($archiving) { dismiss() }
         .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
                 Task { await run { try await model.end(sessionId) } }
@@ -177,6 +200,30 @@ struct SessionView: View {
     }
 
     // MARK: Composer
+
+    /// In place of the composer for an archived session: read only.
+    private var archivedBar: some View {
+        VStack(spacing: 8) {
+            if let err = actionError {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(Palette.red)
+            }
+            Text("Archived — read only")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await run { try await model.unarchive(sessionId) } }
+            } label: {
+                Label("Unarchive", systemImage: "tray.and.arrow.up")
+            }
+            .buttonStyle(CapsuleButtonStyle(fill: .accentColor, height: 50))
+            .disabled(!model.link.isOnline)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+    }
 
     private var promptBar: some View {
         VStack(alignment: .leading, spacing: 8) {

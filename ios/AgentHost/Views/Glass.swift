@@ -177,57 +177,50 @@ struct AgentBadge: View {
     }
 }
 
-/// The one status vocabulary: orange = needs you, spinner = running,
-/// ring = idle, check = ended, red = failed. Quick tasks that are idle show
-/// their bolt.
+/// The status icon of a session row (`SessionStatus`): spinner = working,
+/// orange dot = needs you, red = failed, tint dot = your turn, grey check =
+/// ended.
 struct SessionStatusIcon: View {
     let state: String
-    var quickTask = false
 
     var body: some View {
+        let status = SessionStatus(state: state)
         ZStack {
-            Circle().fill(background)
-            glyph
+            Circle().fill(status.color.opacity(status == .ended ? 0.12 : 0.2))
+            glyph(status)
         }
         .frame(width: 30, height: 30)
         .accessibilityHidden(true)
     }
 
     @ViewBuilder
-    private var glyph: some View {
-        switch state {
-        case SessionStateName.waitingApproval:
-            Circle().fill(Palette.orange).frame(width: 10, height: 10)
-        case SessionStateName.running, SessionStateName.starting, SessionStateName.created:
+    private func glyph(_ status: SessionStatus) -> some View {
+        switch status {
+        case .working:
             Spinner()
-        case SessionStateName.failed:
+        case .needsYou, .yourTurn:
+            Circle().fill(status.color).frame(width: 10, height: 10)
+        case .failed:
             Image(systemName: "exclamationmark")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Palette.red)
-        case SessionStateName.ended:
+                .foregroundStyle(status.color)
+        case .ended:
             Image(systemName: "checkmark")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.secondary)
-        default:
-            if quickTask {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Palette.orange)
-            } else {
-                Circle()
-                    .strokeBorder(Color.secondary, lineWidth: 1.8)
-                    .frame(width: 10, height: 10)
-            }
         }
     }
+}
 
-    private var background: Color {
-        switch state {
-        case SessionStateName.waitingApproval: return Palette.orange.opacity(0.2)
-        case SessionStateName.running, SessionStateName.starting, SessionStateName.created: return Color.blue.opacity(0.2)
-        case SessionStateName.failed: return Palette.red.opacity(0.2)
-        case SessionStateName.ended: return Color.white.opacity(0.08)
-        default: return quickTask ? Palette.orange.opacity(0.2) : Color.white.opacity(0.08)
+extension SessionStatus {
+    /// Icon colour; also the subtitle colour where it calls for attention.
+    var color: Color {
+        switch self {
+        case .working: return .blue
+        case .needsYou: return Palette.orange
+        case .failed: return Palette.red
+        case .yourTurn: return .accentColor
+        case .ended: return .white
         }
     }
 }
