@@ -46,6 +46,10 @@ pub const CONNECTOR_UPDATE: &str = "connector.update";
 pub const CONNECTOR_REMOVE: &str = "connector.remove";
 pub const CONNECTOR_SIGN_IN: &str = "connector.sign_in";
 pub const CONNECTOR_REFRESH: &str = "connector.refresh";
+/// The host's own tools and whether each asks first.
+pub const BUILTIN_LIST: &str = "builtin.list";
+/// Let one of the host's own tools run without asking (or ask again).
+pub const BUILTIN_SET_POLICY: &str = "builtin.set_policy";
 /// Search the integrations.sh catalog for MCP servers.
 pub const CONNECTOR_SEARCH: &str = "connector.search";
 
@@ -140,7 +144,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     use Capability::*;
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
-        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST => Read,
+        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
@@ -150,7 +154,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
-        | CONNECTOR_SEARCH
+        | CONNECTOR_SEARCH | BUILTIN_SET_POLICY
         | DEVICE_PAIR_START | DEVICE_PAIR_CONFIRM | DEVICE_RENAME | DEVICE_REVOKE
         // A profile's folder becomes writable inside every session that uses it.
         | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE
@@ -178,6 +182,7 @@ mod tests {
             AGENT_PROFILE_ADD,
             AGENT_PROFILE_REMOVE,
             PROJECT_SET_ROOTS,
+            BUILTIN_SET_POLICY,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }

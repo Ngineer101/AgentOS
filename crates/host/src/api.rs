@@ -418,6 +418,7 @@ impl Conn {
             }
 
             m::APPROVAL_LIST => to_value(h.gateway_pending()),
+            m::BUILTIN_LIST | m::BUILTIN_SET_POLICY => h.connector_call(method, p).await,
             m::APPROVAL_RESPOND => {
                 let ap: ApprovalRespondParams = params(p)?;
                 h.approval_respond(&ap, &self.principal)?;

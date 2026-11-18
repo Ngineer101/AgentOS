@@ -185,3 +185,63 @@ async fn pull_requests_open_only_after_approval_with_the_text_shown() {
     assert!(logged.contains(&format!("pr create --base main --head {branch} --title Dark prompt bubbles --body-file -")), "{logged}");
     assert!(logged.contains("Readable on a phone."), "{logged}");
 }
+
+#[tokio::test]
+async fn pull_requests_and_pushes_can_run_without_asking_but_force_pushes_and_installs_always_ask() {
+    let dir = short_tempdir();
+    let log = fake_gh(dir.path());
+    let mut cfg = test_config(dir.path());
+    cfg.install_bin_dir = Some(dir.path().join("programs"));
+    let th = TestHost::start_in(dir, cfg).await;
+    let remote = th.workspace.parent().unwrap().join("remote.git");
+    git(th.workspace.parent().unwrap(), &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
+    git(&th.workspace, &["init", "-q", "-b", "main"]);
+    std::fs::write(th.workspace.join("README.md"), "hello\n").unwrap();
+    git(&th.workspace, &["add", "."]);
+    git(&th.workspace, &["commit", "-q", "-m", "first"]);
+    git(&th.workspace, &["remote", "add", "origin", remote.to_str().unwrap()]);
+
+    let (c, mut n) = th.client().await;
+    // Asks by default; installing can't be switched off.
+    let list: Vec<BuiltinTool> = c.call(m::BUILTIN_LIST, json!({})).await.unwrap();
+    assert!(list.iter().all(|t| t.policy == ToolPolicy::Ask));
+    assert!(!list.iter().find(|t| t.name == "install_tool").unwrap().can_auto);
+    assert!(c
+        .request(m::BUILTIN_SET_POLICY, json!({"name": "install_tool", "policy": "auto"}))
+        .await
+        .is_err());
+    for name in ["create_pull_request", "git_push"] {
+        let l: Vec<BuiltinTool> = c
+            .call(m::BUILTIN_SET_POLICY, json!({"name": name, "policy": "auto"}))
+            .await
+            .unwrap();
+        assert_eq!(l.iter().find(|t| t.name == name).unwrap().policy, ToolPolicy::Auto);
+    }
+
+    let ws = th.workspace_id(&c).await;
+    let sid = c.create_session(&ws, AgentKind::Fake).await.unwrap().session_id;
+    wait_state(&c, &sid, SessionState::Idle, T).await;
+    c.subscribe(&sid, 0).await.unwrap();
+
+    // A push and a pull request run straight away.
+    c.prompt(&sid, r#"mcp agenthost__git_push {"reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(!ev.iter().any(|e| e.kind == EventType::ApprovalRequested));
+    assert!(ev.iter().any(|e| e.kind == EventType::ToolResult && e.payload["name"] == "git_push" && e.payload["status"] == "completed"));
+    c.prompt(&sid, r#"mcp agenthost__create_pull_request {"title":"T","body":"B","base":"main"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(!ev.iter().any(|e| e.kind == EventType::ApprovalRequested));
+    assert!(log.exists());
+
+    // A force-push still asks.
+    c.prompt(&sid, r#"mcp agenthost__git_push {"force_with_lease":true,"reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let id = ev.last().unwrap().payload["approval_id"].clone();
+    c.request(m::APPROVAL_RESPOND, json!({"approval_id": id, "decision": "deny"})).await.unwrap();
+    collect_until(&mut n, T, turn_end).await;
+
+    // Phones can't change it.
+    assert!(!m::Capability::phone().contains(&m::required_capability(m::BUILTIN_SET_POLICY).unwrap()));
+    let audit = std::fs::read_to_string(th.host.ctx.cfg.logs_dir().join("audit.jsonl")).unwrap();
+    assert!(audit.contains("builtin.policy") && audit.contains("\"auto\":true"));
+}

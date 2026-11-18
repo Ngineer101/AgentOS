@@ -937,6 +937,27 @@ pub struct PendingApproval {
     pub summary: Option<String>,
 }
 
+/// One of the host's own tools (pushing, pull requests, installing), and
+/// whether it asks before it runs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BuiltinTool {
+    /// "create_pull_request", "git_push", "install_tool".
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    /// `ask` or `auto`.
+    pub policy: ToolPolicy,
+    /// False for a tool that always asks (installing; a force-push always
+    /// asks whatever this says).
+    pub can_auto: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BuiltinPolicyParams {
+    pub name: String,
+    pub policy: ToolPolicy,
+}
+
 /// The `connector_id` of approvals for the host's own tools (installing a
 /// command-line tool on the user's computer), not a configured connector.
 pub const BUILTIN_CONNECTOR_ID: &str = "agenthost";

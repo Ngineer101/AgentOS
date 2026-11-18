@@ -102,6 +102,57 @@ pub fn slug(name: &str) -> String {
     agenthost_proto::connector_slug(name)
 }
 
+/// The host's own tools a user can let run without asking, with the words
+/// Settings shows. Installing always asks: the package's scripts run as the
+/// user.
+const BUILTINS: &[(&str, &str, &str, bool)] = &[
+    ("create_pull_request", "Open pull requests", "Opens a GitHub pull request with your GitHub CLI login.", true),
+    ("git_push", "Push branches", "Pushes with your git credentials. A force-push always asks.", true),
+    ("install_tool", "Install tools on this computer", "Runs a package manager as you, outside the sandbox. Always asks.", false),
+];
+
+fn policy_key(name: &str) -> String {
+    format!("builtin_policy.{name}")
+}
+
+impl Gateway {
+    /// Whether one of the host's own tools asks first (the default) or not.
+    pub fn builtin_policy(&self, name: &str) -> ToolPolicy {
+        let can_auto = BUILTINS.iter().any(|(n, _, _, a)| *n == name && *a);
+        match self.ctx.store.setting_get::<ToolPolicy>(&policy_key(name)) {
+            Ok(Some(ToolPolicy::Auto)) if can_auto => ToolPolicy::Auto,
+            _ => ToolPolicy::Ask,
+        }
+    }
+
+    pub fn builtin_list(&self) -> Vec<BuiltinTool> {
+        BUILTINS
+            .iter()
+            .map(|(name, title, description, can_auto)| BuiltinTool {
+                name: name.to_string(),
+                title: title.to_string(),
+                description: description.to_string(),
+                policy: self.builtin_policy(name),
+                can_auto: *can_auto,
+            })
+            .collect()
+    }
+
+    pub fn set_builtin_policy(&self, p: &BuiltinPolicyParams) -> Result<Vec<BuiltinTool>, String> {
+        let Some((_, _, _, can_auto)) = BUILTINS.iter().find(|(n, ..)| *n == p.name) else {
+            return Err(format!("no built-in tool {:?}", p.name));
+        };
+        match p.policy {
+            ToolPolicy::Auto if !can_auto => return Err(format!("{} always asks", p.name)),
+            ToolPolicy::Disabled => return Err("built-in tools can ask or run without asking".into()),
+            _ => {}
+        }
+        self.ctx.store.setting_set(&policy_key(&p.name), &p.policy).map_err(|e| e.to_string())?;
+        self.ctx.audit.log("builtin.policy", json!({"name": p.name, "policy": p.policy}));
+        Ok(self.builtin_list())
+    }
+}
+
 /// The definition of `agenthost__create_pull_request`.
 fn pr_tool_def() -> Value {
     json!({
@@ -722,12 +773,17 @@ impl Gateway {
             "ask_title": "Open a Pull Request?",
             "note": "Posts to GitHub as you, with your GitHub CLI login. Push the branch first.",
         });
-        let decision = self
-            .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
-            .await;
+        // Settings can let pull requests open without asking.
+        let auto = self.builtin_policy(tool) == ToolPolicy::Auto;
+        let decision = if auto {
+            ApprovalDecision::Approve
+        } else {
+            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+                .await
+        };
         self.ctx.audit.log(
             "pr.decision",
-            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision}),
+            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto}),
         );
         if decision != ApprovalDecision::Approve {
             finish("denied", "the user denied this pull request");
@@ -813,12 +869,17 @@ impl Gateway {
                 "ask_title": "Push?",
                 "note": note,
             });
-            let decision = self
-                .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
-                .await;
+            // Settings can let pushes run without asking; a force-push always asks.
+            let auto = !plan.force && self.builtin_policy(tool) == ToolPolicy::Auto;
+            let decision = if auto {
+                ApprovalDecision::Approve
+            } else {
+                self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+                    .await
+            };
             self.ctx.audit.log(
                 "git.decision",
-                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision}),
+                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto}),
             );
             if decision != ApprovalDecision::Approve {
                 finish("denied", "the user denied this push");
@@ -1552,6 +1613,12 @@ impl ConnectorAdmin for Arc<Gateway> {
         let p = if params.is_null() { json!({}) } else { params };
         let bad = |e: serde_json::Error| RpcError::invalid_params(e.to_string());
         match method {
+            m::BUILTIN_LIST => Ok(serde_json::to_value(self.builtin_list()).unwrap_or_default()),
+            m::BUILTIN_SET_POLICY => {
+                let bp: BuiltinPolicyParams = serde_json::from_value(p).map_err(bad)?;
+                let list = self.set_builtin_policy(&bp).map_err(RpcError::invalid_params)?;
+                Ok(serde_json::to_value(list).unwrap_or_default())
+            }
             m::CONNECTOR_LIST => {
                 let list = self
                     .ctx
