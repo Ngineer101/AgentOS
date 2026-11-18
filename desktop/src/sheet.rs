@@ -103,7 +103,8 @@ fn workspace_rows(s: &App, t: &Theme) -> Vec<El> {
         if mac && quick {
             r = r.child(t.faint(keys(s.look, Cmd::QuickTask)));
         } else if mac && live > 0 {
-            r = r.child(text(format!("{live} live session{}", if live == 1 { "" } else { "s" })).font(TextStyle::new(11.0, 400.0)).color(t.warn));
+            // Informational: each session works on a branch of its own, so several can run.
+            r = r.child(text(format!("{live} live session{}", if live == 1 { "" } else { "s" })).font(TextStyle::new(11.0, 400.0)).color(t.text3));
         }
         rows.push(r);
     }
@@ -379,7 +380,6 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
                 ("Next / previous session", next_prev),
                 ("Go to session 1–9", jump),
                 ("Search sessions", l(Cmd::Search)),
-                ("End session", l(Cmd::EndSession)),
                 ("Archive session", l(Cmd::Archive)),
             ],
         ),
@@ -393,6 +393,7 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
                 ("Attach files", l(Cmd::Attach)),
                 ("Dictate", l(Cmd::Dictate)),
                 ("Edit your last message", "↑".into()),
+                ("Show or hide side questions", l(Cmd::ToggleSide)),
             ],
         ),
         (
@@ -463,11 +464,12 @@ pub fn shortcuts(s: &App, t: &Theme) -> El {
     scrim("shortcuts-layer", 0.4, |s| s.shortcuts_open = false).padding(30.0).center().child(panel)
 }
 
-/// "Archive ends the session": asked before archiving a live session.
+/// Asked before archiving a live session: archiving stops the agent.
 pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
     let title = s.session(id).map(|x| x.title.clone().unwrap_or_else(|| s.login_label(x))).unwrap_or_default();
     let id2 = id.to_string();
     let mac = t.mac();
+    let label = format!("Archive \u{201c}{}\u{201d}", crate::view::clip(&title, 60));
     let buttons = row()
         .w_full()
         .gap(8.0)
@@ -476,14 +478,16 @@ pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
         .child(t.button("Archive", Btn::Primary, None, move |s| s.archive(&id2)).key("confirm-archive").default_button());
     let mut panel = col()
         .key("archive-alert")
+        .role("alertdialog")
+        .label(label)
         .w(if mac { 340.0 } else { 380.0 })
         .gap(if mac { 12.0 } else { 16.0 })
         .padding(if mac { 20.0 } else { 24.0 })
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, |s: &mut App| s.confirm_archive = None)
-        .child(text(format!("Archive \u{201c}{}\u{201d}?", crate::view::clip(&title, 60))).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
-        .child(t.small("Archive ends the session. Its transcript stays in Settings › Archived, where you can open or unarchive it.").wrap())
+        .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
+        .child(t.small("The agent stops and the session moves to Archived.").wrap())
         .child(buttons);
     panel = if mac { panel.radius(12.0).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
     scrim("archive-layer", 0.32, |s| s.confirm_archive = None).center().child(panel)

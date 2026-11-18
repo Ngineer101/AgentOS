@@ -74,7 +74,6 @@ pub struct Theme {
     pub focus: Color,
     pub warn_tint: Color,
     pub warn_border: Color,
-    pub banner: Color,
     // Type.
     pub fs: f32,
     pub fs_small: f32,
@@ -127,7 +126,6 @@ impl Theme {
                 focus: c("#0a84ff").alpha(0.35),
                 warn_tint: c("#ff9f0a").alpha(0.09),
                 warn_border: c("#ff9f0a").alpha(0.30),
-                banner: c("#ff9f0a").alpha(0.16),
                 fs: 13.0,
                 fs_small: 11.0,
                 fs_mono: 12.0,
@@ -174,7 +172,6 @@ impl Theme {
                 focus: c("#3584e4").alpha(0.5),
                 warn_tint: white(0.08),
                 warn_border: c("#cd9309").alpha(0.6),
-                banner: c("#cd9309").alpha(0.22),
                 fs: 14.5,
                 fs_small: 12.5,
                 fs_mono: 13.0,

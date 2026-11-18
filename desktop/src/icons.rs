@@ -50,3 +50,14 @@ icon!(TAB_CONNECTORS, "ah-tab-conn", 22.0, r#"<path d="M8 3v4M14 3v4M5.5 7h11v3.
 icon!(TAB_DEVICES, "ah-tab-dev", 22.0, r#"<rect x="6.5" y="2.5" width="9" height="17" rx="2.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M9.5 16.8h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>"#);
 icon!(GITHUB, "ah-github", 16.0, r#"<path d="M8 0.5a7.5 7.5 0 0 0-2.4 14.6c.4.1.5-.2.5-.4v-1.3c-2.1.5-2.5-1-2.5-1-.3-.9-.8-1.1-.8-1.1-.7-.5 0-.5 0-.5.8.1 1.2.8 1.2.8.7 1.2 1.8.8 2.2.6.1-.5.3-.8.5-1-1.7-.2-3.4-.8-3.4-3.7 0-.8.3-1.5.8-2-.1-.2-.3-1 .1-2 0 0 .6-.2 2.1.8a7 7 0 0 1 3.8 0c1.4-1 2.1-.8 2.1-.8.4 1 .2 1.8.1 2 .5.5.8 1.2.8 2 0 2.9-1.8 3.5-3.4 3.7.3.2.5.7.5 1.4v2.1c0 .2.1.5.6.4A7.5 7.5 0 0 0 8 .5z" fill="currentColor"/>"#);
 icon!(TAB_ARCHIVED, "ah-tab-archived", 22.0, r#"<rect x="2.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M4 8.5V17a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 18 17V8.5M9 12h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/>"#);
+// A git branch (SF Symbols' arrow.triangle.branch / Adwaita's vcs-branch).
+icon!(BRANCH, "ah-branch", 12.0, r#"<circle cx="3.2" cy="2.6" r="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="3.2" cy="9.4" r="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="8.8" cy="3.8" r="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M3.2 4.1v3.8M8.8 5.3c0 2.2-2.4 2.4-4.4 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#);
+// The trailing inspector pane (sidebar.right).
+icon!(INSPECTOR, "ah-inspector", 18.0, r#"<rect x="1" y="2.5" width="16" height="13" rx="3" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M11.5 2.5V15.5" stroke="currentColor" stroke-width="1.4"/>"#);
+// A speech bubble for a side question.
+icon!(BUBBLE, "ah-bubble", 14.0, r#"<path d="M2.5 2h9a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 11.5 10H6.5L3.5 12.5V10h-1A1.5 1.5 0 0 1 1 8.5v-5A1.5 1.5 0 0 1 2.5 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/>"#);
+// Toasts: information and failure.
+icon!(INFO, "ah-info", 16.0, r##"<circle cx="8" cy="8" r="7" fill="currentColor"/><rect x="7.2" y="7" width="1.6" height="5" rx="0.8" fill="#1e1e1e"/><circle cx="8" cy="4.7" r="1" fill="#1e1e1e"/>"##);
+icon!(ERROR, "ah-error", 16.0, r##"<circle cx="8" cy="8" r="7" fill="currentColor"/><rect x="7.2" y="3.8" width="1.6" height="5.4" rx="0.8" fill="#1e1e1e"/><circle cx="8" cy="11.6" r="1" fill="#1e1e1e"/>"##);
+// Effort (thought level): a gauge.
+icon!(GAUGE, "ah-gauge", 14.0, r#"<path d="M2 10.5a5 5 0 1 1 10 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/><path d="M7 10.5l2.6-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="10.5" r="1.1" fill="currentColor"/>"#);

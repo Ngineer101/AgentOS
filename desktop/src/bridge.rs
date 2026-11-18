@@ -36,6 +36,14 @@ pub enum Tag {
     ProjectRoots,
     /// `session.list` with `archived: true`.
     Archived,
+    /// `session.side_ask` in this session: the reply names the side conversation.
+    SideAsked(String),
+    /// A call answered with the updated session (`session.set_config`).
+    SessionUpdated,
+    /// `connector.search` for this query.
+    ConnectorSearch(String),
+    /// `connector.update` renaming this connector: errors show by the name field.
+    Rename(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -56,6 +64,8 @@ pub enum ToHost {
     Call { tag: Tag, method: &'static str, params: Value },
     /// Send a file from disk; answered by [`FromHost::Uploaded`].
     Upload { local_id: u64, path: PathBuf },
+    /// Send bytes (a pasted image); answered by [`FromHost::Uploaded`].
+    UploadBytes { local_id: u64, name: String, mime: String, data: Vec<u8> },
     /// Transcribe a WAV recording; answered by [`FromHost::Transcribed`].
     Transcribe { wav: Vec<u8> },
 }
@@ -183,6 +193,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                     let msg = match cmd {
                                         ToHost::Call { tag, method, params } => FromHost::Reply { tag, result: c.request(method, params).await },
                                         ToHost::Upload { local_id, path } => FromHost::Uploaded { local_id, result: c.upload_file(&path).await.map_err(|e| format!("{e:#}")) },
+                                        ToHost::UploadBytes { local_id, name, mime, data } => FromHost::Uploaded { local_id, result: c.upload(&name, Some(&mime), &data, |_, _| {}).await.map_err(|e| format!("{e:#}")) },
                                         ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
                                     };
                                     let _ = s.send(msg);

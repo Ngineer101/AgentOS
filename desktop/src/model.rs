@@ -52,6 +52,8 @@ pub enum Menu {
     Row(String, f32, f32),
     /// A sidebar section's context menu (its workspace), at a window point.
     Section(String, f32, f32),
+    /// The composer's picker for one of the session's settings (model, effort), by its id.
+    Config(String),
 }
 
 /// One status vocabulary everywhere: the sidebar, the toolbar capsule, the header.
@@ -104,6 +106,138 @@ pub struct Transcript {
     pub last_seq: i64,
     /// Text streaming in (`session.delta`) that is not yet an event.
     pub live: String,
+    /// Side answers streaming in, by side conversation.
+    pub side_live: HashMap<String, String>,
+}
+
+/// One side conversation (`/btw`), as the session's events tell it.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SideThread {
+    pub side_id: String,
+    pub turns: Vec<SideTurn>,
+    /// The answer still arriving for the last turn.
+    pub live: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SideTurn {
+    pub question: String,
+    pub answer: String,
+    pub ended: bool,
+    pub error: Option<String>,
+}
+
+impl SideThread {
+    /// The tab's title: the first question.
+    pub fn title(&self) -> &str {
+        self.turns.first().map(|t| t.question.as_str()).unwrap_or("Side question")
+    }
+    /// The last question is still being answered.
+    pub fn streaming(&self) -> bool {
+        self.turns.last().is_some_and(|t| !t.ended)
+    }
+}
+
+/// `/btw <question>`: the question, if the text is a side question. "/btw" alone is an empty one.
+pub fn parse_btw(text: &str) -> Option<&str> {
+    let t = text.trim_start();
+    let rest = t.strip_prefix("/btw")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None; // "/btwx"
+    }
+    Some(rest.trim())
+}
+
+/// Slash commands the composer offers as you type "/": the command and what it does.
+pub fn slash_suggestions(text: &str, side_questions: bool) -> Vec<(&'static str, &'static str)> {
+    let mut out = vec![];
+    if side_questions && text.starts_with('/') && !text.contains(char::is_whitespace) && "/btw".starts_with(text) {
+        out.push(("/btw", "Ask a side question without interrupting"));
+    }
+    out
+}
+
+/// How long a toast stays, not counting time under the pointer.
+pub const TOAST_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToastKind {
+    Info,
+    Error,
+    /// An agent waits for an approval (in another session).
+    Approval,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum ToastAction {
+    /// "Show": open the session and scroll to the approval card.
+    ShowApproval { session_id: String, approval_id: String },
+}
+
+/// A short message over the window that goes by itself (AdwToast, or a floating panel on macOS).
+#[derive(Clone, Debug)]
+pub struct Toast {
+    pub id: u64,
+    pub kind: ToastKind,
+    pub text: String,
+    pub action: Option<ToastAction>,
+    /// Time shown before the current stretch.
+    shown: std::time::Duration,
+    /// When the current stretch started; None while paused (under the pointer).
+    since: Option<std::time::Instant>,
+}
+
+impl Toast {
+    fn elapsed(&self, now: std::time::Instant) -> std::time::Duration {
+        self.shown + self.since.map(|s| now.saturating_duration_since(s)).unwrap_or_default()
+    }
+}
+
+/// What a paste into the composer becomes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PasteAs {
+    /// Copied files (Finder, Files): attachments.
+    Files(Vec<std::path::PathBuf>),
+    /// An image (a screenshot, "Copy Image"): a PNG attachment.
+    Image(Vec<u8>),
+    /// Anything else: the editor pastes the text.
+    Text,
+}
+
+/// Decide what a paste is. Files win (Finder also puts the names and an icon on the
+/// clipboard); an image wins over text only when the text is empty or just describes the image
+/// (a browser's `<img>`), so a spreadsheet's cells still paste as text.
+pub fn paste_as(content: &rune::ClipboardContent) -> PasteAs {
+    if !content.files().is_empty() {
+        return PasteAs::Files(content.files().to_vec());
+    }
+    if let Some(img) = content.image() {
+        let text_is_image = content.text().trim().is_empty() || content.html().is_some_and(|h| h.contains("<img"));
+        if text_is_image {
+            return PasteAs::Image(img.png().to_vec());
+        }
+    }
+    PasteAs::Text
+}
+
+/// "Pasted image.png", then "Pasted image 2.png", … so chips stay apart.
+pub fn pasted_image_name(taken: &[&str]) -> String {
+    let mut n = 1;
+    loop {
+        let name = if n == 1 { "Pasted image.png".to_string() } else { format!("Pasted image {n}.png") };
+        if !taken.contains(&name.as_str()) {
+            return name;
+        }
+        n += 1;
+    }
+}
+
+/// The add-connector search waits this long after the last keystroke.
+pub const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether this app can add a catalog server: OAuth and open ones, not API keys yet.
+pub fn suggestion_supported(s: &ConnectorSuggestion) -> bool {
+    matches!(s.auth.as_str(), "oauth" | "none")
 }
 
 /// A file picked for the next message.
@@ -167,7 +301,6 @@ pub struct App {
     pub adding_profile: bool,
     pub adding_connector: bool,
     pub adding_workspace: bool,
-    pub conn_token: TextEdit,
     /// A folder just added from the New session sheet: select it once it's listed.
     pub pick_added: Option<String>,
     pub info: Option<HostInfo>,
@@ -218,6 +351,36 @@ pub struct App {
     pub sub_ids: HashMap<String, String>,
     /// Sessions the host says are ahead of us: (its last seq, when we heard).
     pub behind: HashMap<String, (i64, std::time::Instant)>,
+    /// Toasts on screen, oldest first.
+    pub toasts: Vec<Toast>,
+    pub next_toast: u64,
+    /// The pointer is over the toasts: their clocks stand still.
+    pub toasts_hovered: bool,
+    /// Approvals a toast already announced.
+    pub toasted_approvals: HashSet<String>,
+    /// The side-question pane is showing (when the session has any).
+    pub side_open: bool,
+    /// Side conversations whose tab was closed here.
+    pub side_closed: HashSet<String>,
+    /// The selected side conversation, by session.
+    pub side_tab: HashMap<String, String>,
+    /// A new side question waiting for its id, by session.
+    pub side_pending: HashMap<String, String>,
+    /// The side pane's follow-up field.
+    pub side_prompt: TextEdit,
+    /// Add connector: the catalog search field, and when its search is due.
+    pub conn_search: TextEdit,
+    pub search_due: Option<std::time::Instant>,
+    /// The query the results below are for (or are being fetched for).
+    pub search_query: String,
+    pub searching: bool,
+    pub suggestions: Vec<ConnectorSuggestion>,
+    pub search_error: Option<String>,
+    /// Add connector: typing a URL instead of searching.
+    pub add_manual: bool,
+    pub conn_name: TextEdit,
+    /// A rename the host refused: (connector, why).
+    pub rename_error: Option<(String, String)>,
 }
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
@@ -249,7 +412,6 @@ pub fn init() -> App {
         adding_profile: false,
         adding_connector: false,
         adding_workspace: false,
-        conn_token: TextEdit::new("").secure(),
         pick_added: None,
         info: None,
         workspaces: vec![],
@@ -286,6 +448,24 @@ pub fn init() -> App {
         ask_voice_download: false,
         sub_ids: HashMap::new(),
         behind: HashMap::new(),
+        toasts: vec![],
+        next_toast: 1,
+        toasts_hovered: false,
+        toasted_approvals: HashSet::new(),
+        side_open: false,
+        side_closed: HashSet::new(),
+        side_tab: HashMap::new(),
+        side_pending: HashMap::new(),
+        side_prompt: TextEdit::new(""),
+        conn_search: TextEdit::new(""),
+        search_due: None,
+        search_query: String::new(),
+        searching: false,
+        suggestions: vec![],
+        search_error: None,
+        add_manual: false,
+        conn_name: TextEdit::new(""),
+        rename_error: None,
     }
 }
 
@@ -357,7 +537,7 @@ impl App {
         self.act("Change the default login", m::WORKSPACE_SET_DEFAULT_AGENT, params, Refresh::Workspaces);
     }
 
-    /// Archive a session: a live one asks first (archiving ends it), an ended one goes at once.
+    /// Archive a session: a live one asks first (the host ends it), an ended one goes at once.
     pub fn archive(&mut self, id: &str) {
         let Some(sess) = self.sessions.iter().find(|x| x.session_id == id) else { return };
         if !sess.state.is_terminal() && self.confirm_archive.as_deref() != Some(id) {
@@ -617,6 +797,18 @@ impl App {
         if text.is_empty() && ids.is_empty() {
             return;
         }
+        // `/btw <question>` asks on the side, when the agent can.
+        let side = self.session(&id).is_some_and(|x| x.side_questions);
+        if let Some(q) = parse_btw(&text).filter(|_| side) {
+            if q.is_empty() {
+                self.notice = Some("Type your question after /btw.".into());
+                return;
+            }
+            let q = q.to_string();
+            self.side_ask(&id, None, &q);
+            self.prompt.clear();
+            return;
+        }
         let mut params = json!({"session_id": id, "prompt_id": uuid::Uuid::new_v4().to_string(), "text": text});
         if !ids.is_empty() {
             params["attachments"] = json!(ids);
@@ -668,6 +860,49 @@ impl App {
             if let Some(b) = &self.bridge {
                 b.send(crate::bridge::ToHost::Upload { local_id, path: p.clone() });
             }
+        }
+        self.prompt.focused = true;
+    }
+
+    /// A paste into the composer: files and images become attachments. False lets the editor
+    /// paste the text.
+    pub fn paste_into_composer(&mut self, content: &rune::ClipboardContent) -> bool {
+        match paste_as(content) {
+            PasteAs::Text => false,
+            PasteAs::Files(paths) => {
+                self.attach(&paths);
+                true
+            }
+            PasteAs::Image(png) => {
+                self.attach_bytes(png, "image/png");
+                true
+            }
+        }
+    }
+
+    /// Attach a pasted image to the current session's next message.
+    pub fn attach_bytes(&mut self, data: Vec<u8>, mime: &str) {
+        let Screen::Session(id) = self.screen.clone() else { return };
+        if !self.host_has_media() {
+            self.notice = Some("Update agenthostd to attach files.".into());
+            return;
+        }
+        if data.len() as u64 > MAX_ATTACHMENT_BYTES {
+            self.notice = Some(format!("That image is too large: files can be up to {} MB.", MAX_ATTACHMENT_BYTES / (1024 * 1024)));
+            return;
+        }
+        let list = self.files.entry(id).or_default();
+        if list.len() >= MAX_ATTACHMENTS_PER_PROMPT {
+            self.notice = Some(format!("A message can carry up to {MAX_ATTACHMENTS_PER_PROMPT} files."));
+            return;
+        }
+        let taken: Vec<&str> = list.iter().map(|f| f.name.as_str()).collect();
+        let name = pasted_image_name(&taken);
+        let local_id = self.next_local_id;
+        self.next_local_id += 1;
+        list.push(PendingFile { local_id, name: name.clone(), state: FileState::Uploading });
+        if let Some(b) = &self.bridge {
+            b.send(crate::bridge::ToHost::UploadBytes { local_id, name, mime: mime.to_string(), data });
         }
         self.prompt.focused = true;
     }
@@ -849,7 +1084,49 @@ impl App {
                 }
                 (Tag::ConnectorAdded, Err(e)) => self.error = Some(format!("Could not add the server: {}", e.message)),
                 (Tag::Devices, Ok(v)) => self.devices = parse(v).unwrap_or_default(),
-                (Tag::Approvals, Ok(v)) => self.approvals = parse(v).unwrap_or_default(),
+                (Tag::Approvals, Ok(v)) => {
+                    self.approvals = parse(v).unwrap_or_default();
+                    self.toast_approvals();
+                }
+                (Tag::SideAsked(sess), Ok(v)) => {
+                    self.side_pending.remove(&sess);
+                    if let Some(r) = parse::<SessionSideAskResult>(v) {
+                        self.side_closed.remove(&r.side_id);
+                        self.side_tab.insert(sess, r.side_id);
+                        self.side_open = true;
+                    }
+                }
+                (Tag::SideAsked(sess), Err(e)) => {
+                    self.side_pending.remove(&sess);
+                    self.error = Some(format!("The side question failed: {}", e.message));
+                }
+                (Tag::SessionUpdated, Ok(v)) => {
+                    if let Some(x) = parse::<Session>(v) {
+                        self.upsert_session(x);
+                    }
+                }
+                (Tag::SessionUpdated, Err(e)) => self.error = Some(format!("Could not change the setting: {}", e.message)),
+                (Tag::ConnectorSearch(q), Ok(v)) => {
+                    if q == self.search_query {
+                        self.searching = false;
+                        self.suggestions = parse(v).unwrap_or_default();
+                    }
+                }
+                (Tag::ConnectorSearch(q), Err(e)) => {
+                    if q == self.search_query {
+                        self.searching = false;
+                        self.suggestions.clear();
+                        self.search_error = Some(e.message);
+                    }
+                }
+                (Tag::Rename(id), Ok(_)) => {
+                    if self.renaming.as_deref() == Some(id.as_str()) {
+                        self.renaming = None;
+                    }
+                    self.rename_error = None;
+                    self.refresh(Refresh::Connectors);
+                }
+                (Tag::Rename(id), Err(e)) => self.rename_error = Some((id, e.message)),
                 (Tag::PairStart, Ok(v)) => {
                     if let Some(p) = parse::<PairStartResult>(v) {
                         self.pairing = Some(Pairing { pairing_id: p.pairing_id, qr: p.qr_payload, expires_at: p.expires_at, ..Default::default() });
@@ -936,7 +1213,8 @@ impl App {
         self.call(Tag::SignIn(id.into()), m::CONNECTOR_SIGN_IN, json!({"connector_id": id}));
     }
 
-    /// Add the server in the URL field; names come from the host.
+    /// Add the server in the URL field (and the name, if one was typed). The host works out
+    /// how it signs in; OAuth then opens the browser.
     pub fn add_connector(&mut self) {
         let mut url = self.conn_url.text.trim().to_string();
         if url.is_empty() {
@@ -946,16 +1224,323 @@ impl App {
             url = format!("https://{url}");
         }
         self.error = None;
-        let token = self.conn_token.text.trim().to_string();
+        let name = self.conn_name.text.trim().to_string();
         let mut params = json!({"url": url});
-        if !token.is_empty() {
-            params["auth"] = json!("bearer");
-            params["token"] = json!(token);
+        if !name.is_empty() {
+            params["name"] = json!(name);
         }
         self.call(Tag::ConnectorAdded, m::CONNECTOR_ADD, params);
         self.conn_url.clear();
-        self.conn_token.clear();
+        self.conn_name.clear();
+        self.close_add_connector();
+    }
+
+    /// Add a server picked from the catalog search.
+    pub fn add_suggestion(&mut self, sug: &ConnectorSuggestion) {
+        if !suggestion_supported(sug) {
+            return;
+        }
+        self.error = None;
+        self.call(Tag::ConnectorAdded, m::CONNECTOR_ADD, json!({"url": sug.url, "name": sug.name}));
+        self.close_add_connector();
+    }
+
+    /// Open the add-connector form on its search.
+    pub fn open_add_connector(&mut self) {
+        self.adding_connector = true;
+        self.add_manual = false;
+        self.conn_search.focused = true;
+    }
+
+    pub fn close_add_connector(&mut self) {
         self.adding_connector = false;
+        self.add_manual = false;
+        self.conn_search.clear();
+        self.suggestions.clear();
+        self.search_query.clear();
+        self.search_due = None;
+        self.searching = false;
+        self.search_error = None;
+    }
+
+    /// The search field changed: search once typing pauses.
+    pub fn search_edited(&mut self, now: std::time::Instant) {
+        let q = self.conn_search.text.trim().to_string();
+        self.search_error = None;
+        if q.is_empty() {
+            self.search_due = None;
+            self.searching = false;
+            self.suggestions.clear();
+            self.search_query.clear();
+            return;
+        }
+        self.search_due = Some(now + SEARCH_DEBOUNCE);
+    }
+
+    /// Run the search if it's due. The time left otherwise, for the next wake.
+    pub fn search_if_due(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
+        let due = self.search_due?;
+        if now < due {
+            return Some(due - now);
+        }
+        self.search_due = None;
+        let q = self.conn_search.text.trim().to_string();
+        if q.is_empty() || (q == self.search_query && !self.searching && self.search_error.is_none() && !self.suggestions.is_empty()) {
+            return None;
+        }
+        self.search_query = q.clone();
+        self.searching = true;
+        self.call(Tag::ConnectorSearch(q.clone()), m::CONNECTOR_SEARCH, json!({"query": q}));
+        None
+    }
+
+    /// Rename a connector from its detail; errors show by the field.
+    pub fn rename_connector(&mut self, id: &str) {
+        let n = self.rename.text.trim().to_string();
+        let current = self.connectors.iter().find(|c| c.connector_id == id).map(|c| c.name.clone());
+        if n.is_empty() {
+            self.rename_error = Some((id.to_string(), "A connector needs a name.".into()));
+            return;
+        }
+        self.rename_error = None;
+        if current.as_deref() == Some(n.as_str()) {
+            self.renaming = None;
+            return;
+        }
+        self.call(Tag::Rename(id.to_string()), m::CONNECTOR_UPDATE, json!({"connector_id": id, "name": n}));
+    }
+
+    pub fn start_rename(&mut self, id: &str) {
+        let name = self.connectors.iter().find(|c| c.connector_id == id).map(|c| c.name.clone()).unwrap_or_default();
+        self.renaming = Some(id.to_string());
+        self.rename_error = None;
+        let len = name.len();
+        self.rename = TextEdit::new(name);
+        self.rename.set_selection(0, len);
+        self.rename.focused = true;
+    }
+
+    // ---- side questions -------------------------------------------------------------------
+
+    /// Ask a side question: a new side conversation, or a follow-up in `side_id`.
+    pub fn side_ask(&mut self, session: &str, side_id: Option<&str>, text: &str) {
+        let mut params = json!({"session_id": session, "text": text});
+        if let Some(sid) = side_id {
+            params["side_id"] = json!(sid);
+        } else {
+            self.side_pending.insert(session.to_string(), text.to_string());
+        }
+        self.side_open = true;
+        self.call(Tag::SideAsked(session.to_string()), m::SESSION_SIDE_ASK, params);
+    }
+
+    /// The side pane's follow-up field: ask in the selected side conversation.
+    pub fn side_follow_up(&mut self) {
+        let Screen::Session(id) = self.screen.clone() else { return };
+        let text = self.side_prompt.text.trim().to_string();
+        let Some(tab) = self.side_selected(&id) else { return };
+        if text.is_empty() || self.side_threads(&id).iter().any(|t| t.side_id == tab && t.streaming()) {
+            return;
+        }
+        self.side_ask(&id, Some(&tab), &text);
+        self.side_prompt.clear();
+    }
+
+    /// A session's side conversations, from its events, in the order they started.
+    pub fn side_threads(&self, session: &str) -> Vec<SideThread> {
+        let Some(tr) = self.transcripts.get(session) else { return vec![] };
+        let mut out: Vec<SideThread> = vec![];
+        for e in &tr.events {
+            if !matches!(e.kind, EventType::SideQuestion | EventType::SideMessage | EventType::SideEnd) {
+                continue;
+            }
+            let Some(sid) = e.payload["side_id"].as_str() else { continue };
+            let i = match out.iter().position(|t| t.side_id == sid) {
+                Some(i) => i,
+                None => {
+                    out.push(SideThread { side_id: sid.to_string(), ..Default::default() });
+                    out.len() - 1
+                }
+            };
+            let th = &mut out[i];
+            let text = e.payload["text"].as_str().unwrap_or("");
+            match e.kind {
+                EventType::SideQuestion => th.turns.push(SideTurn { question: text.to_string(), ..Default::default() }),
+                EventType::SideMessage => {
+                    if th.turns.last().is_none_or(|t| t.ended) {
+                        th.turns.push(SideTurn::default());
+                    }
+                    let a = &mut th.turns.last_mut().unwrap().answer;
+                    if !a.is_empty() {
+                        a.push_str("\n\n");
+                    }
+                    a.push_str(text);
+                }
+                _ => {
+                    if let Some(t) = th.turns.last_mut() {
+                        t.ended = true;
+                        t.error = e.payload["error"].as_str().map(String::from);
+                    }
+                }
+            }
+        }
+        for th in &mut out {
+            if th.streaming() {
+                th.live = tr.side_live.get(&th.side_id).cloned().unwrap_or_default();
+            }
+        }
+        out
+    }
+
+    /// The side conversations whose tabs show here.
+    pub fn side_tabs(&self, session: &str) -> Vec<SideThread> {
+        self.side_threads(session).into_iter().filter(|t| !self.side_closed.contains(&t.side_id)).collect()
+    }
+
+    /// The selected tab: the chosen one if it's still open, else the newest.
+    pub fn side_selected(&self, session: &str) -> Option<String> {
+        let tabs = self.side_tabs(session);
+        let chosen = self.side_tab.get(session).filter(|id| tabs.iter().any(|t| &t.side_id == *id)).cloned();
+        chosen.or_else(|| tabs.last().map(|t| t.side_id.clone()))
+    }
+
+    /// The session has side conversations to show (or one being asked).
+    pub fn has_side(&self, session: &str) -> bool {
+        self.side_pending.contains_key(session) || !self.side_tabs(session).is_empty()
+    }
+
+    /// The side pane is on screen for the open session.
+    pub fn side_visible(&self) -> bool {
+        self.side_open && matches!(&self.screen, Screen::Session(id) if self.has_side(id))
+    }
+
+    /// Close a side tab here (the conversation stays in the session).
+    pub fn close_side_tab(&mut self, session: &str, side_id: &str) {
+        self.side_closed.insert(side_id.to_string());
+        if self.side_tab.get(session).map(String::as_str) == Some(side_id) {
+            self.side_tab.remove(session);
+        }
+        if !self.has_side(session) {
+            self.side_open = false;
+        }
+    }
+
+    // ---- the agent's session settings ------------------------------------------------------
+
+    /// The session's setting in this ACP category (`model`, `thought_level`).
+    pub fn config_option<'a>(sess: &'a Session, category: &str) -> Option<&'a SessionConfigOption> {
+        sess.config_options.iter().find(|o| o.category.as_deref() == Some(category) && !o.options.is_empty())
+    }
+
+    pub fn set_config(&self, session: &str, config_id: &str, value: &str) {
+        self.call(Tag::SessionUpdated, m::SESSION_SET_CONFIG, json!({"session_id": session, "config_id": config_id, "value": value}));
+    }
+
+    // ---- toasts ---------------------------------------------------------------------------
+
+    pub fn push_toast(&mut self, kind: ToastKind, text: String, action: Option<ToastAction>, now: std::time::Instant) {
+        // The same message again restarts its toast instead of stacking a twin.
+        self.toasts.retain(|t| !(t.text == text && t.kind == kind));
+        let id = self.next_toast;
+        self.next_toast += 1;
+        let since = (!self.toasts_hovered).then_some(now);
+        self.toasts.push(Toast { id, kind, text, action, shown: std::time::Duration::ZERO, since });
+        // A stack stays short.
+        while self.toasts.len() > 4 {
+            self.toasts.remove(0);
+        }
+    }
+
+    /// Messages set since the last frame (`error`, `notice`) become toasts.
+    pub fn flush_messages(&mut self, now: std::time::Instant) {
+        if let Some(e) = self.error.take() {
+            self.push_toast(ToastKind::Error, e, None, now);
+        }
+        if let Some(n) = self.notice.take() {
+            self.push_toast(ToastKind::Info, n, None, now);
+        }
+    }
+
+    /// Drop toasts whose time is up. The time until the next one goes, if any.
+    pub fn tick_toasts(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.toasts.retain(|t| t.elapsed(now) < TOAST_LIFETIME);
+        if self.toasts_hovered {
+            return None;
+        }
+        self.toasts.iter().map(|t| TOAST_LIFETIME - t.elapsed(now)).min()
+    }
+
+    /// The pointer entered or left the toasts: pause or resume their clocks.
+    pub fn hover_toasts(&mut self, inside: bool, now: std::time::Instant) {
+        if inside == self.toasts_hovered {
+            return;
+        }
+        self.toasts_hovered = inside;
+        for t in &mut self.toasts {
+            if inside {
+                t.shown = t.elapsed(now);
+                t.since = None;
+            } else {
+                t.since = Some(now);
+            }
+        }
+    }
+
+    pub fn dismiss_toast(&mut self, id: u64) {
+        self.toasts.retain(|t| t.id != id);
+        if self.toasts.is_empty() {
+            self.toasts_hovered = false;
+        }
+    }
+
+    /// A toast's button.
+    pub fn toast_action(&mut self, id: u64, tx: &mut rune::Tx) {
+        let Some(t) = self.toasts.iter().find(|t| t.id == id).cloned() else { return };
+        self.dismiss_toast(id);
+        match t.action {
+            Some(ToastAction::ShowApproval { session_id, .. }) => {
+                self.close_overlays();
+                self.open_session(&session_id);
+                tx.scroll_into_view("approval-card");
+            }
+            None => {}
+        }
+    }
+
+    /// "Claude Code wants to create issue on GitHub": an approval in a sentence.
+    pub fn approval_line(&self, a: &PendingApproval) -> String {
+        let agent = self.session(&a.session_id).map(|x| x.agent.display_name().to_string()).unwrap_or_else(|| "An agent".into());
+        match &a.summary {
+            Some(sum) => {
+                let mut cs = sum.chars();
+                let low = cs.next().map(|c| c.to_lowercase().collect::<String>() + cs.as_str()).unwrap_or_default();
+                format!("{agent} wants to {low}")
+            }
+            None => format!("{agent} wants to {} on {}", crate::session::humanize(&a.tool), a.connector_name),
+        }
+    }
+
+    /// New approvals in other sessions get a toast with Show; answered ones lose theirs.
+    fn toast_approvals(&mut self) {
+        let now = std::time::Instant::now();
+        let here = match &self.screen {
+            Screen::Session(id) => Some(id.clone()),
+            Screen::Home => None,
+        };
+        let fresh: Vec<PendingApproval> = self.approvals.iter().filter(|a| !self.toasted_approvals.contains(&a.approval_id)).cloned().collect();
+        for a in fresh {
+            self.toasted_approvals.insert(a.approval_id.clone());
+            if here.as_deref() == Some(a.session_id.as_str()) {
+                continue; // its card is right there
+            }
+            let line = self.approval_line(&a);
+            self.push_toast(ToastKind::Approval, line, Some(ToastAction::ShowApproval { session_id: a.session_id.clone(), approval_id: a.approval_id.clone() }), now);
+        }
+        let live: HashSet<&str> = self.approvals.iter().map(|a| a.approval_id.as_str()).collect();
+        self.toasts.retain(|t| match &t.action {
+            Some(ToastAction::ShowApproval { approval_id, .. }) => live.contains(approval_id.as_str()),
+            None => true,
+        });
     }
 
     /// Sign-ins that finished, one way or the other, since the last list.
@@ -1001,6 +1586,11 @@ impl App {
                 if matches!(kind, EventType::AgentMessage | EventType::TurnEnd) {
                     t.live.clear();
                 }
+                if matches!(kind, EventType::SideMessage | EventType::SideEnd) {
+                    if let Some(sid) = e.payload["side_id"].as_str() {
+                        t.side_live.remove(sid);
+                    }
+                }
                 t.events.push(e);
                 if matches!(kind, EventType::ApprovalRequested | EventType::ApprovalResolved | EventType::NetDenied) {
                     self.refresh(Refresh::Approvals);
@@ -1008,8 +1598,10 @@ impl App {
             }
             m::N_SESSION_DELTA => {
                 if let Some(d) = parse::<SessionDelta>(n.params) {
-                    if d.kind == EventType::AgentMessage {
-                        self.transcripts.entry(d.session_id).or_default().live.push_str(&d.text);
+                    match (d.kind, d.side_id) {
+                        (EventType::AgentMessage, _) => self.transcripts.entry(d.session_id).or_default().live.push_str(&d.text),
+                        (EventType::SideMessage, Some(sid)) => self.transcripts.entry(d.session_id).or_default().side_live.entry(sid).or_default().push_str(&d.text),
+                        _ => {}
                     }
                 }
             }

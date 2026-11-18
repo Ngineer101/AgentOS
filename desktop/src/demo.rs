@@ -6,6 +6,11 @@ use crate::model::{App, Conn, Menu, Pairing, Screen, Tab};
 use agenthost_proto::*;
 use serde_json::{json, Value};
 
+/// Small service icons, as the host sends them (`data:image/png;base64,…`).
+pub const ICON_LINEAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAeklEQVR42u2XwQkAIQwEU6kFWO415P3EE/GiyarIBvwpM/hYsiLVhPgk5JHeoOFdiVXwpsRq+EdiFzxLUGDmUTmWO1MCnvBhAW/4kAACrhZAwVUCSPivABquFrAKmgQ8fodBxCBiEDGI7gsi7oTXdINzqtkR5XRXPX8BH+WScw5ywDcAAAAASUVORK5CYII=";
+pub const ICON_SENTRY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAg0lEQVR42mNgQANmupH/aYkZ8AFaW47XEfSyHKsj6G05iiMGynK4I0YdQI4mXIDmDiAW0MQBpAKqOoBcQBUHEGs4uY4g2QHUVs9Aqu/JCTGqOYDcBDvqgOHjALonwgHPhoOiIBrwonhQVEaDojoeFA2S0TbhsOsbDJ6u2aDonA5U9xwA6lYz8RidE1wAAAAASUVORK5CYII=";
+pub const ICON_STRIPE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAaElEQVR42u3Xyw0AIQhFUaqwQCuxc105iWRkfuEzwE1cc3bmAaBKq53zARX3cRIhdfwUIX18QWgdPxAJSMCvAbOYAJwoYFcMwFW+AXdjATzNF+BtPgBfy+84AfYB6sPExDQzMU615vkABXZ0G2LNeaEAAAAASUVORK5CYII=";
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -79,6 +84,9 @@ fn base(s: &mut App) {
         updated_at: t - ago_ms,
         last_seq: 0,
         archived_at: None,
+        worktree: None,
+        config_options: vec![],
+        side_questions: false,
     };
     s.sessions = vec![
         sess("ses_q", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), SessionState::Idle, "What changed in Rust 1.92?", 180_000),
@@ -90,6 +98,16 @@ fn base(s: &mut App) {
     ];
     if let Some(f) = s.sessions.iter_mut().find(|x| x.session_id == "ses_5") {
         f.state_reason = Some("codex exited with status 1: model rate limit reached".into());
+    }
+    // Several sessions in one git workspace, each on a branch of its own.
+    for (id, branch) in [("ses_1", "agenthost/fix-flaky-resume"), ("ses_2", "agenthost/oauth-refresh"), ("ses_3", "agenthost/review-relay-worker")] {
+        if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == id) {
+            x.worktree = Some(SessionWorktree { path: format!("/home/nico/.local/share/agenthost/worktrees/{id}"), branch: branch.into() });
+        }
+    }
+    if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_1") {
+        x.side_questions = true;
+        x.config_options = config_options();
     }
     let archived = |id: &str, ws: &str, agent, profile: Option<&str>, title: &str, ago_ms: i64| Session {
         state: SessionState::Ended,
@@ -119,6 +137,7 @@ fn base(s: &mut App) {
             ConnectorTool { name: "merge_pull_request".into(), description: Some("Merge a pull request".into()), kind: ToolKind::Write, policy: ToolPolicy::Disabled, policy_override: Some(ToolPolicy::Disabled) },
         ],
         created_at: t,
+        icon: None,
     }];
     let sentry = |id: &str, name: &str, status: &str| Connector {
         connector_id: id.into(),
@@ -139,6 +158,7 @@ fn base(s: &mut App) {
             vec![]
         },
         created_at: t,
+        icon: Some(ICON_SENTRY.into()),
     };
     s.connectors.push(sentry("con_sw", "Sentry (work)", "ok"));
     s.connectors.push(sentry("con_sp", "Sentry (personal)", "needs_sign_in"));
@@ -157,6 +177,7 @@ fn base(s: &mut App) {
             .map(|n| ConnectorTool { name: n.to_string(), description: None, kind: ToolKind::Read, policy: ToolPolicy::Auto, policy_override: None })
             .collect(),
         created_at: t,
+        icon: None,
     });
     s.devices = vec![Device {
         device_id: "dev_1".into(),
@@ -201,6 +222,65 @@ fn base(s: &mut App) {
         relay: RelayStatus { configured: true, connected: true, url: Some("wss://relay.example.workers.dev".into()), error: None },
     });
     s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, progress: None, error: None });
+}
+
+/// Claude Code's settings as ACP reports them: a model and an effort.
+fn config_options() -> Vec<SessionConfigOption> {
+    let v = |value: &str, name: &str, d: Option<&str>| SessionConfigValue { value: value.into(), name: name.into(), description: d.map(String::from) };
+    vec![
+        SessionConfigOption {
+            id: "model".into(),
+            name: "Model".into(),
+            description: None,
+            category: Some("model".into()),
+            current_value: "opus".into(),
+            options: vec![v("default", "Default", Some("Opus for planning, Sonnet otherwise")), v("opus", "Opus 4.5", Some("The most capable")), v("sonnet", "Sonnet 4.5", Some("Fast, for everyday tasks")), v("haiku", "Haiku 4.5", Some("The fastest"))],
+        },
+        SessionConfigOption {
+            id: "effort".into(),
+            name: "Effort".into(),
+            description: Some("How long the model thinks".into()),
+            category: Some("thought_level".into()),
+            current_value: "high".into(),
+            options: vec![v("low", "Low", None), v("medium", "Medium", None), v("high", "High", None)],
+        },
+        SessionConfigOption { id: "mode".into(), name: "Mode".into(), description: None, category: Some("mode".into()), current_value: "default".into(), options: vec![v("default", "Ask", None), v("plan", "Plan", None)] },
+    ]
+}
+
+/// Two side conversations in ses_1: one answered, one still streaming.
+fn side(s: &mut App) {
+    let sid = "ses_1";
+    let t = s.transcripts.entry(sid.into()).or_default();
+    let n = t.last_seq;
+    let more = vec![
+        ev(sid, n + 1, 40_000, EventType::SideQuestion, json!({"side_id": "side_a", "text": "Why does wait_state poll instead of subscribing to events?"})),
+        ev(sid, n + 2, 46_000, EventType::SideMessage, json!({"side_id": "side_a", "text": "It predates `events.subscribe`: the helper was written when the host only had `session.get`. Polling every 50 ms is simple but racy, because the state can change and change back between polls.\n\nSubscribing would make the test **deterministic**:\n\n```rust\nlet mut sub = client.subscribe(&sid, last_seq).await?;\nwhile let Some(e) = sub.next().await { /* … */ }\n```"})),
+        ev(sid, n + 3, 46_500, EventType::SideEnd, json!({"side_id": "side_a", "stop_reason": "end_turn"})),
+        ev(sid, n + 4, 50_000, EventType::SideQuestion, json!({"side_id": "side_b", "text": "Is the same race in the iOS client's reconnect?"})),
+    ];
+    t.events.extend(more);
+    t.last_seq = n + 4;
+    t.side_live.insert("side_b".into(), "Probably not. The iOS client resubscribes from its last `seq` on every reconnect, so a state change that happens".into());
+    s.side_open = true;
+    s.side_tab.insert(sid.into(), "side_b".into());
+}
+
+fn suggestions() -> Vec<ConnectorSuggestion> {
+    let sug = |domain: &str, name: &str, d: &str, url: &str, auth: &str, icon: Option<&str>| ConnectorSuggestion {
+        domain: domain.into(),
+        name: name.into(),
+        description: Some(d.into()),
+        url: url.into(),
+        auth: auth.into(),
+        icon: icon.map(String::from),
+    };
+    vec![
+        sug("linear.app", "Linear", "Find, create and update issues, projects and comments", "https://mcp.linear.app/mcp", "oauth", Some(ICON_LINEAR)),
+        sug("sentry.io", "Sentry", "Search issues and events, and look into errors", "https://mcp.sentry.dev/mcp", "oauth", Some(ICON_SENTRY)),
+        sug("stripe.com", "Stripe", "Payments, customers and subscriptions", "https://mcp.stripe.com", "api_key", Some(ICON_STRIPE)),
+        sug("deepwiki.com", "DeepWiki", "Ask questions about any public GitHub repository", "https://mcp.deepwiki.com/mcp", "none", None),
+    ]
 }
 
 fn agent(kind: AgentKind, name: &str, version: &str, id: Option<&str>, profile: Option<&str>, dir: Option<&str>, ok: bool) -> AgentStatus {
@@ -440,6 +520,98 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("offline", |s| {
         session(s);
         s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
+    }),
+    ("side-panel", |s| {
+        session(s);
+        s.approvals.clear();
+        side(s);
+    }),
+    ("side-panel-pending", |s| {
+        session(s);
+        s.approvals.clear();
+        side(s);
+        s.side_pending.insert("ses_1".into(), "Which tests touch the relay?".into());
+    }),
+    ("composer-pickers", |s| {
+        session(s);
+        s.approvals.clear();
+        s.prompt = rune::TextEdit::new("Now make the timeout configurable");
+    }),
+    ("composer-picker-open", |s| {
+        session(s);
+        s.approvals.clear();
+        s.menu = Some(Menu::Config("model".into()));
+    }),
+    ("composer-slash", |s| {
+        session(s);
+        s.approvals.clear();
+        s.prompt = rune::TextEdit::new("/b");
+        s.prompt.focused = true;
+    }),
+    ("composer-paste", |s| {
+        use crate::model::{FileState, PendingFile};
+        session(s);
+        s.approvals.clear();
+        s.files.insert(
+            "ses_1".into(),
+            vec![
+                PendingFile { local_id: 1, name: "Pasted image.png".into(), state: FileState::Ready(Attachment { attachment_id: "att_p1".into(), name: "Pasted image.png".into(), mime: "image/png".into(), size: 284_102 }) },
+                PendingFile { local_id: 2, name: "Pasted image 2.png".into(), state: FileState::Uploading },
+            ],
+        );
+    }),
+    ("connector-search", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.adding_connector = true;
+        s.conn_search = rune::TextEdit::new("issues");
+        s.search_query = "issues".into();
+        s.suggestions = suggestions();
+    }),
+    ("connector-search-empty", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.adding_connector = true;
+        s.conn_search.focused = true;
+    }),
+    ("connector-add-url", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.adding_connector = true;
+        s.add_manual = true;
+        s.conn_url = rune::TextEdit::new("https://mcp.example.com/mcp");
+        s.conn_name = rune::TextEdit::new("project-x");
+    }),
+    ("connector-rename", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_sw".into());
+        s.renaming = Some("con_sw".into());
+        s.rename = rune::TextEdit::new("work");
+        s.rename.focused = true;
+    }),
+    ("connector-rename-error", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_sw".into());
+        s.renaming = Some("con_sw".into());
+        s.rename = rune::TextEdit::new("GitHub");
+        s.rename_error = Some(("con_sw".into(), "Another connector is already called GitHub: its tools would clash.".into()));
+    }),
+    ("connector-detail", |s| {
+        base(s);
+        s.settings = Some(Tab::Connectors);
+        s.sel_conn = Some("con_sw".into());
+    }),
+    ("toasts", |s| {
+        session(s);
+        s.screen = Screen::Session("ses_2".into());
+        let now = std::time::Instant::now();
+        s.push_toast(crate::model::ToastKind::Info, "Signed in to Sentry (work). 2 tools available.".into(), None, now);
+        s.push_toast(crate::model::ToastKind::Error, "Send prompt failed: the session is not running".into(), None, now);
+        let a = s.approvals[0].clone();
+        let line = s.approval_line(&a);
+        s.push_toast(crate::model::ToastKind::Approval, line, Some(crate::model::ToastAction::ShowApproval { session_id: a.session_id, approval_id: a.approval_id }), now);
     }),
     ("offline-home", |s| {
         base(s);

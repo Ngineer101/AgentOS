@@ -346,7 +346,7 @@ fn general(s: &App, t: &Theme) -> El {
                     .min_w(0.0)
                     .gap(2.0)
                     .child(text("AgentHost").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
-                    .child(t.small(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)).wrap()),
+                    .help(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)),
             )
             .child(t.button("Re-run Checks", Btn::Default, None, |s| s.call(Tag::HostInfo, m::HOST_CHECK, json!({}))).key("rerun")),
     );
@@ -980,7 +980,17 @@ fn project_roots(s: &App, t: &Theme) -> El {
 // Connectors
 // ---------------------------------------------------------------------------
 
+/// A service's icon from its `data:` URL, clipped to the badge's rounded square.
+fn icon_badge(url: Option<&str>, size: f32) -> Option<El> {
+    let px = crate::brand::data_url_pixels(url?)?;
+    let r = (size * 0.24).round();
+    Some(el().size(size, size).radius(r).clip_rounded(r).pixels(&px))
+}
+
 fn conn_badge(t: &Theme, c: &Connector, size: f32) -> El {
+    if let Some(b) = icon_badge(c.icon.as_deref(), size) {
+        return b;
+    }
     if c.name.to_lowercase().contains("github") || c.url.contains("github") {
         return row().size(size, size).radius((size * 0.24).round()).center().fill(rune::color::hex("#24292f").unwrap_or(Color::BLACK)).child(icon(&ic::GITHUB, size * 0.6).color(Color::WHITE));
     }
@@ -1013,8 +1023,12 @@ fn connectors(s: &App, t: &Theme) -> El {
         let detail = text(st).font(t.font_small()).color(if warn { t.warn } else if on && mac { Color::WHITE.alpha(0.8) } else { t.text2 }).truncate();
         let id = c.connector_id.clone();
         list = list.child(source_row(t, format!("conn-{}", c.connector_id), on, conn_badge(t, c, 22.0), &c.name, detail, move |s| {
+            if s.sel_conn.as_deref() != Some(id.as_str()) {
+                s.renaming = None;
+                s.rename_error = None;
+            }
             s.sel_conn = Some(id.clone());
-            s.adding_connector = false;
+            s.close_add_connector();
         }));
     }
     if s.connectors.is_empty() {
@@ -1027,10 +1041,7 @@ fn connectors(s: &App, t: &Theme) -> El {
         }) as Box<dyn Fn(&mut App)>
     });
     let mut left = col().w_full().child(list);
-    let start_add = |s: &mut App, _: &mut Tx| {
-        s.adding_connector = true;
-        s.conn_url.focused = true;
-    };
+    let start_add = |s: &mut App, _: &mut Tx| s.open_add_connector();
     if mac {
         left = left.child(t.plus_minus("Add a Connector", start_add, remove, ""));
     } else {
@@ -1052,26 +1063,219 @@ fn connectors(s: &App, t: &Theme) -> El {
 }
 
 fn add_connector(s: &App, t: &Theme) -> El {
+    if s.add_manual {
+        return add_by_url(s, t);
+    }
+    let mac = t.mac();
+    let input = rune::text_input(&s.conn_search, TextStyle::new(t.fs, 400.0).lh((t.fs * 1.3).round()))
+        .single_line()
+        .key("conn-search-field")
+        .label("Search MCP servers")
+        .grow(1.0)
+        .min_w(0.0)
+        .color(t.text)
+        .placeholder("Linear, Sentry, Notion…", t.text3)
+        .caret(t.text, t.accent.alpha(0.35))
+        .on_edit(|s: &mut App| &mut s.conn_search)
+        .on_input_change(|s: &mut App, tx: &mut Tx| {
+            s.search_edited(std::time::Instant::now());
+            tx.wake_after(crate::model::SEARCH_DEBOUNCE);
+        })
+        .on_submit(|s: &mut App, tx: &mut Tx| {
+            // Return searches now.
+            if !s.conn_search.text.trim().is_empty() {
+                s.search_due = Some(std::time::Instant::now());
+                tx.wake_after(std::time::Duration::ZERO);
+            }
+        });
+    let mut field = row()
+        .key("conn-search")
+        .w_full()
+        .h(if mac { 26.0 } else { 36.0 })
+        .px(if mac { 8.0 } else { 10.0 })
+        .gap(if mac { 6.0 } else { 8.0 })
+        .center_y()
+        .radius(if mac { 7.0 } else { 7.0 })
+        .fill(t.field)
+        .child(icon(&ic::SEARCH, if mac { 12.0 } else { 14.0 }).color(t.text2))
+        .child(input);
+    if mac {
+        field = field.border(0.5, t.field_border);
+    }
+    if !s.conn_search.text.is_empty() {
+        field = field.child(row().role("button").label("Clear search").on_press(|s: &mut App| {
+            s.conn_search.replace_text("");
+            s.search_edited(std::time::Instant::now());
+        }).child(icon(&ic::XMARK_CIRCLE, 13.0).color(t.text3)));
+    }
+    if s.conn_search.focused {
+        field = field.box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() });
+    }
+
+    let q = s.conn_search.text.trim();
+    let mut results: Vec<El> = vec![];
+    let status: Option<El> = if q.is_empty() {
+        Some(footnote(t, "Search the integrations.sh catalog of remote MCP servers."))
+    } else if s.searching || s.search_due.is_some() || s.search_query != q {
+        Some(row().key("conn-searching").gap(6.0).center_y().child(icon(&ic::SPINNER, 12.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9))).child(t.small("Searching…")))
+    } else if let Some(e) = &s.search_error {
+        Some(text(format!("Couldn't search the catalog: {e}")).font(t.font_small()).color(t.danger).wrap())
+    } else if s.suggestions.is_empty() {
+        Some(t.small(format!("No servers match \u{201c}{q}\u{201d}. Enter its URL instead.")).wrap())
+    } else {
+        None
+    };
+    for (i, sug) in s.suggestions.iter().enumerate().filter(|_| status.is_none()) {
+        results.push(suggestion_row(t, i, sug));
+    }
+    let manual = text("Enter a URL Instead…")
+        .key("conn-manual")
+        .font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0))
+        .color(t.accent_text)
+        .role("button")
+        .label("Enter a URL instead")
+        .focusable(true)
+        .on_press(|s: &mut App| {
+            s.add_manual = true;
+            // Carry over what was typed when it looks like an address.
+            let q = s.conn_search.text.trim().to_string();
+            if q.contains('.') && !q.contains(' ') {
+                s.conn_url.replace_text(&q);
+            }
+            s.conn_url.focused = true;
+        });
+    let mut c = col().key("add-connector").w_full().gap(8.0).child(text("Add a Connector").font(TextStyle::new(15.0, t.w_bold)).color(t.text)).child(field);
+    if let Some(st) = status {
+        c = c.child(st.pt(2.0));
+    }
+    if !results.is_empty() {
+        c = c.child(t.group(results, if mac { 46.0 } else { 0.0 }).key("conn-results"));
+    }
+    c.child(footnote(t, "Servers that need an account open your browser to sign in. New connectors are on in every workspace. For two accounts on one service, add it twice and rename each (work, personal)."))
+        .child(row().w_full().gap(8.0).center_y().child(manual).child(el().grow(1.0)).child(t.button("Cancel", Btn::Default, None, |s| s.close_add_connector())))
+}
+
+/// One catalog result: icon, name and domain, one line of description. Ones that need an API
+/// key are shown but can't be picked yet.
+fn suggestion_row(t: &Theme, i: usize, sug: &ConnectorSuggestion) -> El {
+    let mac = t.mac();
+    let ok = crate::model::suggestion_supported(sug);
+    let size = if mac { 28.0 } else { 32.0 };
+    let badge = icon_badge(sug.icon.as_deref(), size).unwrap_or_else(|| {
+        let palette = ["#4b3a8c", "#0f766e", "#9a3412", "#1d4ed8", "#7e22ce"];
+        let n = sug.name.bytes().map(|b| b as usize).sum::<usize>() % palette.len();
+        t.badge_letter(sug.name.chars().next().unwrap_or('?').to_ascii_uppercase(), rune::color::hex(palette[n]).unwrap_or(Color::BLACK), Color::WHITE, size)
+    });
+    let detail = if ok { sug.description.clone().unwrap_or_else(|| sug.url.clone()) } else { "Needs an API key — not supported yet".to_string() };
+    let names = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(1.0)
+        .child(row().gap(6.0).center_y().min_w(0.0).child(t.strong(sug.name.clone()).truncate().shrink()).child(t.faint(sug.domain.clone()).truncate().shrink()))
+        .child(text(detail).font(t.font_small()).color(if ok { t.text2 } else { t.text3 }).truncate());
+    let mut r = row()
+        .key(format!("sug-{i}"))
+        .w_full()
+        .gap(if mac { 10.0 } else { 12.0 })
+        .px(if mac { 10.0 } else { 14.0 })
+        .py(if mac { 7.0 } else { 10.0 })
+        .center_y()
+        .role("button")
+        .label(format!("Add {}", sug.name))
+        .help(sug.url.clone())
+        .child(badge)
+        .child(names);
+    if ok {
+        let sg = sug.clone();
+        r = r.focusable(true).hover(Color::WHITE.alpha(0.04)).on_press(move |s: &mut App| s.add_suggestion(&sg)).child(t.small_button("Add", {
+            let sg = sug.clone();
+            move |s| s.add_suggestion(&sg)
+        }));
+    } else {
+        r = r.disabled(true).opacity(0.55);
+    }
+    r
+}
+
+/// Add by address: the URL and an optional name. How it signs in is the host's to find out.
+fn add_by_url(s: &App, t: &Theme) -> El {
     let w = if t.mac() { 300.0 } else { 320.0 };
     let rows = vec![
         form_row(t, "Server URL", Some("A remote MCP server".into()), row().w(w).child(t.field_submit(&s.conn_url, "https://mcp.sentry.dev/mcp", |s| &mut s.conn_url, |s: &mut App, _: &mut Tx| s.add_connector()))),
-        form_row(t, "Token", Some("Optional: for servers that take a bearer token".into()), row().w(w).child(t.field(&s.conn_token, "Bearer token", |s| &mut s.conn_token))),
+        form_row(t, "Name", Some("Optional; agents see it in tool names".into()), row().w(w).child(t.field_submit(&s.conn_name, "e.g. work", |s| &mut s.conn_name, |s: &mut App, _: &mut Tx| s.add_connector()))),
     ];
+    let back = text("Search Instead")
+        .font(TextStyle::new(if t.mac() { 12.0 } else { 14.0 }, 400.0))
+        .color(t.accent_text)
+        .role("button")
+        .label("Search the catalog instead")
+        .focusable(true)
+        .on_press(|s: &mut App| {
+            s.add_manual = false;
+            s.conn_search.focused = true;
+        });
     col()
         .key("add-connector")
         .w_full()
         .gap(8.0)
         .child(text("Add a Connector").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
         .child(t.group(rows, 12.0))
-        .child(footnote(t, "If the server needs an account, your browser opens so you can sign in. New connectors are on in every workspace. For two accounts on one service (work and personal), add it twice and rename each."))
+        .child(footnote(t, "If the server needs an account, your browser opens so you can sign in."))
         .child(
             row()
                 .w_full()
                 .gap(8.0)
+                .center_y()
+                .child(back)
                 .child(el().grow(1.0))
-                .child(t.button("Cancel", Btn::Default, None, |s| s.adding_connector = false))
-                .child(t.button("Add", Btn::Primary, None, |s| s.add_connector()).key("add-connector-button")),
+                .child(t.button("Cancel", Btn::Default, None, |s| s.close_add_connector()))
+                .child(t.button("Add", Btn::Primary, None, |s| s.add_connector()).key("add-connector-button").default_button()),
         )
+}
+
+/// Renaming a connector in place: Return renames, Escape cancels, the host's refusal shows
+/// under it.
+fn rename_field(s: &App, c: &Connector, t: &Theme) -> El {
+    let mac = t.mac();
+    let id = c.connector_id.clone();
+    let idk = id.clone();
+    let input = rune::text_input(&s.rename, TextStyle::new(t.fs, 400.0).lh((t.fs * 1.3).round()))
+        .single_line()
+        .key("conn-rename-field")
+        .label(format!("Name of {}", c.name))
+        .grow(1.0)
+        .min_w(0.0)
+        .color(t.text)
+        .placeholder("e.g. work", t.text3)
+        .caret(t.text, t.accent.alpha(0.35))
+        .on_edit(|s: &mut App| &mut s.rename)
+        .on_submit(move |s: &mut App, _: &mut Tx| s.rename_connector(&idk))
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, _: &mut Tx| {
+            if ev.key == rune::Key::Escape {
+                s.renaming = None;
+                s.rename_error = None;
+                return true;
+            }
+            false
+        });
+    let failed = s.rename_error.as_ref().is_some_and(|(cid, _)| *cid == c.connector_id);
+    let mut f = row().h(if mac { 24.0 } else { 34.0 }).w(if mac { 220.0 } else { 240.0 }).px(if mac { 7.0 } else { 10.0 }).center_y().radius(if mac { 5.0 } else { 7.0 }).fill(t.field).child(input);
+    if mac {
+        f = f.border(0.5, if failed { t.danger } else { t.field_border });
+    }
+    f = f.box_shadow(rune::Shadow { spread: 3.0, color: if failed { t.danger.alpha(0.4) } else { t.focus }, ..Default::default() });
+    let idr = id.clone();
+    row()
+        .key("conn-renaming")
+        .gap(8.0)
+        .center_y()
+        .child(conn_badge(t, c, if mac { 26.0 } else { 30.0 }))
+        .child(f)
+        .child(t.small_button("Cancel", |s| {
+            s.renaming = None;
+            s.rename_error = None;
+        }))
+        .child(t.button("Rename", Btn::Primary, None, move |s| s.rename_connector(&idr)).key("conn-rename-save").h(if mac { 22.0 } else { 34.0 }))
 }
 
 fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
@@ -1080,27 +1284,28 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
     let signing = s.signing_in.get(&c.connector_id);
     let renaming = s.renaming.as_deref() == Some(c.connector_id.as_str());
     let title: El = if renaming {
-        let idn = id.clone();
-        row().w(260.0).child(t.field_submit(&s.rename, "e.g. Sentry (work)", |s| &mut s.rename, move |s: &mut App, _: &mut Tx| {
-            let n = s.rename.text.trim().to_string();
-            if !n.is_empty() {
-                s.act("Rename connector", m::CONNECTOR_UPDATE, json!({"connector_id": idn, "name": n}), Refresh::Connectors);
-            }
-            s.renaming = None;
-        }))
+        rename_field(s, c, t)
     } else {
-        let (idr, nm) = (id.clone(), c.name.clone());
-        text(c.name.clone())
-            .font(TextStyle::new(15.0, t.w_bold))
-            .color(t.text)
-            .role("button")
-            .label(format!("Rename {}", c.name))
-            .help("Double-click to rename")
-            .on_double_press(move |s: &mut App| {
-                s.renaming = Some(idr.clone());
-                s.rename = rune::TextEdit::new(nm.clone());
-                s.rename.focused = true;
-            })
+        let idr = id.clone();
+        let idb = id.clone();
+        row()
+            .gap(10.0)
+            .center_y()
+            .min_w(0.0)
+            .child(conn_badge(t, c, if mac { 26.0 } else { 30.0 }))
+            .child(
+                text(c.name.clone())
+                    .key("conn-name")
+                    .font(TextStyle::new(15.0, t.w_bold))
+                    .color(t.text)
+                    .truncate()
+                    .shrink()
+                    .role("button")
+                    .label(format!("Rename {}", c.name))
+                    .help("Double-click to rename")
+                    .on_double_press(move |s: &mut App| s.start_rename(&idr)),
+            )
+            .child(t.small_button("Rename…", move |s| s.start_rename(&idb)).key("conn-rename"))
     };
     let mut actions = row().gap(8.0).center_y();
     match signing {
@@ -1126,7 +1331,7 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
     let mut d = col()
         .w_full()
         .gap(if mac { 6.0 } else { 10.0 })
-        .child(row().w_full().gap(10.0).items_start().child(col().grow(1.0).min_w(0.0).gap(4.0).child(title).child(t.mono(clip(c.url.trim_start_matches("https://"), 60)).color(t.text2))).child(actions));
+        .child(row().w_full().gap(10.0).items_start().child(col().grow(1.0).min_w(0.0).gap(4.0).child(title).child(t.mono(clip(c.url.trim_start_matches("https://"), 60)).color(t.text2))).child(if renaming { el() } else { actions.flex_wrap().max_w(240.0).justify_end() }));
     if let Some(link) = signing.filter(|l| !l.is_empty()) {
         d = d.child(footnote(t, "Finish signing in in your browser. This updates by itself when you're done. If no browser opened, open this link:")).child(t.mono_small(link.clone()));
     } else if c.status == "error" {
@@ -1134,7 +1339,16 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
             d = d.child(text(det.clone()).font(t.font_small()).color(t.danger).wrap());
         }
     }
-    d = d.child(t.faint(format!("Agents see its tools as {}__…", connector_slug(&c.name))));
+    if renaming {
+        if let Some((_, why)) = s.rename_error.as_ref().filter(|(cid, _)| *cid == c.connector_id) {
+            d = d.child(text(why.clone()).key("rename-error").font(t.font_small()).color(t.danger).wrap());
+        }
+        let new = s.rename.text.trim();
+        let slug = connector_slug(if new.is_empty() { &c.name } else { new });
+        d = d.child(t.faint(format!("Sessions started after the rename see its tools as {slug}__tool. Running sessions keep {}__tool.", connector_slug(&c.name))).wrap());
+    } else {
+        d = d.child(t.faint(format!("Agents see its tools as {}__tool. A new name applies to sessions started afterwards.", connector_slug(&c.name))).wrap());
+    }
     // Defaults.
     let default_row = |label: &str, which: &'static str, p: ToolPolicy| {
         let key = format!("pol-{}-{which}", c.connector_id);

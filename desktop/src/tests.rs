@@ -376,10 +376,8 @@ fn an_approval_waits_inline_and_the_approve_shortcut_runs_the_tool() {
     let mut app = connect(&socket);
     let mut tx = rune::Tx::default();
 
-    // Add the server as Settings › Connectors does: URL and a bearer token.
-    app.conn_url.replace_text(&server.url);
-    app.conn_token.replace_text("s3cret-desktop-token");
-    app.add_connector();
+    // The app no longer offers bearer tokens; this test server needs one, so add it directly.
+    app.call(bridge::Tag::ConnectorAdded, agenthost_proto::methods::CONNECTOR_ADD, serde_json::json!({"url": server.url, "auth": "bearer", "token": "s3cret-desktop-token"}));
     pump(&mut app, |a| a.connectors.iter().any(|c| c.status == "ok" && !c.tools.is_empty()));
     let conn = app.connectors[0].clone();
     assert_eq!(app.sel_conn.as_deref(), Some(conn.connector_id.as_str()));
@@ -540,3 +538,228 @@ fn archiving_and_default_logins() {
     pump(&mut app, |a| !a.sessions.iter().any(|s| s.session_id == first));
     assert!(app.error.is_none(), "{:?}", app.error);
 }
+
+fn demo(scene: &str) -> model::App {
+    let mut app = model::init();
+    (crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1)(&mut app);
+    app
+}
+
+#[test]
+fn btw_parses_only_the_command() {
+    use model::parse_btw;
+    assert_eq!(parse_btw("/btw why is it slow?"), Some("why is it slow?"));
+    assert_eq!(parse_btw("  /btw   spaced  "), Some("spaced"));
+    assert_eq!(parse_btw("/btw"), Some(""));
+    assert_eq!(parse_btw("/btwx no"), None);
+    assert_eq!(parse_btw("tell me /btw later"), None);
+    assert_eq!(model::slash_suggestions("/b", true), vec![("/btw", "Ask a side question without interrupting")]);
+    assert!(model::slash_suggestions("/b", false).is_empty(), "only for agents that answer side questions");
+    assert!(model::slash_suggestions("/btw why", true).is_empty());
+    assert!(model::slash_suggestions("/x", true).is_empty());
+}
+
+#[test]
+fn btw_asks_on_the_side_and_opens_the_pane() {
+    let mut app = demo("composer-pickers");
+    app.prompt.replace_text("/btw which tests touch the relay?");
+    app.send_prompt();
+    assert!(app.prompt.text.is_empty());
+    assert_eq!(app.side_pending.get("ses_1").map(String::as_str), Some("which tests touch the relay?"));
+    assert!(app.side_open && app.side_visible());
+    // An empty side question asks for one instead of sending.
+    app.prompt.replace_text("/btw");
+    app.send_prompt();
+    assert!(app.notice.is_some());
+    // A reply names the side conversation and selects its tab.
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::SideAsked("ses_1".into()), result: Ok(serde_json::json!({"side_id": "side_z"})) });
+    assert!(app.side_pending.is_empty());
+    assert_eq!(app.side_tab.get("ses_1").map(String::as_str), Some("side_z"));
+    // Agents without side questions get the text as a normal prompt (no side ask).
+    let mut app = demo("composer-pickers");
+    app.screen = Screen::Session("ses_2".into());
+    app.prompt.replace_text("/btw hi");
+    app.send_prompt();
+    assert!(app.side_pending.is_empty());
+}
+
+#[test]
+fn side_threads_come_from_events_and_deltas() {
+    let mut app = demo("side-panel");
+    let threads = app.side_threads("ses_1");
+    assert_eq!(threads.len(), 2);
+    assert_eq!(threads[0].title(), "Why does wait_state poll instead of subscribing to events?");
+    assert!(!threads[0].streaming() && threads[0].turns[0].answer.contains("deterministic"));
+    assert!(threads[1].streaming() && threads[1].live.starts_with("Probably not"));
+    // A streamed chunk lands on its side conversation, not the main reply.
+    let note = |method: &str, params: serde_json::Value| bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: method.into(), params });
+    app.apply(note(agenthost_proto::methods::N_SESSION_DELTA, serde_json::json!({"session_id": "ses_1", "kind": "side.message", "text": " in between.", "side_id": "side_b"})));
+    assert!(app.side_threads("ses_1")[1].live.ends_with("in between."));
+    assert!(app.transcripts["ses_1"].live.is_empty());
+    // The finished message replaces the stream; side.end closes the turn.
+    let seq = app.transcripts["ses_1"].last_seq;
+    for (i, (kind, payload)) in [("side.message", serde_json::json!({"side_id": "side_b", "text": "Probably not."})), ("side.end", serde_json::json!({"side_id": "side_b", "stop_reason": "end_turn"}))].into_iter().enumerate() {
+        let ev = serde_json::json!({"session_id": "ses_1", "seq": seq + 1 + i as i64, "type": kind, "payload": payload, "ts": 0});
+        app.apply(note(agenthost_proto::methods::N_EVENT, ev));
+    }
+    let th = &app.side_threads("ses_1")[1];
+    assert!(!th.streaming(), "{th:?}");
+    assert_eq!(th.turns[0].answer, "Probably not.");
+    assert!(app.transcripts["ses_1"].side_live.is_empty());
+    // Closing a tab hides it here; closing the last one hides the pane.
+    app.close_side_tab("ses_1", "side_b");
+    assert_eq!(app.side_selected("ses_1").as_deref(), Some("side_a"));
+    app.close_side_tab("ses_1", "side_a");
+    assert!(!app.side_visible() && !app.side_open);
+    assert_eq!(app.side_threads("ses_1").len(), 2, "the conversations stay");
+}
+
+#[test]
+fn toasts_expire_after_ten_seconds_but_not_while_hovered() {
+    use std::time::Duration;
+    let mut app = model::init();
+    let t0 = Instant::now();
+    app.notice = Some("Added Linear.".into());
+    app.flush_messages(t0);
+    assert!(app.notice.is_none());
+    assert_eq!(app.toasts.len(), 1);
+    assert_eq!(app.tick_toasts(t0 + Duration::from_secs(4)), Some(Duration::from_secs(6)));
+    // Under the pointer the clock stops.
+    app.hover_toasts(true, t0 + Duration::from_secs(4));
+    assert_eq!(app.tick_toasts(t0 + Duration::from_secs(30)), None);
+    assert_eq!(app.toasts.len(), 1);
+    app.hover_toasts(false, t0 + Duration::from_secs(30));
+    assert_eq!(app.tick_toasts(t0 + Duration::from_secs(35)), Some(Duration::from_secs(1)));
+    app.tick_toasts(t0 + Duration::from_secs(36));
+    assert!(app.toasts.is_empty());
+    // The same message twice is one toast; dismiss removes it.
+    app.push_toast(model::ToastKind::Error, "x".into(), None, t0);
+    app.push_toast(model::ToastKind::Error, "x".into(), None, t0);
+    assert_eq!(app.toasts.len(), 1);
+    let id = app.toasts[0].id;
+    app.dismiss_toast(id);
+    assert!(app.toasts.is_empty());
+}
+
+#[test]
+fn approvals_elsewhere_get_a_toast_with_show() {
+    let mut app = demo("home");
+    let a = PendingApproval {
+        approval_id: "apr_9".into(),
+        session_id: "ses_2".into(),
+        connector_id: "con_gh".into(),
+        connector_name: "GitHub".into(),
+        tool: "create_issue".into(),
+        arguments: serde_json::json!({}),
+        requested_at: 0,
+        expires_at: 0,
+        summary: None,
+    };
+    let reply = |v| bridge::FromHost::Reply { tag: bridge::Tag::Approvals, result: Ok(v) };
+    app.apply(reply(serde_json::json!([a])));
+    assert_eq!(app.toasts.len(), 1);
+    assert_eq!(app.toasts[0].text, "Codex wants to create issue on GitHub");
+    assert!(matches!(&app.toasts[0].action, Some(model::ToastAction::ShowApproval { session_id, .. }) if session_id == "ses_2"));
+    // Show opens the session.
+    let id = app.toasts[0].id;
+    app.toast_action(id, &mut rune::Tx::default());
+    assert_eq!(app.screen, Screen::Session("ses_2".into()));
+    // Once answered, its toast goes.
+    app.apply(reply(serde_json::json!([a])));
+    assert!(app.toasts.is_empty(), "no second toast for the same approval");
+    app.push_toast(model::ToastKind::Approval, "again".into(), Some(model::ToastAction::ShowApproval { session_id: "ses_2".into(), approval_id: "apr_9".into() }), Instant::now());
+    app.apply(reply(serde_json::json!([])));
+    assert!(app.toasts.is_empty());
+}
+
+#[test]
+fn pastes_attach_files_and_images_but_keep_text() {
+    use model::{paste_as, PasteAs};
+    use rune::{ClipboardContent, ClipboardImage};
+    let png = crate::brand::png_of_data_url(crate::demo::ICON_LINEAR).unwrap();
+    let img = ClipboardImage::from_png(png.clone()).unwrap();
+    assert_eq!(paste_as(&ClipboardContent::new("hello")), PasteAs::Text);
+    assert_eq!(paste_as(&ClipboardContent::default().with_image(img.clone())), PasteAs::Image(png.clone()));
+    // A spreadsheet's cells come with a picture of them: paste the text.
+    assert_eq!(paste_as(&ClipboardContent::new("a\tb").with_image(img.clone())), PasteAs::Text);
+    // A browser's "Copy Image".
+    assert_eq!(paste_as(&ClipboardContent::new("Logo").with_html("<img src=x>").with_image(img.clone())), PasteAs::Image(png));
+    // Finder: the files, not their names or icon.
+    let f = std::path::PathBuf::from("/tmp/report.pdf");
+    assert_eq!(paste_as(&ClipboardContent::new("report.pdf").with_image(img).with_files([f.clone()])), PasteAs::Files(vec![f]));
+    assert_eq!(model::pasted_image_name(&[]), "Pasted image.png");
+    assert_eq!(model::pasted_image_name(&["Pasted image.png", "Pasted image 2.png"]), "Pasted image 3.png");
+
+    let mut app = demo("composer-pickers");
+    let img = ClipboardImage::from_png(crate::brand::png_of_data_url(crate::demo::ICON_SENTRY).unwrap()).unwrap();
+    assert!(app.paste_into_composer(&ClipboardContent::default().with_image(img.clone())));
+    assert!(app.paste_into_composer(&ClipboardContent::default().with_image(img)));
+    let names: Vec<&str> = app.files["ses_1"].iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Pasted image.png", "Pasted image 2.png"]);
+    assert!(!app.paste_into_composer(&ClipboardContent::new("text")));
+}
+
+#[test]
+fn connector_search_waits_for_typing_to_pause() {
+    let mut app = demo("connector-search-empty");
+    let t0 = Instant::now();
+    app.conn_search.replace_text("lin");
+    app.search_edited(t0);
+    assert_eq!(app.search_if_due(t0 + Duration::from_millis(100)), Some(Duration::from_millis(200)));
+    app.conn_search.replace_text("linear");
+    app.search_edited(t0 + Duration::from_millis(200));
+    assert!(app.search_if_due(t0 + Duration::from_millis(400)).is_some(), "the timer restarted");
+    assert_eq!(app.search_if_due(t0 + Duration::from_millis(500)), None);
+    assert!(app.searching && app.search_query == "linear");
+    // A late answer for an older query is ignored.
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::ConnectorSearch("lin".into()), result: Ok(serde_json::json!([])) });
+    assert!(app.searching);
+    let sug = serde_json::json!([{"domain": "linear.app", "name": "Linear", "url": "https://mcp.linear.app/mcp", "auth": "oauth"}, {"domain": "stripe.com", "name": "Stripe", "url": "https://mcp.stripe.com", "auth": "api_key"}]);
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::ConnectorSearch("linear".into()), result: Ok(sug) });
+    assert!(!app.searching);
+    assert_eq!(app.suggestions.len(), 2);
+    assert!(model::suggestion_supported(&app.suggestions[0]) && !model::suggestion_supported(&app.suggestions[1]));
+    // An API-key server can't be added; an OAuth one closes the form.
+    let stripe = app.suggestions[1].clone();
+    app.add_suggestion(&stripe);
+    assert!(app.adding_connector);
+    let linear = app.suggestions[0].clone();
+    app.add_suggestion(&linear);
+    assert!(!app.adding_connector && app.suggestions.is_empty());
+}
+
+#[test]
+fn renaming_a_connector_shows_the_hosts_refusal() {
+    let mut app = demo("connector-detail");
+    app.start_rename("con_sw");
+    assert_eq!(app.rename.text, "Sentry (work)");
+    app.rename.replace_text("  ");
+    app.rename_connector("con_sw");
+    assert!(app.rename_error.is_some(), "an empty name is refused here");
+    app.rename.replace_text("work");
+    app.rename_connector("con_sw");
+    assert!(app.rename_error.is_none());
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::Rename("con_sw".into()), result: Err(agenthost_proto::jsonrpc::RpcError { code: -32602, message: "name taken".into(), data: None }) });
+    assert_eq!(app.rename_error, Some(("con_sw".into(), "name taken".into())));
+    assert_eq!(app.renaming.as_deref(), Some("con_sw"), "the field stays open to fix it");
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::Rename("con_sw".into()), result: Ok(serde_json::json!({})) });
+    assert!(app.renaming.is_none() && app.rename_error.is_none());
+    assert_eq!(connector_slug("project-x"), "project_x");
+}
+
+#[test]
+fn model_and_effort_come_from_config_options() {
+    let app = demo("composer-pickers");
+    let s = app.session("ses_1").unwrap();
+    assert_eq!(model::App::config_option(s, "model").map(|o| o.current_value.as_str()), Some("opus"));
+    assert_eq!(model::App::config_option(s, "thought_level").map(|o| o.id.as_str()), Some("effort"));
+    assert!(model::App::config_option(app.session("ses_2").unwrap(), "model").is_none());
+}
+
+#[test]
+fn connector_icons_decode_from_data_urls() {
+    assert!(crate::brand::data_url_pixels(crate::demo::ICON_LINEAR).is_some());
+    assert!(crate::brand::data_url_pixels("data:image/png;base64,AAAA").is_none());
+    assert!(crate::brand::data_url_pixels("https://example.com/x.png").is_none());
+}
+

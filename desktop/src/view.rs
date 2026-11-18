@@ -16,6 +16,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         body = body.child(sidebar(s, &t));
     }
     body = body.child(main_pane(s, &t, &k, cx));
+    if s.side_visible() {
+        if let Screen::Session(id) = &s.screen {
+            body = body.child(crate::side::pane(s, id, &t, &k));
+        }
+    }
     let mut root = col().key("root").w_full().h_full().fill(t.window).child(body);
     if s.menu.is_some() && s.menu != Some(Menu::Login) {
         root = root.child(menu_layer(s, &t));
@@ -31,6 +36,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some(id) = &s.confirm_archive {
         root = root.child(crate::sheet::confirm_archive(s, id, &t));
+    }
+    // Over everything, sheets too: a failure in Settings shows where you are.
+    if let Some(toasts) = crate::toast::layer(s, &t) {
+        root = root.child(toasts);
     }
     root
 }
@@ -84,6 +93,24 @@ pub fn status_color(t: &Theme, st: Status) -> Color {
         Status::Failed => t.danger,
         Status::YourTurn => t.accent,
         Status::Ended => if t.mac() { t.text3 } else { Color::WHITE.alpha(0.3) },
+    }
+}
+
+/// A branch name with the branch glyph: "⑂ fix-resume". `chip` draws it in a capsule.
+pub fn branch_label(t: &Theme, branch: &str, color: Color, chip: bool) -> El {
+    let size = if t.mac() { 11.0 } else { 12.0 };
+    let r = row()
+        .gap(4.0)
+        .center_y()
+        .min_w(0.0)
+        .label(format!("Branch {branch}"))
+        .help(format!("Works on its own branch, {branch}"))
+        .child(icon(&ic::BRANCH, size).color(color))
+        .child(text(branch.to_string()).font(TextStyle::new(size, 400.0).mono()).color(color).truncate().shrink());
+    if chip {
+        r.key("branch-chip").h(if t.mac() { 18.0 } else { 22.0 }).px(if t.mac() { 6.0 } else { 8.0 }).radius(if t.mac() { 5.0 } else { 11.0 }).fill(Color::WHITE.alpha(0.08))
+    } else {
+        r
     }
 }
 
@@ -301,14 +328,17 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
         .child(status_glyph(t, status, selected && mac).mt(if mac { 2.0 } else { 0.0 }));
     r = if mac { r.items_start() } else { r.center_y() };
     let weight = if selected && !mac { 700.0 } else { 400.0 };
-    r = r.child(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(1.0)
-            .child(text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate())
-            .child(text(sub).font(t.font_small()).color(sub_c).truncate()),
-    );
+    let mut names = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(1.0)
+        .child(text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate())
+        .child(text(sub).font(t.font_small()).color(sub_c).truncate());
+    // Sessions in a git workspace each work on a branch of their own.
+    if let Some(wt) = &x.worktree {
+        names = names.child(branch_label(t, &wt.branch, if selected && mac { Color::WHITE.alpha(0.7) } else { t.text3 }, false));
+    }
+    r = r.child(names);
     if let (Some(n), true) = (n, mac) {
         r = r.child(text(format!("⌘{n}")).font(TextStyle::new(11.0, 400.0)).color(if selected { Color::WHITE.alpha(0.75) } else { t.text3 }).mt(1.0));
     }
@@ -333,7 +363,7 @@ fn main_pane(s: &App, t: &Theme, k: &rune_kit::Kit, cx: &mut Cx<App>) -> El {
     if !s.sidebar_open || !t.mac() {
         c = c.border_sides([0.0, 0.0, 0.0, if t.mac() { 0.0 } else { 1.0 }], Color::BLACK.alpha(0.35));
     }
-    c.child(banners(s, t)).child(content)
+    c.child(status_strips(s, t)).child(content)
 }
 
 fn toolbar(s: &App, t: &Theme) -> El {
@@ -350,6 +380,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         }
     };
     let sub_text = text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate();
+    let branch = sess.and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
     // GNOME has no capsule: the status leads the header's subtitle.
     let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none()) {
         Some(x) => {
@@ -357,8 +388,13 @@ fn toolbar(s: &App, t: &Theme) -> El {
             let word = text(format!("{} · ", st.word())).font(TextStyle::new(t.fs_small, 700.0).lh((t.fs_small * 1.2).round())).color(if st == Status::Working { t.text2 } else { status_color(t, st) });
             row().key("header-status").gap(6.0).center_y().min_w(0.0).child(status_glyph(t, st, false).size(12.0, 12.0)).child(word).child(sub_text.shrink())
         }
-        None => row().min_w(0.0).child(sub_text),
+        None => row().min_w(0.0).child(sub_text.shrink()),
     };
+    let sub_line = match &branch {
+        Some(b) => sub_line.gap(8.0).center_y().child(branch_label(t, b, t.text2, !mac).shrink()),
+        None => sub_line,
+    };
+    let sub_line = if mac { sub_line } else { sub_line.max_w(10_000.0).w_full().justify_center() };
     let titles = col()
         .key("title")
         .min_w(0.0)
@@ -376,6 +412,13 @@ fn toolbar(s: &App, t: &Theme) -> El {
         .icon_button(if mac { &ic::MORE_H } else { &ic::MORE_V }, 16.0, "Session Menu", |s: &mut App, tx: &mut Tx| session_menu(s, tx))
         .key("session-menu")
         .opacity(if live || sess.is_some() { 1.0 } else { 0.35 });
+    // The side-question pane's toggle, once the session has side questions.
+    let side = sess.filter(|x| s.has_side(&x.session_id)).map(|_| {
+        let shown = s.side_visible();
+        let label = format!("{} Side Questions ({})", if shown { "Hide" } else { "Show" }, keys(s.look, Cmd::ToggleSide));
+        let b = t.icon_button(&ic::INSPECTOR, if mac { 18.0 } else { 17.0 }, &label, |s, tx| run(s, Cmd::ToggleSide, tx)).key("toggle-side").role("button").checked(shown);
+        if shown { b.fill(Color::WHITE.alpha(if mac { 0.10 } else { 0.12 })) } else { b }
+    });
 
     if mac {
         let mut bar = row()
@@ -403,6 +446,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if sess.is_some() {
             group = group.child(stop.w(32.0)).child(more.w(32.0));
         }
+        if let Some(b) = side {
+            group = group.child(b.w(32.0));
+        }
         bar.child(group)
     } else {
         let mut bar = row()
@@ -416,9 +462,12 @@ fn toolbar(s: &App, t: &Theme) -> El {
             .box_shadow(rune::Shadow { y: 1.0, color: Color::BLACK.alpha(0.3), ..Default::default() })
             .window_drag()
             .child(t.icon_button(&ic::SIDEBAR, 17.0, &format!("Toggle Sidebar ({})", keys(s.look, Cmd::ToggleSidebar)), |s, tx| run(s, Cmd::ToggleSidebar, tx)))
-            .child(col().grow(1.0).min_w(0.0).items_center().child(titles.items_center()));
+            .child(col().grow(1.0).min_w(0.0).items_center().child(titles.w_full().items_center()));
         if sess.is_some() {
             bar = bar.child(stop).child(more);
+            if let Some(b) = side {
+                bar = bar.child(b);
+            }
         } else {
             bar = bar.child(el().w(72.0));
         }
@@ -486,14 +535,12 @@ fn row_menu(s: &mut App, id: &str, p: rune::PointerPress, tx: &mut Tx) {
         }
         let menu = rune::PopupMenu::new()
             .item(rune::PopupItem::new("open", "Open"))
-            .item(rune::PopupItem::new("end", "End Session").enabled(!x.state.is_terminal()))
             .separator()
             .item(archive)
             .item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions in This Workspace"));
         let (id, ws) = (id.to_string(), x.workspace_id.clone());
         tx.popup_menu(menu, p, move |s: &mut App, picked, _| match picked {
             Some("open") => s.open_session(&id),
-            Some("end") => s.act("End session", agenthost_proto::methods::SESSION_END, serde_json::json!({"session_id": id}), crate::bridge::Refresh::None),
             Some("archive") => s.archive(&id),
             Some("archive-ended") => s.archive_ended(&ws),
             _ => {}
@@ -520,20 +567,15 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
         if let Some(k) = key("alt+cmd+r") {
             folder = folder.key_equivalent(k);
         }
-        let mut end = rune::PopupItem::new("end", "End Session").enabled(live);
-        if let Some(k) = key("cmd+shift+backspace") {
-            end = end.key_equivalent(k);
-        }
         let archived = s.current().is_some_and(|x| x.archived_at.is_some());
         let mut archive = rune::PopupItem::new("archive", if live { "Archive Session…" } else { "Archive Session" }).enabled(!archived);
         if let Some(k) = key("ctrl+cmd+a") {
             archive = archive.key_equivalent(k);
         }
-        let menu = rune::PopupMenu::new().item(stop).item(folder).separator().item(end).item(archive);
+        let menu = rune::PopupMenu::new().item(stop).item(folder).separator().item(archive);
         tx.popup_menu(menu, "session-menu", |s: &mut App, picked, tx| match picked {
             Some("stop") => run(s, Cmd::Stop, tx),
             Some("folder") => run(s, Cmd::ShowFolder, tx),
-            Some("end") => run(s, Cmd::EndSession, tx),
             Some("archive") => run(s, Cmd::Archive, tx),
             _ => {}
         });
@@ -542,8 +584,9 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
     }
 }
 
-/// Connection trouble, approvals waiting (GNOME's banner), errors and notices.
-fn banners(s: &App, t: &Theme) -> El {
+/// States that last, not messages: the host connection, and an archived session being read.
+/// (Messages, errors and approvals waiting elsewhere are toasts: see `toast.rs`.)
+fn status_strips(s: &App, t: &Theme) -> El {
     let mut c = col().key("banners").w_full();
     let strip = |msg: El, bg: Color| row().w_full().py(8.0).px(16.0).gap(16.0).center_y().justify_center().fill(bg).child(msg);
     let msg = |m: String| text(m).font(TextStyle::new(if t.mac() { 12.0 } else { 14.0 }, 400.0)).color(t.text).wrap().shrink();
@@ -552,47 +595,6 @@ fn banners(s: &App, t: &Theme) -> El {
         Conn::StartingHost => c = c.child(strip(msg("No host was running, so the app started one…".into()), Color::WHITE.alpha(0.05))),
         Conn::Down(e) => c = c.child(strip(msg(format!("Not connected to the host: {e}. Retrying.")), t.danger.alpha(0.16)).key("offline-banner")),
         Conn::Connected => {}
-    }
-    // GNOME: an AdwBanner for the first waiting approval, anywhere.
-    if !t.mac() {
-        if let Some(a) = s.approvals.first() {
-            let sid = a.session_id.clone();
-            let agent = s.session(&a.session_id).map(|x| x.agent.display_name().to_string()).unwrap_or_else(|| "An agent".into());
-            let here = s.current().is_some_and(|x| x.session_id == a.session_id);
-            let more = if s.approvals.len() > 1 { format!(" (+{} more)", s.approvals.len() - 1) } else { String::new() };
-            let words = row()
-                .gap(0.0)
-                .child(text(agent).font(TextStyle::new(14.0, 700.0)).color(t.text))
-                .child(text(match &a.summary {
-                    // "Install agent-desktop 1.3.1 with npm, on this computer"
-                    Some(sum) => {
-                        let mut cs = sum.chars();
-                        let low = cs.next().map(|c| c.to_lowercase().collect::<String>() + cs.as_str()).unwrap_or_default();
-                        format!(" wants to {low}{more}")
-                    }
-                    None => format!(" wants to {} on {}{more}", crate::session::humanize(&a.tool), a.connector_name),
-                }).font(TextStyle::new(14.0, 400.0)).color(t.text));
-            c = c.child(
-                strip(words, t.banner).key("approval-banner").child(
-                    row()
-                        .h(30.0)
-                        .px(14.0)
-                        .center_y()
-                        .radius(7.0)
-                        .fill(Color::WHITE.alpha(0.12))
-                        .role("button")
-                        .label("Review")
-                        .hover(Color::WHITE.alpha(0.06))
-                        .on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                            if !here {
-                                s.open_session(&sid);
-                            }
-                            tx.scroll_into_view("approval-card");
-                        })
-                        .child(text("Review").font(TextStyle::new(14.0, 700.0)).color(t.text)),
-                ),
-            );
-        }
     }
     // An archived session opened from Settings: read-only.
     if let Some(x) = s.current().filter(|x| x.archived_at.is_some()) {
@@ -603,13 +605,6 @@ fn banners(s: &App, t: &Theme) -> El {
                 .key("archived-banner")
                 .child(t.small_button("Unarchive", move |s| s.unarchive(&id)).key("unarchive")),
         );
-    }
-    let close = |label: &str, f: fn(&mut App)| t.small_button(label, f);
-    if let Some(e) = &s.error {
-        c = c.child(strip(msg(e.clone()), t.danger.alpha(0.18)).key("error-banner").child(close("Dismiss", |s| s.error = None)));
-    }
-    if let Some(n) = &s.notice {
-        c = c.child(strip(msg(n.clone()), t.accent.alpha(0.16)).key("notice-banner").child(close("OK", |s| s.notice = None)));
     }
     c
 }
@@ -654,10 +649,6 @@ impl Item {
     }
     pub fn enabled(mut self, on: bool) -> Item {
         self.enabled = on;
-        self
-    }
-    pub fn danger(mut self) -> Item {
-        self.danger = true;
         self
     }
     pub fn checked(mut self, on: bool) -> Item {
@@ -734,7 +725,6 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("Show Session Folder", keys(look, Cmd::ShowFolder), |s, tx| run(s, Cmd::ShowFolder, tx))),
                 Some(Item::new("Attach Files…", keys(look, Cmd::Attach), |s, tx| run(s, Cmd::Attach, tx)).enabled(live)),
                 None,
-                Some(Item::new("End Session", keys(look, Cmd::EndSession), |s, tx| run(s, Cmd::EndSession, tx)).enabled(live).danger()),
                 Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), |s, tx| run(s, Cmd::Archive, tx)).enabled(s.current().is_some_and(|x| x.archived_at.is_none()))),
             ];
             let right = if t.mac() { 14.0 } else { 80.0 };
@@ -756,16 +746,20 @@ fn menu_layer(s: &App, t: &Theme) -> El {
         }
         Some(Menu::Row(id, x, y)) => {
             if let Some(sess) = s.session(id) {
-                let (a, b, c, ws) = (id.clone(), id.clone(), id.clone(), sess.workspace_id.clone());
+                let (a, c, ws) = (id.clone(), id.clone(), sess.workspace_id.clone());
                 let live = !sess.state.is_terminal();
                 let items = vec![
                     Some(Item::new("Open", String::new(), move |s, _| s.open_session(&a))),
-                    Some(Item::new("End Session", String::new(), move |s, _| s.act("End session", agenthost_proto::methods::SESSION_END, serde_json::json!({"session_id": b}), crate::bridge::Refresh::None)).enabled(live)),
                     None,
                     Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), move |s, _| s.archive(&c))),
                     Some(Item::new("Archive Ended Sessions Here", String::new(), move |s, _| s.archive_ended(&ws))),
                 ];
                 layer = layer.child(menu_box(t, items, 280.0).pin(Some(*x), Some(*y), None, None));
+            }
+        }
+        Some(Menu::Config(id)) => {
+            if let Some((sid, opt)) = s.current().and_then(|x| x.config_options.iter().find(|o| &o.id == id).map(|o| (x.session_id.clone(), o))) {
+                layer = layer.child(crate::session::config_menu(t, &sid, opt));
             }
         }
         Some(Menu::Section(ws, x, y)) => {

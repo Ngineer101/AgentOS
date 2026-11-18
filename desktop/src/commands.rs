@@ -26,9 +26,10 @@ pub enum Cmd {
     Search,
     ToggleSidebar,
     Settings,
-    EndSession,
-    /// Hide the session from the list (ending it first if live).
+    /// Hide the session from the list (the host ends it first if it's live).
     Archive,
+    /// Show or hide the side-question pane.
+    ToggleSide,
     ShowFolder,
     Shortcuts,
     MainMenu,
@@ -52,7 +53,7 @@ const KEYED: [Cmd; 22] = [
     Cmd::Search,
     Cmd::ToggleSidebar,
     Cmd::Settings,
-    Cmd::EndSession,
+    Cmd::ToggleSide,
     Cmd::ShowFolder,
     Cmd::Shortcuts,
     Cmd::MainMenu,
@@ -80,7 +81,8 @@ pub fn chord(look: Look, cmd: Cmd) -> Option<String> {
         Cmd::Search => if mac { "super+f" } else { "ctrl+f" }.into(),
         Cmd::ToggleSidebar => if mac { "ctrl+super+s" } else { "f9" }.into(),
         Cmd::Settings => if mac { "super+," } else { "ctrl+," }.into(),
-        Cmd::EndSession => if mac { "super+shift+backspace" } else { "ctrl+shift+backspace" }.into(),
+        // Pages, Keynote and Numbers show their inspector with ⌥⌘I; GNOME pairs it with F9.
+        Cmd::ToggleSide => if mac { "super+alt+i" } else { "shift+f9" }.into(),
         // ⌘⌫ would be "delete to the line's start" in the composer; ⌃⌘A is Mail's Archive.
         Cmd::Archive => if mac { "ctrl+super+a" } else { "ctrl+alt+a" }.into(),
         Cmd::ShowFolder if mac => "super+alt+r".into(),
@@ -110,7 +112,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::Search => if mac { "⌘F" } else { "Ctrl+F" },
         Cmd::ToggleSidebar => if mac { "⌃⌘S" } else { "F9" },
         Cmd::Settings => if mac { "⌘," } else { "Ctrl+," },
-        Cmd::EndSession => if mac { "⇧⌘⌫" } else { "Ctrl+Shift+⌫" },
+        Cmd::ToggleSide => if mac { "⌥⌘I" } else { "Shift+F9" },
         Cmd::Archive => if mac { "⌃⌘A" } else { "Ctrl+Alt+A" },
         Cmd::ShowFolder => if mac { "⌥⌘R" } else { "" },
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
@@ -240,9 +242,9 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
         }
         Cmd::ToggleSidebar => s.sidebar_open = !s.sidebar_open,
         Cmd::Settings => s.open_settings(Tab::General),
-        Cmd::EndSession => {
-            if let Some(x) = session.filter(|x| !x.state.is_terminal()) {
-                s.act("End session", m::SESSION_END, json!({"session_id": x.session_id}), Refresh::None);
+        Cmd::ToggleSide => {
+            if session.is_some_and(|x| s.has_side(&x.session_id)) {
+                s.side_open = !s.side_open;
             }
         }
         Cmd::Archive => {
@@ -321,10 +323,10 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Go to Session 9"), Some("Session"), Some("cmd+9"), |s, tx| run(s, Cmd::Jump(9), tx)),
         (None, Some("Session"), None, noop),
         (Some("Show Session Folder in Finder"), Some("Session"), Some("alt+cmd+r"), |s, tx| run(s, Cmd::ShowFolder, tx)),
-        (Some("End Session…"), Some("Session"), Some("cmd+shift+backspace"), |s, tx| run(s, Cmd::EndSession, tx)),
-        (Some("Archive Session"), Some("Session"), Some("ctrl+cmd+a"), |s, tx| run(s, Cmd::Archive, tx)),
+        (Some("Archive Session…"), Some("Session"), Some("ctrl+cmd+a"), |s, tx| run(s, Cmd::Archive, tx)),
         (Some("Archived Sessions…"), Some("View"), None, |s, _| s.open_settings(Tab::Archived)),
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
+        (Some("Toggle Side Questions"), Some("View"), Some("alt+cmd+i"), |s, tx| run(s, Cmd::ToggleSide, tx)),
         (Some("Find Session"), Some("View"), Some("cmd+f"), |s, tx| run(s, Cmd::Search, tx)),
     ]
 }
@@ -384,5 +386,13 @@ mod tests {
         assert_eq!(chord(Look::Gnome, Cmd::ToggleSidebar).as_deref(), Some("f9"));
         assert_eq!(label(Look::Mac, Cmd::Archive), "⌃⌘A");
         assert_eq!(label(Look::Gnome, Cmd::Archive), "Ctrl+Alt+A");
+        assert_eq!(label(Look::Mac, Cmd::ToggleSide), "⌥⌘I");
+        assert_eq!(chord(Look::Gnome, Cmd::ToggleSide).as_deref(), Some("shift+f9"));
+    }
+
+    #[test]
+    fn no_end_session_anywhere() {
+        // Archive replaced End Session: no menu item says it.
+        assert!(menu_table().iter().all(|(t, ..)| !t.is_some_and(|t| t.contains("End Session"))));
     }
 }

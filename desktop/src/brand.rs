@@ -19,8 +19,44 @@ pub fn logo() -> &'static rune::Pixels {
     })
 }
 
+/// A `data:image/png;base64,…` URL (a connector's icon) as pixels, decoded once per URL.
+/// None for anything else, or a PNG that doesn't decode: callers draw their generic badge.
+pub fn data_url_pixels(url: &str) -> Option<rune::Pixels> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<rune::Pixels>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = map.get(url) {
+        return hit.clone();
+    }
+    let px = png_of_data_url(url).and_then(|png| decode_rgba(&png)).map(|(w, h, rgba)| {
+        let px = rune::Pixels::new();
+        px.set(w, h, rgba);
+        px
+    });
+    // A long-running app sees a bounded set of icons; keep the map from growing without end.
+    if map.len() > 256 {
+        map.clear();
+    }
+    map.insert(url.to_string(), px.clone());
+    px
+}
+
+/// The PNG bytes in a base64 `data:` URL.
+pub fn png_of_data_url(url: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let rest = url.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    if !meta.ends_with(";base64") || !meta.starts_with("image/") {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()?;
+    bytes.starts_with(b"\x89PNG").then_some(bytes)
+}
+
 /// An 8-bit RGB or RGBA PNG as straight-alpha RGBA.
-fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().ok()?;
@@ -30,6 +66,8 @@ fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         _ => return None,
     };
     Some((info.width, info.height, rgba))

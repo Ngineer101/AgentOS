@@ -5,7 +5,7 @@ use crate::bridge::Refresh;
 use crate::commands::{label as keys, run, Cmd};
 use crate::icons as ic;
 use crate::look::{Btn, Theme};
-use crate::model::{App, FileState, Mic};
+use crate::model::{App, FileState, Menu, Mic};
 use crate::view::{clip, human_size, is_web_link};
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
@@ -21,7 +21,7 @@ pub fn humanize(tool: &str) -> String {
 
 /// An agent's reply rendered as Markdown. `streaming` is for the reply still arriving.
 /// Links open in the browser, but only web and mail links: the text comes from the agent.
-fn reply(src: &str, streaming: bool, t: &Theme, k: &Kit) -> El {
+pub(crate) fn reply(src: &str, streaming: bool, t: &Theme, k: &Kit) -> El {
     let st = MarkdownStyle::from_kit(k)
         .text(t.text)
         .body_font(TextStyle::new(t.fs_msg, 400.0).lh((t.fs_msg * 1.6).round()))
@@ -130,11 +130,21 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         .caret(t.text, t.accent.alpha(0.35))
         .on_edit(|s: &mut App| &mut s.prompt)
         .on_submit(|s: &mut App, _: &mut Tx| s.send_prompt())
+        // ⌘V / Ctrl+V: copied files and images become attachments; text pastes as text.
+        .on_input_paste(|s: &mut App, content: &rune::ClipboardContent, _: &mut Tx| s.host_has_media() && s.paste_into_composer(content))
         // Window shortcuts that a field would otherwise type (Alt+A on Linux).
         .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| {
             // ↑ in an empty composer brings back your last message to edit.
             if ev.key == rune::Key::Up && ev.mods == rune::Mods::default() && s.prompt.text.is_empty() {
                 return s.recall_last_prompt();
+            }
+            // Tab completes the slash command on offer.
+            if ev.key == rune::Key::Tab && ev.mods == rune::Mods::default() {
+                let side = s.current().is_some_and(|x| x.side_questions);
+                if let Some((cmd, _)) = crate::model::slash_suggestions(&s.prompt.text, side).first() {
+                    s.prompt.replace_text(format!("{cmd} "));
+                    return true;
+                }
             }
             (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx)
         });
@@ -149,7 +159,9 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
     }
     boxc = boxc.child(col().w_full().px(if mac { 14.0 } else { 16.0 }).pt(if mac { 10.0 } else { 12.0 }).pb(if mac { 4.0 } else { 6.0 }).child(rune::auto_grow(input, 1, 8)));
     let uploading = s.files.get(id).is_some_and(|f| f.iter().any(|f| matches!(f.state, FileState::Uploading)));
-    let hint = if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
+    let pickers = config_pickers(s, sess, t);
+    // With pickers in the bar the hint makes way for them.
+    let hint = if pickers.is_some() { "" } else if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
     let send_size = if mac { 28.0 } else { 34.0 };
     let send = row()
         .key("send")
@@ -173,10 +185,133 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         .pb(8.0)
         .center_y()
         .child(if s.host_has_media() { media_controls(s, t) } else { row() })
+        .child(pickers.unwrap_or_else(row))
         .child(el().grow(1.0))
         .child(text(hint.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(if mac { t.text3 } else { t.text2 }).mr(10.0))
         .child(send);
-    column(t, area.child(boxc.child(actions)))
+    if let Some(sug) = slash_menu(s, sess, t) {
+        area = area.child(sug);
+    }
+    let area = area.child(boxc.child(actions));
+    column(t, area)
+}
+
+/// "/btw — Ask a side question without interrupting", over the composer while you type "/".
+fn slash_menu(s: &App, sess: &Session, t: &Theme) -> Option<El> {
+    let list = crate::model::slash_suggestions(&s.prompt.text, sess.side_questions);
+    if list.is_empty() {
+        return None;
+    }
+    let mac = t.mac();
+    let mut c = col().key("slash-menu").w(if mac { 360.0 } else { 400.0 }).padding(if mac { 5.0 } else { 6.0 }).radius(if mac { 8.0 } else { 12.0 }).role("listbox").label("Commands");
+    c = if mac { c.fill(rune::color::hex("#2c2c2e").unwrap_or(Color::BLACK)).border(0.5, Color::WHITE.alpha(0.12)).shadow(6.0, 20.0, Color::BLACK.alpha(0.4)) } else { c.fill(rune::color::hex("#36363a").unwrap_or(Color::BLACK)).shadow(6.0, 20.0, Color::BLACK.alpha(0.4)) };
+    for (i, (cmd, what)) in list.iter().enumerate() {
+        let cmd = *cmd;
+        c = c.child(
+            row()
+                .key(format!("slash-{}", cmd.trim_start_matches('/')))
+                .w_full()
+                .h(if mac { 28.0 } else { 36.0 })
+                .px(if mac { 8.0 } else { 10.0 })
+                .gap(10.0)
+                .center_y()
+                .radius(if mac { 5.0 } else { 7.0 })
+                .role("option")
+                .checked(i == 0)
+                .label(format!("{cmd}: {what}"))
+                .fill(if i == 0 { if mac { t.accent } else { Color::WHITE.alpha(0.08) } } else { Color::TRANSPARENT })
+                .on_press(move |s: &mut App| {
+                    s.prompt.replace_text(format!("{cmd} "));
+                    s.prompt.focused = true;
+                })
+                .child(text(cmd).font(TextStyle::new(t.fs, 600.0).mono()).color(if i == 0 && mac { Color::WHITE } else { t.text }))
+                .child(text(what.to_string()).font(t.font_small()).color(if i == 0 && mac { Color::WHITE.alpha(0.8) } else { t.text2 }).truncate().shrink())
+                .child(el().grow(1.0))
+                .child(text(if mac { "⇥" } else { "Tab" }).font(t.font_small()).color(if i == 0 && mac { Color::WHITE.alpha(0.7) } else { t.text3 })),
+        );
+    }
+    Some(c)
+}
+
+/// The composer's model and effort pickers, from the session's settings; None without any.
+fn config_pickers(s: &App, sess: &Session, t: &Theme) -> Option<El> {
+    let model = App::config_option(sess, "model");
+    let effort = App::config_option(sess, "thought_level");
+    if model.is_none() && effort.is_none() {
+        return None;
+    }
+    let ready = !matches!(sess.state, SessionState::Created | SessionState::Starting) && !sess.state.is_terminal();
+    let mut r = row().key("config-pickers").gap(if t.mac() { 0.0 } else { 2.0 }).ml(if t.mac() { 4.0 } else { 6.0 }).center_y();
+    for (opt, glyph) in [(model, None), (effort, Some(&ic::GAUGE))] {
+        if let Some(o) = opt {
+            r = r.child(config_button(s, sess, o, glyph, ready, t));
+        }
+    }
+    Some(r)
+}
+
+fn config_button(s: &App, sess: &Session, o: &SessionConfigOption, glyph: Option<&'static rune::Icon>, ready: bool, t: &Theme) -> El {
+    let mac = t.mac();
+    let current = o.options.iter().find(|v| v.value == o.current_value).map(|v| v.name.clone()).unwrap_or_else(|| o.current_value.clone());
+    let key = format!("config-{}", o.id);
+    let open = s.menu == Some(Menu::Config(o.id.clone()));
+    let ink = if ready { if mac { t.text2 } else { t.text } } else { t.text3 };
+    let mut b = row()
+        .key(key.clone())
+        .h(if mac { 24.0 } else { 30.0 })
+        .pl(if mac { 7.0 } else { 9.0 })
+        .pr(if mac { 5.0 } else { 7.0 })
+        .gap(5.0)
+        .center_y()
+        .radius(if mac { 6.0 } else { 7.0 })
+        .role("combobox")
+        .label(format!("{}: {current}", o.name))
+        .help(o.description.clone().map(|d| format!("{} · {d}", o.name)).unwrap_or_else(|| o.name.clone()))
+        .expanded(open)
+        .focusable(ready)
+        .disabled(!ready);
+    if let Some(g) = glyph {
+        b = b.child(icon(g, if mac { 12.0 } else { 13.0 }).color(ink));
+    }
+    b = b.child(text(clip(&current, 28)).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, if mac { 400.0 } else { 600.0 })).color(ink)).child(icon(if mac { &ic::CHEVRON_D } else { &ic::CHEVRON_DOWN }, if mac { 8.0 } else { 11.0 }).color(ink));
+    if open {
+        b = b.fill(Color::WHITE.alpha(0.1));
+    }
+    if !ready {
+        return b;
+    }
+    let (sid, opt) = (sess.session_id.clone(), o.clone());
+    b.hover(Color::WHITE.alpha(0.08)).press(Color::WHITE.alpha(0.12)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
+        if s.look.mac() && rune::popup_menu_supported() {
+            let mut menu = rune::PopupMenu::new();
+            for v in &opt.options {
+                menu = menu.item(rune::PopupItem::new(v.value.clone(), v.name.clone()).checked(v.value == opt.current_value));
+            }
+            let (sid, id) = (sid.clone(), opt.id.clone());
+            tx.popup_menu(menu, key.clone(), move |s: &mut App, picked, _| {
+                if let Some(v) = picked {
+                    s.set_config(&sid, &id, v);
+                }
+            });
+        } else {
+            let m = Menu::Config(opt.id.clone());
+            s.menu = if s.menu.as_ref() == Some(&m) { None } else { Some(m) };
+        }
+    })
+}
+
+/// The in-app list for a setting (GNOME, and where there's no native menu), over its button.
+pub fn config_menu(t: &Theme, session: &str, o: &SessionConfigOption) -> El {
+    let items = o
+        .options
+        .iter()
+        .map(|v| {
+            let (sid, id, val) = (session.to_string(), o.id.clone(), v.value.clone());
+            let note = v.description.clone().map(|d| clip(&d, 34)).unwrap_or_default();
+            Some(crate::view::Item::new(&v.name, note, move |s, _| s.set_config(&sid, &id, &val)).checked(v.value == o.current_value))
+        })
+        .collect();
+    crate::view::menu_box(t, items, 320.0).key("config-menu").anchored(format!("config-{}", o.id), rune::Side::Top, rune::Align::Start, 6.0)
 }
 
 /// Attach and microphone buttons, or the recording strip while recording.
@@ -399,6 +534,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
         }
         EventType::ToolCall => tool_call(s, e, results, t),
         EventType::ToolResult => return None, // shown with its call
+        // Side questions live in their own pane.
+        EventType::SideQuestion | EventType::SideMessage | EventType::SideEnd => return None,
         EventType::NetDenied => {
             let host = str_of(&p["host"]);
             let ws = sess.workspace_id.clone();

@@ -11,6 +11,8 @@ mod model;
 mod session;
 mod settings;
 mod sheet;
+mod side;
+mod toast;
 mod view;
 #[cfg(test)]
 mod tests;
@@ -41,6 +43,19 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
             s.notice = Some(format!("Could not open the browser. Open this link yourself: {url}"));
         }
     }
+    // Messages become toasts; toasts go when their time is up; the catalog search runs once
+    // typing pauses.
+    let now = std::time::Instant::now();
+    let had = s.toasts.len() + usize::from(s.error.is_some()) + usize::from(s.notice.is_some());
+    s.flush_messages(now);
+    if let Some(left) = s.tick_toasts(now) {
+        tx.wake_after(left);
+    }
+    let was_searching = s.searching;
+    if let Some(left) = s.search_if_due(now) {
+        tx.wake_after(left);
+    }
+    let changed = changed || had != s.toasts.len() || was_searching != s.searching;
     // While recording: the meter and timer move, and a forgotten recording stops.
     if let model::Mic::Recording(r) = &s.mic {
         s.mic_level = s.mic_level * 0.6 + r.level() * 0.4;

@@ -28,6 +28,8 @@ uuid = { version = "1", features = ["v4"] }
 qrcode = { version = "0.14", default-features = false }
 # Decodes the embedded logo PNG.
 png = "0.17"
+# Connector icons arrive as data: URLs.
+base64 = "0.22"
 # Microphone capture for voice input.
 cpal = "0.16"
 
