@@ -52,6 +52,9 @@ pub fn test_config(dir: &Path) -> HostConfig {
     let none = dir.join("no-package-managers");
     std::fs::create_dir_all(&none).unwrap();
     cfg.install_bin_dir = Some(none);
+    // Never the network: tests that search or fetch icons bring a local server.
+    cfg.integrations_url = None;
+    cfg.favicon_url = None;
     cfg
 }
 

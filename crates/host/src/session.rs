@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Child;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 /// Tool output above this is truncated in the event log.
@@ -48,6 +48,34 @@ pub enum Cmd {
     },
     /// Stop the actor without changing the session's state (host shutdown).
     Shutdown,
+    /// Change one of the agent's session settings (`session/set_config_option`).
+    SetConfig {
+        config_id: String,
+        value: String,
+        reply: oneshot::Sender<Result<Session, RpcError>>,
+    },
+    /// Ask a side question; replies with its side id once it is recorded.
+    SideAsk {
+        side_id: Option<String>,
+        text: String,
+        reply: oneshot::Sender<Result<String, RpcError>>,
+    },
+    // The actor's own: answers to its requests, sent back from the tasks
+    // that wait for them so the actor keeps serving the agent meanwhile.
+    ConfigDone {
+        config_id: String,
+        value: String,
+        result: Result<Value, RpcError>,
+        reply: oneshot::Sender<Result<Session, RpcError>>,
+    },
+    SideForked {
+        side_id: String,
+        result: Result<Value, RpcError>,
+    },
+    SideDone {
+        side_id: String,
+        result: Result<Value, RpcError>,
+    },
 }
 
 #[derive(Clone)]
@@ -66,7 +94,12 @@ pub struct SessionManager {
     live: Mutex<HashMap<String, SessionHandle>>,
     /// When this host run started (placeholders older than this aren't ours).
     started_at: std::time::SystemTime,
+    /// Folders several sessions' sandboxes share.
+    folders: Arc<sandbox::SharedFolders>,
 }
+
+/// How long `session.set_config` and `session.side_ask` wait for the actor.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl SessionManager {
     pub fn new(ctx: Arc<Ctx>) -> Arc<Self> {
@@ -74,6 +107,7 @@ impl SessionManager {
             ctx,
             live: Mutex::new(HashMap::new()),
             started_at: std::time::SystemTime::now(),
+            folders: Arc::new(sandbox::SharedFolders::default()),
         })
     }
 
@@ -86,18 +120,19 @@ impl SessionManager {
         self.live
             .lock()
             .unwrap()
-            .insert(session.session_id.clone(), SessionHandle { tx });
+            .insert(session.session_id.clone(), SessionHandle { tx: tx.clone() });
         let mgr = self.clone();
         let sid = session.session_id.clone();
         tokio::spawn(async move {
-            let actor = Actor::new(mgr.ctx.clone(), session, workspace, rx);
+            let actor = Actor::new(mgr.ctx.clone(), session, workspace, rx, tx, mgr.folders.clone());
             actor.run(resume).await;
             mgr.live.lock().unwrap().remove(&sid);
         });
     }
 
-    /// Create and start a session.
-    pub fn create(
+    /// Create and start a session. In a git workspace it gets a worktree and
+    /// a branch of its own; elsewhere sessions share the folder.
+    pub async fn create(
         self: &Arc<Self>,
         p: SessionCreateParams,
         origin: Option<&str>,
@@ -108,27 +143,6 @@ impl SessionManager {
             .workspace_get(&p.workspace_id)
             .map_err(|e| RpcError::internal(e.to_string()))?
             .ok_or_else(|| RpcError::not_found(format!("no workspace {}", p.workspace_id)))?;
-        // One live session per workspace: two sandboxes in one folder would
-        // remove each other's protective mount points. Quick tasks each have
-        // a folder of their own.
-        let busy = if ws.kind == WorkspaceKind::Scratch {
-            None
-        } else {
-            self
-            .ctx
-            .store
-            .session_list(Some(&ws.workspace_id))
-            .map_err(|e| RpcError::internal(e.to_string()))?
-            .into_iter()
-            .find(|s| !s.state.is_terminal())
-        };
-        if let Some(b) = busy {
-            return Err(RpcError::invalid_state(format!(
-                "workspace {} already has a live session ({}, {}); end it first",
-                ws.name, b.session_id, b.state
-            ))
-            .with_data(json!({"session_id": b.session_id})));
-        }
         if p.agent == AgentKind::Fake && !self.ctx.cfg.enable_fake_agent {
             return Err(RpcError::new(
                 jsonrpc::codes::UNAVAILABLE,
@@ -157,13 +171,30 @@ impl SessionManager {
                 Some(prof.profile_id)
             }
         };
+        let session_id = crate::util::new_id("ses");
+        // Quick tasks each have a folder of their own already.
+        let worktree = if ws.kind == WorkspaceKind::Scratch {
+            None
+        } else {
+            crate::worktree::create(&self.ctx.cfg, Path::new(&ws.path), &session_id)
+                .await
+                .map_err(|e| {
+                    RpcError::new(
+                        jsonrpc::codes::UNAVAILABLE,
+                        format!("{e:#}; check the repository with `git worktree list`"),
+                    )
+                })?
+        };
         let now = now_ms();
         let s = Session {
-            session_id: crate::util::new_id("ses"),
+            session_id,
             workspace_id: ws.workspace_id.clone(),
             agent: p.agent,
             profile_id: profile_id.clone(),
             archived_at: None,
+            worktree: worktree.as_ref().map(|(w, _)| w.clone()),
+            config_options: vec![],
+            side_questions: false,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -176,9 +207,15 @@ impl SessionManager {
             .store
             .session_insert(&s)
             .map_err(|e| RpcError::internal(e.to_string()))?;
+        if let Some((wt, subdir)) = &worktree {
+            self.ctx
+                .store
+                .session_set_worktree(&s.session_id, wt, subdir)
+                .map_err(|e| RpcError::internal(e.to_string()))?;
+        }
         // Creation is the first `session.state` event.
         self.ctx
-            .append(&s.session_id, EventType::SessionState, json!({"state": "created", "agent": p.agent, "profile_id": profile_id, "workspace_id": ws.workspace_id, "by": origin}))
+            .append(&s.session_id, EventType::SessionState, json!({"state": "created", "agent": p.agent, "profile_id": profile_id, "workspace_id": ws.workspace_id, "by": origin, "worktree": s.worktree}))
             .map_err(|e| RpcError::internal(e.to_string()))?;
         let s = self
             .ctx
@@ -200,11 +237,30 @@ impl SessionManager {
         Ok(s)
     }
 
-    /// Archive (ending it first if it is live) or unarchive a session.
+    /// Archive (ending it first if it is live) or unarchive a session. An
+    /// archived session's worktree is removed when it has no uncommitted
+    /// changes (its branch stays); unarchiving brings it back from the branch.
     pub async fn set_archived(&self, session_id: &str, archived: bool) -> Result<Session, RpcError> {
-        self.get(session_id)?;
+        let s = self.get(session_id)?;
         if archived {
             self.end(session_id).await?;
+            if let Some(wt) = &s.worktree {
+                match crate::worktree::remove_if_clean(wt).await {
+                    Ok(removed) => tracing::info!(session = session_id, removed, "archived session's worktree"),
+                    Err(e) => tracing::warn!(session = session_id, "could not remove the worktree {}: {e:#}", wt.path),
+                }
+            }
+        } else if let Some(wt) = &s.worktree {
+            let ws = self
+                .ctx
+                .store
+                .workspace_get(&s.workspace_id)
+                .map_err(|e| RpcError::internal(e.to_string()))?;
+            if let Some(ws) = ws {
+                if let Err(e) = crate::worktree::ensure(Path::new(&ws.path), wt).await {
+                    tracing::warn!(session = session_id, "{e:#}");
+                }
+            }
         }
         self.ctx
             .store
@@ -276,6 +332,77 @@ impl SessionManager {
         Ok(SessionPromptResult {
             seq,
             accepted: true,
+        })
+    }
+
+    /// Change one of the agent's settings for a live session, and remember
+    /// the choice for the next session with the same login.
+    pub async fn set_config(&self, p: SessionSetConfigParams) -> Result<Session, RpcError> {
+        let s = self.get(&p.session_id)?;
+        if s.state.is_terminal() {
+            return Err(RpcError::invalid_state(format!(
+                "session is {}; start a new session to change its settings",
+                s.state
+            )));
+        }
+        let Some(opt) = s.config_options.iter().find(|o| o.id == p.config_id) else {
+            return Err(RpcError::invalid_params(format!(
+                "{} has no setting {} in this session",
+                s.agent.display_name(),
+                p.config_id
+            )));
+        };
+        if !opt.options.iter().any(|v| v.value == p.value) {
+            let choices: Vec<&str> = opt.options.iter().map(|v| v.value.as_str()).collect();
+            return Err(RpcError::invalid_params(format!(
+                "{} is not a choice for {}; pick one of: {}",
+                p.value,
+                opt.name,
+                choices.join(", ")
+            )));
+        }
+        let h = self
+            .handle(&p.session_id)
+            .ok_or_else(|| RpcError::invalid_state("session is not running"))?;
+        let (tx, rx) = oneshot::channel();
+        h.send(Cmd::SetConfig {
+            config_id: p.config_id,
+            value: p.value,
+            reply: tx,
+        });
+        await_reply(rx).await
+    }
+
+    /// Ask a side question in a fork of the conversation; returns its side id
+    /// at once, the answer follows as `side.*` events.
+    pub async fn side_ask(&self, p: SessionSideAskParams) -> Result<SessionSideAskResult, RpcError> {
+        let s = self.get(&p.session_id)?;
+        if s.state.is_terminal() {
+            return Err(RpcError::invalid_state(format!(
+                "session is {}; side questions need a live session",
+                s.state
+            )));
+        }
+        if !s.side_questions {
+            return Err(RpcError::invalid_state(format!(
+                "{} can't answer side questions (it can't fork a conversation)",
+                s.agent.display_name()
+            )));
+        }
+        if p.text.trim().is_empty() {
+            return Err(RpcError::invalid_params("empty question"));
+        }
+        let h = self
+            .handle(&p.session_id)
+            .ok_or_else(|| RpcError::invalid_state("session is not running"))?;
+        let (tx, rx) = oneshot::channel();
+        h.send(Cmd::SideAsk {
+            side_id: p.side_id,
+            text: p.text,
+            reply: tx,
+        });
+        Ok(SessionSideAskResult {
+            side_id: await_reply(rx).await?,
         })
     }
 
@@ -400,6 +527,74 @@ impl SessionManager {
     pub fn live_count(&self) -> usize {
         self.live.lock().unwrap().len()
     }
+
+    /// How many live sandboxes share `folder` (a workspace outside git).
+    pub fn folder_users(&self, folder: &Path) -> usize {
+        self.folders.users(folder)
+    }
+}
+
+async fn await_reply<T>(rx: oneshot::Receiver<Result<T, RpcError>>) -> Result<T, RpcError> {
+    match tokio::time::timeout(REPLY_TIMEOUT, rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err(RpcError::invalid_state("the session ended")),
+        Err(_) => Err(RpcError::new(
+            jsonrpc::codes::UNAVAILABLE,
+            "the agent did not answer in time; try again",
+        )),
+    }
+}
+
+/// The settings key for a login's last choice of a session setting.
+fn config_choice_key(agent: AgentKind, profile_id: Option<&str>, config_id: &str) -> String {
+    format!(
+        "config_choice:{}:{}:{config_id}",
+        agent.as_str(),
+        profile_id.unwrap_or("")
+    )
+}
+
+/// ACP `configOptions`: the `select` ones (grouped choices flattened), less
+/// the permission mode, which the host sets. `None` when there are none.
+pub fn parse_config_options(v: &Value) -> Option<Vec<SessionConfigOption>> {
+    let list = v.as_array()?;
+    let mut out = vec![];
+    for o in list {
+        if o["type"].as_str().unwrap_or("select") != "select" {
+            continue;
+        }
+        let (Some(id), Some(current)) = (o["id"].as_str(), o["currentValue"].as_str()) else {
+            continue;
+        };
+        let category = o["category"].as_str().map(str::to_string);
+        if category.as_deref() == Some("mode") || id == "mode" {
+            continue;
+        }
+        let mut options = vec![];
+        fn flatten(items: &Value, out: &mut Vec<SessionConfigValue>) {
+            for it in items.as_array().into_iter().flatten() {
+                if it.get("options").is_some() {
+                    flatten(&it["options"], out);
+                } else if let Some(value) = it["value"].as_str() {
+                    out.push(SessionConfigValue {
+                        value: value.to_string(),
+                        name: it["name"].as_str().unwrap_or(value).to_string(),
+                        description: it["description"].as_str().map(str::to_string),
+                    });
+                }
+            }
+        }
+        flatten(&o["options"], &mut options);
+        out.push(SessionConfigOption {
+            id: id.to_string(),
+            name: o["name"].as_str().unwrap_or(id).to_string(),
+            description: o["description"].as_str().map(str::to_string),
+            category,
+            current_value: current.to_string(),
+            options,
+        });
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +720,29 @@ struct Actor {
     loading: bool,
     /// When this actor started the agent (for the mount-point sweep).
     started_at: std::time::SystemTime,
+    /// For tasks that wait on the agent's answers and report back.
+    self_tx: mpsc::UnboundedSender<Cmd>,
+    folders: Arc<sandbox::SharedFolders>,
+    /// The shared folder this actor's sandbox counts as a user of.
+    shared_folder: Option<PathBuf>,
+    /// The workspace's own folder (the session works in its worktree when
+    /// it has one, or its quick-task folder).
+    repo_path: PathBuf,
+    /// Side conversations (`/btw`), by side id.
+    sides: HashMap<String, Side>,
+    /// The fork's ACP session id → side id.
+    side_routes: HashMap<String, String>,
+}
+
+/// A side conversation: a fork of the session the agent answers in.
+struct Side {
+    acp_id: Option<String>,
+    /// A question is being answered.
+    busy: bool,
+    /// The question waiting for the fork to exist.
+    pending: Option<String>,
+    /// The answer streamed so far.
+    text: String,
 }
 
 enum Exit {
@@ -562,13 +780,27 @@ impl Actor {
         session: Session,
         workspace: Workspace,
         rx: mpsc::UnboundedReceiver<Cmd>,
+        self_tx: mpsc::UnboundedSender<Cmd>,
+        folders: Arc<sandbox::SharedFolders>,
     ) -> Self {
         let spec = session_spec(&ctx, &session);
         let mut workspace = workspace;
+        let repo_path = PathBuf::from(&workspace.path);
         if workspace.kind == WorkspaceKind::Scratch {
             workspace.path = scratch_folder(&ctx, &session.session_id)
                 .display()
                 .to_string();
+        } else if let Some(wt) = &session.worktree {
+            // The same folder of the repository, in the session's worktree.
+            let sub = ctx
+                .store
+                .session_worktree_subdir(&session.session_id)
+                .unwrap_or_default();
+            let mut p = PathBuf::from(&wt.path);
+            if !sub.is_empty() {
+                p.push(sub);
+            }
+            workspace.path = p.display().to_string();
         }
         let short = session
             .session_id
@@ -599,6 +831,12 @@ impl Actor {
             failures: HashMap::new(),
             loading: false,
             started_at: std::time::SystemTime::now(),
+            self_tx,
+            folders,
+            shared_folder: None,
+            repo_path,
+            sides: HashMap::new(),
+            side_routes: HashMap::new(),
         }
     }
 
@@ -638,6 +876,10 @@ impl Actor {
                 Err(e) => Exit::Failed(format!("{e:#}"), Value::Null),
             },
         };
+        self.end_sides(match exit {
+            Exit::Shutdown => "the host restarted; ask again",
+            _ => "the session ended",
+        });
         self.stop_agent().await;
         if let Some(g) = self.ctx.gateway.get() {
             g.unregister_session(&self.session.session_id);
@@ -743,19 +985,51 @@ impl Actor {
         if self.workspace.kind == WorkspaceKind::Scratch {
             crate::config::create_private_dir(&workspace_path)?;
         }
+        let mut git_access = None;
+        if let Some(wt) = self.session.worktree.clone() {
+            // Removed when the session was archived: back from its branch.
+            crate::worktree::ensure(&self.repo_path, &wt)
+                .await
+                .map_err(|e| StartFailure::new(format!("{e:#}"), Value::Null))?;
+            git_access = Some(
+                crate::worktree::access(Path::new(&wt.path))
+                    .await
+                    .map_err(|e| StartFailure::new(format!("the session's worktree {} is not usable: {e:#}", wt.path), Value::Null))?,
+            );
+        }
         if !workspace_path.is_dir() {
             return Err(StartFailure::new(
                 format!("workspace folder {} does not exist", self.workspace.path),
                 Value::Null,
             ));
         }
-        let policy: SandboxPolicy = sandbox::policy_for(
-            &self.ctx.cfg,
-            &self.spec,
-            &workspace_path,
-            &self.temp_dir,
-            &self.workspace.network,
-        );
+        let policy: SandboxPolicy = match &git_access {
+            Some(git) => sandbox::policy_for_worktree(
+                &self.ctx.cfg,
+                &self.spec,
+                &workspace_path,
+                &self.temp_dir,
+                &self.workspace.network,
+                git,
+            ),
+            None => sandbox::policy_for(
+                &self.ctx.cfg,
+                &self.spec,
+                &workspace_path,
+                &self.temp_dir,
+                &self.workspace.network,
+            ),
+        };
+        let sandboxed = !(self.spec.kind == AgentKind::Fake && self.ctx.cfg.fake_agent_unsandboxed);
+        // A folder other sessions may be using at the same time.
+        if sandboxed
+            && git_access.is_none()
+            && self.workspace.kind != WorkspaceKind::Scratch
+            && self.shared_folder.is_none()
+        {
+            self.folders.acquire(&workspace_path);
+            self.shared_folder = Some(workspace_path.clone());
+        }
 
         let proxy = EgressProxy::start(Arc::new(SessionNet {
             ctx: self.ctx.clone(),
@@ -765,7 +1039,7 @@ impl Actor {
         }))
         .await?;
 
-        let launch = if self.spec.kind == AgentKind::Fake && self.ctx.cfg.fake_agent_unsandboxed {
+        let launch = if !sandboxed {
             sandbox::launch_unsandboxed_fake(&self.ctx.cfg, &self.spec, &policy, proxy.http_port)
         } else {
             sandbox::launch_sandboxed(
@@ -807,6 +1081,16 @@ impl Actor {
             ));
         }
         self.prompt_caps = init["agentCapabilities"]["promptCapabilities"].clone();
+        let can_fork = init["agentCapabilities"]["sessionCapabilities"]
+            .get("fork")
+            .map(|f| !f.is_null())
+            .unwrap_or(false);
+        if can_fork != self.session.side_questions {
+            self.ctx
+                .store
+                .session_set_side_questions(&self.session.session_id, can_fork)?;
+            self.session.side_questions = can_fork;
+        }
         let can_load = init["agentCapabilities"]["loadSession"]
             .as_bool()
             .unwrap_or(false);
@@ -849,7 +1133,10 @@ impl Actor {
             }
             let r = self.call_during_start("session/load", params).await;
             self.loading = false;
-            r.map_err(|e| prefix_failure(e, "resume failed"))?;
+            let r = r.map_err(|e| prefix_failure(e, "resume failed"))?;
+            if let Some(opts) = parse_config_options(&r["configOptions"]) {
+                self.set_config_options(opts);
+            }
         } else {
             let mut params = json!({"cwd": cwd, "mcpServers": mcp_servers});
             if let Some(m) = &self.spec.session_meta {
@@ -864,8 +1151,14 @@ impl Actor {
                 .store
                 .session_set_acp_id(&self.session.session_id, &acp_id)?;
             self.session.acp_session_id = Some(acp_id);
+            if let Some(opts) = parse_config_options(&r["configOptions"]) {
+                self.set_config_options(opts);
+            }
         }
         self.apply_session_mode().await?;
+        if !resume {
+            self.apply_remembered_config().await;
+        }
         self.set_state(
             SessionState::Idle,
             None,
@@ -887,6 +1180,67 @@ impl Actor {
         .await
         .map_err(|e| prefix_failure(e, &format!("could not switch the agent to mode {mode}")))?;
         Ok(())
+    }
+
+    /// Store the agent's settings as it reports them, and tell clients.
+    fn set_config_options(&mut self, opts: Vec<SessionConfigOption>) {
+        if opts == self.session.config_options {
+            return;
+        }
+        if let Err(e) = self
+            .ctx
+            .store
+            .session_set_config_options(&self.session.session_id, &opts)
+        {
+            tracing::error!(session = %self.session.session_id, "store config options: {e}");
+        }
+        self.session.config_options = opts;
+        // While starting, the change goes out with the session becoming idle.
+        if self.state != SessionState::Starting {
+            self.ctx.publish_session(&self.session.session_id);
+        }
+    }
+
+    /// A new session starts with the choices last made for this login
+    /// (model, effort, …), where the agent still offers them.
+    async fn apply_remembered_config(&mut self) {
+        let ids: Vec<String> = self.session.config_options.iter().map(|o| o.id.clone()).collect();
+        for id in ids {
+            let key = config_choice_key(self.session.agent, self.session.profile_id.as_deref(), &id);
+            let Ok(Some(value)) = self.ctx.store.setting_get::<String>(&key) else {
+                continue;
+            };
+            // Re-read: changing one setting (the model) can change another's choices.
+            let Some(opt) = self.session.config_options.iter().find(|o| o.id == id) else {
+                continue;
+            };
+            if opt.current_value == value || !opt.options.iter().any(|v| v.value == value) {
+                continue;
+            }
+            let acp_id = self.session.acp_session_id.clone().unwrap_or_default();
+            match self
+                .call_during_start(
+                    "session/set_config_option",
+                    json!({"sessionId": acp_id, "configId": id, "value": value}),
+                )
+                .await
+            {
+                Ok(r) => self.config_changed(&id, &value, &r),
+                Err(e) => tracing::warn!(session = %self.session.session_id, "could not apply the remembered {id}: {e:#}"),
+            }
+        }
+    }
+
+    /// After `session/set_config_option`: the agent's settings as it now reports them.
+    fn config_changed(&mut self, config_id: &str, value: &str, result: &Value) {
+        let opts = parse_config_options(&result["configOptions"]).unwrap_or_else(|| {
+            let mut o = self.session.config_options.clone();
+            if let Some(x) = o.iter_mut().find(|x| x.id == config_id) {
+                x.current_value = value.to_string();
+            }
+            o
+        });
+        self.set_config_options(opts);
     }
 
     fn mcp_servers(&self) -> Value {
@@ -1021,6 +1375,51 @@ impl Actor {
                     attachments,
                 }),
                 Step::Cmd(Some(Cmd::Cancel)) => self.request_cancel(None).await,
+                Step::Cmd(Some(Cmd::SetConfig {
+                    config_id,
+                    value,
+                    reply,
+                })) => self.send_config(config_id, value, reply).await,
+                Step::Cmd(Some(Cmd::ConfigDone {
+                    config_id,
+                    value,
+                    result,
+                    reply,
+                })) => {
+                    let r = match result {
+                        Ok(v) => {
+                            self.config_changed(&config_id, &value, &v);
+                            let key = config_choice_key(
+                                self.session.agent,
+                                self.session.profile_id.as_deref(),
+                                &config_id,
+                            );
+                            if let Err(e) = self.ctx.store.setting_set(&key, &value) {
+                                tracing::warn!("remember {config_id}: {e}");
+                            }
+                            Ok(self.ctx.store.session_get(&self.session.session_id).ok().flatten().unwrap_or_else(|| self.session.clone()))
+                        }
+                        Err(e) => Err(RpcError::new(
+                            jsonrpc::codes::UNAVAILABLE,
+                            format!("{} refused the change: {}", self.spec.kind.display_name(), e.message),
+                        )),
+                    };
+                    let _ = reply.send(r);
+                }
+                Step::Cmd(Some(Cmd::SideAsk {
+                    side_id,
+                    text,
+                    reply,
+                })) => {
+                    let r = self.side_ask(side_id, text).await;
+                    let _ = reply.send(r);
+                }
+                Step::Cmd(Some(Cmd::SideForked { side_id, result })) => {
+                    self.side_forked(side_id, result).await
+                }
+                Step::Cmd(Some(Cmd::SideDone { side_id, result })) => {
+                    self.side_done(&side_id, result)
+                }
                 Step::Cmd(Some(Cmd::Approval { waiting })) => {
                     if waiting && self.state == SessionState::Running {
                         self.set_state(
@@ -1073,6 +1472,7 @@ impl Actor {
                         "forced": true
                     }));
                     self.cancel_requested = false;
+                    self.end_sides("the agent was restarted; ask again");
                     self.stop_agent().await;
                     if let Err(e) = self.start(true).await {
                         let (reason, detail) = match e.downcast::<StartFailure>() {
@@ -1087,6 +1487,210 @@ impl Actor {
                 }
             }
         }
+    }
+
+    /// Send a request to the agent and have its answer come back as a
+    /// command, so the actor keeps serving the agent while it waits.
+    async fn request_then(
+        &mut self,
+        method: &str,
+        params: Value,
+        then: impl FnOnce(Result<Value, RpcError>) -> Cmd + Send + 'static,
+    ) {
+        let tx = self.self_tx.clone();
+        let rx = match &self.agent {
+            Some(a) => a.conn.request(method, params).await,
+            None => Err(anyhow!("the agent is not running")),
+        };
+        match rx {
+            Ok(rx) => {
+                tokio::spawn(async move {
+                    let r = rx
+                        .await
+                        .unwrap_or_else(|_| Err(RpcError::internal("the agent exited")));
+                    let _ = tx.send(then(r));
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(then(Err(RpcError::internal(e.to_string()))));
+            }
+        }
+    }
+
+    async fn send_config(
+        &mut self,
+        config_id: String,
+        value: String,
+        reply: oneshot::Sender<Result<Session, RpcError>>,
+    ) {
+        let acp_id = self.session.acp_session_id.clone().unwrap_or_default();
+        let params = json!({"sessionId": acp_id, "configId": config_id, "value": value});
+        self.request_then("session/set_config_option", params, move |result| Cmd::ConfigDone {
+            config_id,
+            value,
+            result,
+            reply,
+        })
+        .await;
+    }
+
+    /// Record a side question and put it to its fork (forking first for a
+    /// new side conversation). The main turn, if any, carries on meanwhile.
+    async fn side_ask(&mut self, side_id: Option<String>, text: String) -> Result<String, RpcError> {
+        if self.agent.is_none() {
+            return Err(RpcError::invalid_state("the agent is not running"));
+        }
+        let side_id = match side_id {
+            Some(id) => {
+                let Some(side) = self.sides.get(&id) else {
+                    return Err(RpcError::invalid_state(
+                        "this side conversation ended when the host restarted; ask again",
+                    ));
+                };
+                if side.busy {
+                    return Err(RpcError::invalid_state(
+                        "this side conversation is still answering; wait for it to finish",
+                    ));
+                }
+                id
+            }
+            None => crate::util::new_id("side"),
+        };
+        self.append(
+            EventType::SideQuestion,
+            json!({"side_id": side_id, "text": text}),
+        );
+        match self.sides.get_mut(&side_id) {
+            Some(side) => {
+                side.busy = true;
+                side.text.clear();
+                let acp = side.acp_id.clone().unwrap_or_default();
+                self.side_prompt(&side_id, &acp, &text).await;
+            }
+            None => {
+                self.sides.insert(
+                    side_id.clone(),
+                    Side {
+                        acp_id: None,
+                        busy: true,
+                        pending: Some(text),
+                        text: String::new(),
+                    },
+                );
+                let mut params = json!({
+                    "sessionId": self.session.acp_session_id.clone().unwrap_or_default(),
+                    "cwd": self.workspace.path,
+                    // No connectors in a side conversation: their calls would
+                    // land in the session's own transcript.
+                    "mcpServers": [],
+                });
+                if let Some(m) = &self.spec.session_meta {
+                    params["_meta"] = m.clone();
+                }
+                let id = side_id.clone();
+                self.request_then("session/fork", params, move |result| Cmd::SideForked {
+                    side_id: id,
+                    result,
+                })
+                .await;
+            }
+        }
+        Ok(side_id)
+    }
+
+    async fn side_forked(&mut self, side_id: String, result: Result<Value, RpcError>) {
+        let acp = match result {
+            Ok(v) => v["sessionId"].as_str().map(str::to_string),
+            Err(e) => {
+                self.side_done(&side_id, Err(e));
+                return;
+            }
+        };
+        let Some(acp) = acp else {
+            self.side_done(&side_id, Err(RpcError::internal("session/fork returned no sessionId")));
+            return;
+        };
+        let Some(side) = self.sides.get_mut(&side_id) else {
+            return; // ended meanwhile
+        };
+        side.acp_id = Some(acp.clone());
+        let text = side.pending.take().unwrap_or_default();
+        self.side_routes.insert(acp.clone(), side_id.clone());
+        self.side_prompt(&side_id, &acp, &text).await;
+    }
+
+    async fn side_prompt(&mut self, side_id: &str, acp_id: &str, text: &str) {
+        let id = side_id.to_string();
+        self.request_then(
+            "session/prompt",
+            json!({"sessionId": acp_id, "prompt": [{"type": "text", "text": text}]}),
+            move |result| Cmd::SideDone { side_id: id, result },
+        )
+        .await;
+    }
+
+    /// Record a side answer (or its failure) once the fork's turn is over.
+    fn side_done(&mut self, side_id: &str, result: Result<Value, RpcError>) {
+        let Some(side) = self.sides.get_mut(side_id) else {
+            return; // from before a restart
+        };
+        if !side.busy {
+            return;
+        }
+        side.busy = false;
+        let text = std::mem::take(&mut side.text);
+        let forked = side.acp_id.is_some();
+        if !forked {
+            self.sides.remove(side_id);
+        }
+        if !text.is_empty() {
+            self.append(
+                EventType::SideMessage,
+                json!({"side_id": side_id, "text": text}),
+            );
+        }
+        let payload = match result {
+            Ok(v) => json!({"side_id": side_id, "stop_reason": v["stopReason"].as_str().unwrap_or("end_turn")}),
+            Err(e) => json!({"side_id": side_id, "stop_reason": "error", "error": e.message}),
+        };
+        self.append(EventType::SideEnd, payload);
+    }
+
+    /// End every side conversation (the agent is stopping), recording the
+    /// end of any answer still running.
+    fn end_sides(&mut self, why: &str) {
+        let busy: Vec<String> = self
+            .sides
+            .iter()
+            .filter(|(_, s)| s.busy)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for id in busy {
+            self.side_done(&id, Err(RpcError::internal(why)));
+        }
+        self.sides.clear();
+        self.side_routes.clear();
+    }
+
+    /// An update from a side conversation's fork: only its answer counts.
+    fn on_side_update(&mut self, side_id: &str, u: &Value) {
+        if u["sessionUpdate"].as_str() != Some("agent_message_chunk") {
+            return; // tool calls, thoughts, plans: not part of the answer
+        }
+        let text = acp::content_text(&u["content"]);
+        let Some(side) = self.sides.get_mut(side_id) else {
+            return;
+        };
+        if text.is_empty() || !side.busy {
+            return;
+        }
+        side.text.push_str(&text);
+        self.ctx.bus.publish(BusMsg::Delta(SessionDelta {
+            session_id: self.session.session_id.clone(),
+            kind: EventType::SideMessage,
+            text,
+            side_id: Some(side_id.to_string()),
+        }));
     }
 
     async fn start_turn(&mut self, q: Queued) -> Result<()> {
@@ -1247,12 +1851,25 @@ impl Actor {
             session_id: self.sid(),
             kind,
             text: text.to_string(),
+            side_id: None,
         }));
     }
 
     async fn on_incoming(&mut self, msg: Incoming) {
         match msg {
             Incoming::Notification(n) if n.method == "session/update" => {
+                // Updates for another ACP session are a side conversation's
+                // (or one the host doesn't know): never the transcript's.
+                if let (Some(from), Some(main)) =
+                    (n.params["sessionId"].as_str(), self.session.acp_session_id.as_deref())
+                {
+                    if from != main {
+                        if let Some(side_id) = self.side_routes.get(from).cloned() {
+                            self.on_side_update(&side_id, &n.params["update"]);
+                        }
+                        return;
+                    }
+                }
                 if !self.loading {
                     self.on_update(&n.params["update"]).await;
                 }
@@ -1290,6 +1907,11 @@ impl Actor {
                 self.stream(EventType::AgentThought, &acp::content_text(&u["content"]))
             }
             "tool_call" | "tool_call_update" => self.on_tool(kind == "tool_call", u).await,
+            "config_option_update" => {
+                if let Some(opts) = parse_config_options(&u["configOptions"]) {
+                    self.set_config_options(opts);
+                }
+            }
             _ => {}
         }
     }
@@ -1453,6 +2075,9 @@ impl Actor {
     /// removes its mount points), and only then kill the whole group.
     async fn stop_agent(&mut self) {
         let Some(mut a) = self.agent.take() else {
+            if let Some(dir) = self.shared_folder.take() {
+                self.folders.release(&dir, self.started_at);
+            }
             return;
         };
         drop(a.conn);
@@ -1473,26 +2098,15 @@ impl Actor {
             let _ = tokio::time::timeout(Duration::from_secs(2), a.child.wait()).await;
         }
         sandbox::kill_group(&mut a.child);
-        if !self.ctx.cfg.fake_agent_unsandboxed || self.spec.kind != AgentKind::Fake {
-            let others = self.workspace.kind != WorkspaceKind::Scratch
-                && self
-                .ctx
-                .store
-                .session_list(Some(&self.workspace.workspace_id))
-                .map(|l| {
-                    l.iter().any(|s| {
-                        s.session_id != self.session.session_id
-                            && !s.state.is_terminal()
-                            && s.state != SessionState::Created
-                    })
-                })
-                .unwrap_or(true);
-            if !others {
-                sandbox::sweep_mount_points(
-                    std::path::Path::new(&self.workspace.path),
-                    self.started_at,
-                );
-            }
+        if let Some(dir) = self.shared_folder.take() {
+            // The last session out removes the placeholders.
+            self.folders.release(&dir, self.started_at);
+        } else if !self.ctx.cfg.fake_agent_unsandboxed || self.spec.kind != AgentKind::Fake {
+            // A folder of its own: a quick task's, or its worktree.
+            sandbox::sweep_mount_points(
+                std::path::Path::new(&self.workspace.path),
+                self.started_at,
+            );
         }
     }
 }

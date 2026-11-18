@@ -261,6 +261,22 @@ enum SessionCmd {
     Unarchive {
         session: String,
     },
+    /// Show the agent's settings for a session (model, effort, …), or change one.
+    Config {
+        session: String,
+        /// The setting to change, e.g. `model`.
+        config_id: Option<String>,
+        /// Its new value.
+        value: Option<String>,
+    },
+    /// Ask a side question (/btw) without interrupting the session.
+    Btw {
+        session: String,
+        question: String,
+        /// Continue this side conversation.
+        #[arg(long)]
+        side: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -844,6 +860,74 @@ async fn run(cli: Cli) -> Result<()> {
             SessionCmd::Unarchive { session } => {
                 c.request(m::SESSION_UNARCHIVE, json!({"session_id": session}))
                     .await?;
+            }
+            SessionCmd::Config {
+                session,
+                config_id,
+                value,
+            } => {
+                let s = match (config_id, value) {
+                    (Some(id), Some(v)) => {
+                        c.call::<Session>(
+                            m::SESSION_SET_CONFIG,
+                            json!({"session_id": session, "config_id": id, "value": v}),
+                        )
+                        .await?
+                    }
+                    (None, None) => c.get_session(&session).await?,
+                    _ => anyhow::bail!("give both the setting and its new value, e.g. `session config {session} model <value>`"),
+                };
+                if json_out {
+                    print_json(&serde_json::to_value(&s.config_options)?);
+                } else if s.config_options.is_empty() {
+                    println!("{} reports no settings for this session", s.agent.display_name());
+                } else {
+                    for o in &s.config_options {
+                        println!("{} ({}):", o.name, o.id);
+                        for v in &o.options {
+                            let mark = if v.value == o.current_value { "*" } else { " " };
+                            println!("  {mark} {}  {}", v.value, v.name);
+                        }
+                    }
+                }
+            }
+            SessionCmd::Btw {
+                session,
+                question,
+                side,
+            } => {
+                let before = c.get_session(&session).await?;
+                c.subscribe(&session, before.last_seq).await?;
+                let r: SessionSideAskResult = c
+                    .call(
+                        m::SESSION_SIDE_ASK,
+                        json!({"session_id": session, "side_id": side, "text": question}),
+                    )
+                    .await?;
+                if !json_out {
+                    eprintln!("side conversation {} (continue it with --side {})", r.side_id, r.side_id);
+                }
+                while let Some(n) = notes.recv().await {
+                    let Some(e) = as_event(&n) else { continue };
+                    if e.payload["side_id"] != r.side_id.as_str() {
+                        continue;
+                    }
+                    if json_out {
+                        print_json(&serde_json::to_value(&e)?);
+                    }
+                    match e.kind {
+                        EventType::SideMessage if !json_out => {
+                            println!("{}", e.payload["text"].as_str().unwrap_or(""))
+                        }
+                        EventType::SideEnd => {
+                            if let Some(err) = e.payload["error"].as_str() {
+                                anyhow::bail!("the side question failed: {err}");
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
             }
         },
         Cmd::Run {
@@ -1572,6 +1656,13 @@ impl Renderer {
                 }
                 self.streamed.clear();
             }
+            EventType::SideQuestion => {
+                println!("\n> /btw {}", p["text"].as_str().unwrap_or(""));
+            }
+            EventType::SideMessage => {
+                println!("\x1b[2m(btw) {}\x1b[0m", p["text"].as_str().unwrap_or(""));
+            }
+            EventType::SideEnd => {}
             EventType::AgentThought => {
                 let t = p["text"].as_str().unwrap_or("");
                 println!("\x1b[2m(thinking) {}\x1b[0m", first_lines(t, 3));

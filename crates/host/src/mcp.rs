@@ -77,6 +77,10 @@ pub struct Gateway {
     oauth: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
     /// One install at a time: package managers don't like running concurrently.
     install_lock: tokio::sync::Mutex<()>,
+    /// Tool prefixes connectors had before a rename (old slug → connector
+    /// id): live sessions listed the tools under the old name and keep
+    /// calling them so.
+    renamed: Mutex<HashMap<String, String>>,
 }
 
 fn secret_name(connector_id: &str, kind: &str) -> String {
@@ -133,6 +137,16 @@ impl Gateway {
                 .build()?,
             oauth: Mutex::new(HashMap::new()),
             install_lock: tokio::sync::Mutex::new(()),
+            renamed: Mutex::new(HashMap::new()),
+        });
+        // Icons for connectors added before the host fetched them.
+        let g = gw.clone();
+        tokio::spawn(async move {
+            for c in g.ctx.store.connector_list().unwrap_or_default() {
+                if c.icon.is_none() {
+                    g.fetch_connector_icon(&c.connector_id, &c.url).await;
+                }
+            }
         });
         let g = gw.clone();
         tokio::spawn(async move {
@@ -374,10 +388,19 @@ impl Gateway {
             return self.install_tool(session_id, args).await;
         }
         let call_id = new_id("mcp");
-        let found = self
-            .list_tools(workspace_id)
-            .into_iter()
-            .find(|(_, _, d)| d["name"] == name);
+        let tools = self.list_tools(workspace_id);
+        let mut found = tools.iter().find(|(_, _, d)| d["name"] == name).cloned();
+        if found.is_none() {
+            // Listed before its connector was renamed.
+            if let Some((prefix, tool)) = name.split_once("__") {
+                let id = self.renamed.lock().unwrap().get(prefix).cloned();
+                if let Some(id) = id {
+                    found = tools
+                        .into_iter()
+                        .find(|(c, t, _)| c.connector_id == id && t.name == tool);
+                }
+            }
+        }
         let Some((conn, tool, _)) = found else {
             let _ = self.ctx.append(
                 session_id,
@@ -1161,6 +1184,26 @@ impl Gateway {
     // Admin
     // -----------------------------------------------------------------------
 
+    /// Fetch and store a connector's icon (its site's favicon), then tell
+    /// clients. Failures leave it without one.
+    async fn fetch_connector_icon(&self, connector_id: &str, url: &str) {
+        let Some(base) = self.ctx.cfg.favicon_url.as_deref() else {
+            return;
+        };
+        let Some(address) = crate::integrations::favicon_address(base, url) else {
+            return;
+        };
+        let Some(icon) = crate::integrations::fetch_icon(&self.http, &address).await else {
+            tracing::debug!(connector = connector_id, "no icon from {address}");
+            return;
+        };
+        if let Ok(true) = self.ctx.store.connector_set_icon(connector_id, &icon) {
+            self.ctx
+                .bus
+                .publish(BusMsg::ConnectorChanged(connector_id.to_string()));
+        }
+    }
+
     fn view(&self, c: &ConnectorRow) -> Result<Value, RpcError> {
         serde_json::to_value(
             self.ctx
@@ -1292,6 +1335,7 @@ impl ConnectorAdmin for Arc<Gateway> {
                     tools: vec![],
                     oauth_meta: None,
                     created_at: now_ms(),
+                    icon: None,
                 };
                 if let Some(t) = &a.token {
                     self.secrets
@@ -1315,8 +1359,27 @@ impl ConnectorAdmin for Arc<Gateway> {
                         .workspace_update(&w)
                         .map_err(|e| RpcError::internal(e.to_string()))?;
                 }
+                let g = self.clone();
+                let (id, url) = (c.connector_id.clone(), c.url.clone());
+                tokio::spawn(async move { g.fetch_connector_icon(&id, &url).await });
                 self.refresh_tools(&mut c).await;
                 self.view(&c)
+            }
+            m::CONNECTOR_SEARCH => {
+                let sp: ConnectorSearchParams = serde_json::from_value(p).map_err(bad)?;
+                if sp.query.trim().is_empty() {
+                    return Ok(json!([]));
+                }
+                let Some(base) = self.ctx.cfg.integrations_url.clone() else {
+                    return Err(RpcError::new(
+                        codes::UNAVAILABLE,
+                        "connector search is turned off on this host; add the connector by its address",
+                    ));
+                };
+                let found = crate::integrations::search(&self.http, &base, &sp.query)
+                    .await
+                    .map_err(|e| RpcError::new(codes::UNAVAILABLE, format!("{e:#}")))?;
+                serde_json::to_value(found).map_err(|e| RpcError::internal(e.to_string()))
             }
             m::CONNECTOR_UPDATE => {
                 let u: ConnectorUpdateParams = serde_json::from_value(p).map_err(bad)?;
@@ -1325,6 +1388,34 @@ impl ConnectorAdmin for Arc<Gateway> {
                     let n = n.trim();
                     if n.is_empty() {
                         return Err(RpcError::invalid_params("a connector needs a name"));
+                    }
+                    // Agents see tools as `<slug>__<tool>`: two connectors
+                    // with one slug would rename the other's tools.
+                    let new_slug = slug(n);
+                    if new_slug == BUILTIN_CONNECTOR_ID {
+                        return Err(RpcError::invalid_params(format!(
+                            "{n} is taken by the host's own tools; pick another name"
+                        )));
+                    }
+                    let others = self
+                        .ctx
+                        .store
+                        .connector_list()
+                        .map_err(|e| RpcError::internal(e.to_string()))?;
+                    if let Some(o) = others
+                        .iter()
+                        .find(|o| o.connector_id != c.connector_id && slug(&o.name) == new_slug)
+                    {
+                        return Err(RpcError::invalid_params(format!(
+                            "{} already gives its tools the prefix {new_slug}; pick a name that differs in more than punctuation or case",
+                            o.name
+                        )));
+                    }
+                    let old_slug = slug(&c.name);
+                    if old_slug != new_slug {
+                        let mut r = self.renamed.lock().unwrap();
+                        r.insert(old_slug, c.connector_id.clone());
+                        r.remove(&new_slug);
                     }
                     c.name = n.to_string();
                 }

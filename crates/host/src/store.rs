@@ -167,9 +167,18 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
         last_seq: r.get(9)?,
         profile_id: r.get(10)?,
         archived_at: r.get(11)?,
+        worktree: match (r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?) {
+            (Some(path), Some(branch)) => Some(SessionWorktree { path, branch }),
+            _ => None,
+        },
+        config_options: match r.get::<_, Option<String>>(14)? {
+            Some(j) => json_parse(&j)?,
+            None => vec![],
+        },
+        side_questions: r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -188,6 +197,14 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("sessions", "archived_at", "INTEGER"),
     ("workspaces", "default_agent", "TEXT"),
     ("workspaces", "default_profile_id", "TEXT"),
+    ("sessions", "worktree_path", "TEXT"),
+    ("sessions", "worktree_branch", "TEXT"),
+    // The workspace's folder inside the repository ("" at its top), which is
+    // where in the worktree the session works.
+    ("sessions", "worktree_subdir", "TEXT"),
+    ("sessions", "config_options", "TEXT"),
+    ("sessions", "side_questions", "INTEGER"),
+    ("connectors", "icon", "TEXT"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -250,6 +267,8 @@ pub struct ConnectorRow {
     pub tools: Vec<RawTool>,
     pub oauth_meta: Option<Value>,
     pub created_at: i64,
+    /// A `data:` URL, set in the background after the connector is added.
+    pub icon: Option<String>,
 }
 
 impl ConnectorRow {
@@ -287,9 +306,10 @@ fn row_connector(r: &Row) -> rusqlite::Result<ConnectorRow> {
             .map(|s| json_parse(&s))
             .transpose()?,
         created_at: r.get(11)?,
+        icon: r.get(12)?,
     })
 }
-const CONN_COLS: &str = "connector_id, name, url, auth, enabled, status, status_detail, read_policy, write_policy, tools, oauth_meta, created_at";
+const CONN_COLS: &str = "connector_id, name, url, auth, enabled, status, status_detail, read_policy, write_policy, tools, oauth_meta, created_at, icon";
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -505,7 +525,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -518,7 +538,11 @@ impl Store {
                 s.updated_at,
                 s.last_seq,
                 s.profile_id,
-                s.archived_at
+                s.archived_at,
+                s.worktree.as_ref().map(|w| w.path.clone()),
+                s.worktree.as_ref().map(|w| w.branch.clone()),
+                serde_json::to_string(&s.config_options)?,
+                s.side_questions as i64
             ],
         )?;
         Ok(())
@@ -566,6 +590,45 @@ impl Store {
             .query_map(params![workspace_id], row_session)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    /// Record the worktree a session works in, and where in it.
+    pub fn session_set_worktree(&self, id: &str, wt: &SessionWorktree, subdir: &str) -> Result<()> {
+        self.db().execute(
+            "UPDATE sessions SET worktree_path = ?2, worktree_branch = ?3, worktree_subdir = ?4 WHERE session_id = ?1",
+            params![id, wt.path, wt.branch, subdir],
+        )?;
+        Ok(())
+    }
+
+    /// The workspace's folder inside the repository, relative to the worktree's top.
+    pub fn session_worktree_subdir(&self, id: &str) -> Result<String> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT worktree_subdir FROM sessions WHERE session_id = ?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .unwrap_or_default())
+    }
+
+    pub fn session_set_config_options(&self, id: &str, options: &[SessionConfigOption]) -> Result<()> {
+        self.db().execute(
+            "UPDATE sessions SET config_options = ?2 WHERE session_id = ?1",
+            params![id, serde_json::to_string(options)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn session_set_side_questions(&self, id: &str, on: bool) -> Result<()> {
+        self.db().execute(
+            "UPDATE sessions SET side_questions = ?2 WHERE session_id = ?1",
+            params![id, on as i64],
+        )?;
+        Ok(())
     }
 
     pub fn session_set_acp_id(&self, id: &str, acp_id: &str) -> Result<()> {
@@ -812,7 +875,7 @@ impl Store {
 
     pub fn connector_insert(&self, c: &ConnectorRow) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO connectors ({CONN_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+            &format!("INSERT INTO connectors ({CONN_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"),
             params![
                 c.connector_id,
                 c.name,
@@ -825,7 +888,8 @@ impl Store {
                 enum_str(&c.write_policy),
                 serde_json::to_string(&c.tools)?,
                 c.oauth_meta.as_ref().map(|v| v.to_string()),
-                c.created_at
+                c.created_at,
+                c.icon
             ],
         )?;
         Ok(())
@@ -849,6 +913,14 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Store a connector's icon (a `data:` URL). False if it was removed meanwhile.
+    pub fn connector_set_icon(&self, id: &str, icon: &str) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE connectors SET icon = ?2 WHERE connector_id = ?1",
+            params![id, icon],
+        )? > 0)
     }
 
     pub fn connector_get(&self, id: &str) -> Result<Option<ConnectorRow>> {
@@ -942,6 +1014,7 @@ impl Store {
             read_policy: c.read_policy,
             tools,
             created_at: c.created_at,
+            icon: c.icon.clone(),
         })
     }
 }
@@ -1010,6 +1083,9 @@ mod tests {
             agent: AgentKind::Fake,
             profile_id: None,
             archived_at: None,
+            worktree: None,
+            config_options: vec![],
+            side_questions: false,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,

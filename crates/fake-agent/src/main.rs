@@ -17,10 +17,17 @@
 //! | `crash`                | Exits the process mid-turn                             |
 //! | anything else          | Thinks, then replies `echo: <prompt>` in chunks        |
 //!
+//! Sessions have two settings (`configOptions`): `model` (`fake-fast`,
+//! `fake-smart`, in a group) and `thought_level` (`low`, `medium`, `high`),
+//! changed with `session/set_config_option`, plus a `mode` select. A
+//! `session/fork` copies a session; a fork answers every prompt with a
+//! `peek` tool call and then `side answer: <prompt>`.
+//!
 //! Environment: `FAKE_AGENT_HOME` (state, default `$HOME/.fake-agent`),
 //! `FAKE_AGENT_LOGGED_OUT=1` (fail `session/new` with auth required),
 //! `FAKE_AGENT_PROTOCOL_VERSION` (override the version it reports),
-//! `FAKE_AGENT_CHUNK_MS` (pause between reply chunks).
+//! `FAKE_AGENT_CHUNK_MS` (pause between reply chunks), `FAKE_AGENT_NO_FORK=1`
+//! (no `session/fork`).
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -36,6 +43,38 @@ struct SessionData {
     cwd: String,
     mcp_servers: Vec<Value>,
     cancel: Arc<AtomicBool>,
+    model: String,
+    effort: String,
+    /// A fork made for a side question.
+    fork: bool,
+}
+
+impl SessionData {
+    fn new(cwd: String, mcp_servers: Vec<Value>) -> Self {
+        SessionData {
+            cwd,
+            mcp_servers,
+            cancel: Arc::new(AtomicBool::new(false)),
+            model: "fake-fast".into(),
+            effort: "medium".into(),
+            fork: false,
+        }
+    }
+
+    fn config_options(&self) -> Value {
+        json!([
+            {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default",
+             "options": [{"value": "default", "name": "Default"}]},
+            {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": self.model,
+             "options": [{"group": "fake", "name": "Fake models", "options": [
+                {"value": "fake-fast", "name": "Fake Fast", "description": "Quick answers"},
+                {"value": "fake-smart", "name": "Fake Smart"}
+             ]}]},
+            {"id": "thought_level", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": self.effort,
+             "options": [{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"}, {"value": "high", "name": "High"}]},
+            {"id": "fast", "name": "Fast", "type": "boolean", "currentValue": false}
+        ])
+    }
 }
 
 struct Agent {
@@ -181,10 +220,16 @@ async fn handle_request(
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1);
+            let session_caps = if std::env::var("FAKE_AGENT_NO_FORK").as_deref() == Ok("1") {
+                json!({})
+            } else {
+                json!({"fork": {}})
+            };
             Ok(json!({
                 "protocolVersion": version,
                 "agentCapabilities": {
                     "loadSession": true,
+                    "sessionCapabilities": session_caps,
                     "promptCapabilities": {"image": false, "audio": false, "embeddedContext": false},
                     "mcpCapabilities": {"http": true, "sse": false}
                 },
@@ -208,14 +253,13 @@ async fn handle_request(
                 }
                 sid
             };
-            agent.sessions.lock().unwrap().insert(
-                session_id.clone(),
-                SessionData {
-                    cwd,
-                    mcp_servers,
-                    cancel: Arc::new(AtomicBool::new(false)),
-                },
-            );
+            let options = {
+                let mut sessions = agent.sessions.lock().unwrap();
+                let data = SessionData::new(cwd, mcp_servers);
+                let options = data.config_options();
+                sessions.insert(session_id.clone(), data);
+                options
+            };
             if method == "session/load" {
                 for item in agent.load_history(&session_id) {
                     let kind = if item["role"] == "user" {
@@ -227,11 +271,64 @@ async fn handle_request(
                         .update(&session_id, json!({"sessionUpdate":kind,"content":{"type":"text","text":item["text"]}}))
                         .await;
                 }
-                Ok(Value::Null)
+                Ok(json!({"configOptions": options}))
             } else {
                 agent.append_history(&session_id, "system", "created");
-                Ok(json!({"sessionId": session_id}))
+                Ok(json!({"sessionId": session_id, "configOptions": options}))
             }
+        }
+        "session/fork" => {
+            if std::env::var("FAKE_AGENT_NO_FORK").as_deref() == Ok("1") {
+                return Err((-32601, "method not found: session/fork".into()));
+            }
+            let source = params["sessionId"].as_str().unwrap_or_default().to_string();
+            let fork_id = format!("fake-fork-{}", uuid::Uuid::new_v4());
+            let options = {
+                let mut sessions = agent.sessions.lock().unwrap();
+                let s = sessions
+                    .get(&source)
+                    .ok_or((-32002, format!("unknown session {source}")))?;
+                let mut data = SessionData::new(
+                    params["cwd"].as_str().unwrap_or(&s.cwd).to_string(),
+                    params["mcpServers"].as_array().cloned().unwrap_or_default(),
+                );
+                data.model = s.model.clone();
+                data.effort = s.effort.clone();
+                data.fork = true;
+                let options = data.config_options();
+                sessions.insert(fork_id.clone(), data);
+                options
+            };
+            let history = agent.load_history(&source);
+            for item in history {
+                agent.append_history(
+                    &fork_id,
+                    item["role"].as_str().unwrap_or("system"),
+                    item["text"].as_str().unwrap_or(""),
+                );
+            }
+            Ok(json!({"sessionId": fork_id, "configOptions": options}))
+        }
+        "session/set_config_option" => {
+            let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
+            let id = params["configId"].as_str().unwrap_or_default();
+            let value = params["value"].as_str().unwrap_or_default().to_string();
+            let options = {
+                let mut sessions = agent.sessions.lock().unwrap();
+                let s = sessions
+                    .get_mut(&sid)
+                    .ok_or((-32002, format!("unknown session {sid}")))?;
+                match (id, value.as_str()) {
+                    ("model", "fake-fast" | "fake-smart") => s.model = value,
+                    ("thought_level", "low" | "medium" | "high") => s.effort = value,
+                    _ => return Err((-32602, format!("Invalid value for config option {id}: {value}"))),
+                }
+                s.config_options()
+            };
+            agent
+                .update(&sid, json!({"sessionUpdate": "config_option_update", "configOptions": options}))
+                .await;
+            Ok(json!({"configOptions": options}))
         }
         "session/prompt" => {
             let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
@@ -245,15 +342,24 @@ async fn handle_request(
                         .join("\n")
                 })
                 .unwrap_or_default();
-            let (cancel, cwd, mcp) = {
+            let (cancel, cwd, mcp, fork) = {
                 let sessions = agent.sessions.lock().unwrap();
                 let s = sessions
                     .get(&sid)
                     .ok_or((-32002, format!("unknown session {sid}")))?;
                 s.cancel.store(false, Ordering::SeqCst);
-                (s.cancel.clone(), s.cwd.clone(), s.mcp_servers.clone())
+                (s.cancel.clone(), s.cwd.clone(), s.mcp_servers.clone(), s.fork)
             };
             agent.append_history(&sid, "user", &text);
+            if fork {
+                // A side conversation: a look around (which the host must not
+                // put in the transcript), then the answer.
+                agent
+                    .update(&sid, json!({"sessionUpdate":"tool_call","toolCallId":"peek-1","title":"peek","kind":"read","status":"completed","rawInput":{"path":"."}}))
+                    .await;
+                say(agent, &sid, &format!("side answer: {text}")).await;
+                return Ok(json!({"stopReason": "end_turn"}));
+            }
             let stop = run_prompt(agent, &sid, &text, &cwd, &mcp, &cancel).await;
             Ok(
                 json!({"stopReason": stop, "usage": {"inputTokens": text.len(), "outputTokens": 10}}),

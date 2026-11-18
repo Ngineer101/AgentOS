@@ -35,6 +35,9 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Session statuses, archive, per-workspace default login | Host ✅: `session.archive` (ends a live session, hides it from `session.list`; `archived: true` lists them) and `session.unarchive`; workspaces remember a default login, set by their first session and changed with `workspace.set_default_agent` (phones may call all three). Tested with the fake agent, including archive surviving a restart. CLI ✅ (`session archive/unarchive`, `session list --archived`, `workspace default`). Desktop and iOS: statuses (working, needs you, failed, your turn, ended), archive actions, an Archived list in Settings, and the default login preselected in New Session |
 | Agent profiles (several logins per agent) | Host ✅: `agent.profile_add/remove/list`, one `host.info` entry per login, `session.create` takes `profile_id`; the folder goes in the agent's own setting (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, OpenCode `XDG_DATA_HOME`, Cursor `XDG_CONFIG_HOME` on Linux; read from each CLI's code). Folders are checked against home, secrets, host data, other logins and workspaces; each session's sandbox hides every other login. Tested with the fake agent (state lands in the profile folder, resume of a removed profile fails) and the policy unit tests; **not tried with a real second subscription**. CLI ✅ (`agenthost agent …`, `claude:work`). Desktop ✅ choose on New session, add/remove on Host status (rendered headless). iOS: choose on New session; builds for the simulator, not run |
 | Installing tools | Host ✅: the gateway's built-in `agenthost__install_tool` (npm, pipx, uv, cargo, brew, go; offered only for managers found on PATH) always asks first, shows the exact command, the agent's reason and "runs as you, outside the sandbox", and only then runs it, as an argument list with no shell, one at a time, with a 15-minute limit; registry package names and plain versions only (no URLs, paths, git specs, flags or ranges); decisions and results go to the audit log. Each session can also write a shared session tools folder next to the data folder (npm prefix, pip user base, pipx, uv, cargo and go homes, their `bin` first on PATH), so agents install helpers for themselves without approval and without touching your home folder. Tested with a fake package manager (denied runs nothing, approved runs exactly what was shown) and unit tests; **no real package manager or real agent has used it yet**. Desktop ✅ install card (rendered headless in both looks). iOS: install card and approval sheet; builds, checked in the simulator demo |
+| Model and effort | Host ✅: the agent's ACP `configOptions` (select kind; `mode` left out, the host sets it) in `Session.config_options`, changed with `session.set_config`; the last choice per login is applied to new sessions. Tested with the fake agent; **not tried with the real Claude adapter** (shapes read from its source). Desktop and iOS: model and effort pickers in the composer; rendered with demo data |
+| Side questions (`/btw`) | Host ✅: `session.side_ask` forks the conversation (ACP `session/fork`, offered when the agent advertises it) and answers alongside a running turn; the fork's output never reaches the main transcript (`side.*` events); forks get no connectors. Tested with the fake agent; **not tried with a real agent**. Desktop: side panel with a tab per question; iOS: a sheet. Rendered with demo data |
+| Connector catalog and icons | Host ✅: `connector.search` queries integrations.sh (MCP servers only, icons as `data:` URLs); each connector gets its site's favicon (Google's favicon service, so the domain is sent there) when added. Rename refuses a tool prefix that clashes. Tested against a local server; **the real services were not called by the tests**. Desktop: search when adding, rename, icons (bearer tokens no longer offered). iOS: icons on approvals |
 | Voice input | Host ✅: NVIDIA Nemotron 3.5 ASR streaming 0.6B (int8, sherpa-onnx export, 475 MB) downloaded on request with a pinned SHA-256, run on the CPU through `sherpa-onnx` 2.0.1 (statically linked ONNX Runtime, about 36 MB in `agenthostd`). Download, checksum, unpacking and transcription through `voice.*` checked here (sample French and German clips: about 0.5–0.8 s for 3–5 s of audio after a 1.5 s first load). Desktop: microphone through `cpal` checked (records a WAV); the full speak → text path not tried with a voice. iOS: uses iOS dictation (Speech framework, on device where supported) instead of the host model, so nothing is downloaded for the phone; builds for the simulator, not tried with a voice |
 
 ## Milestone 0 answers (Linux)
@@ -121,10 +124,23 @@ is refused. The host listened on no TCP port throughout.
   by other users (checked in `/proc/net/tcp`). They close with the session.
 - **OAuth sign-in opens a loopback listener** on `127.0.0.1` for up to five
   minutes to receive the browser redirect.
-- **One live session per workspace.** Two sandboxes in one folder would remove
-  each other's protective mount points (`sandbox-runtime` creates empty
-  placeholders for `.bashrc`, `.gitconfig`, `.mcp.json`, `.vscode` …). End the
-  session first, or add a second folder.
+- **Several live sessions per workspace.** In a git repository each session
+  gets a worktree under `<data>-worktrees/<session>` on its own branch
+  (`agenthost/<id>`), made by the host from `HEAD`; the session works there
+  (in the same subfolder when the workspace is one), your checkout stays
+  read-only to it, and other sessions' worktrees are unreadable. Inside the
+  sandbox only the parts of the repository's `.git` a worktree writes to are
+  writable (`objects`, `refs`, `logs`, its own `worktrees/<name>`), never the
+  top of `.git` (`config`, `hooks`, a planted `commondir`) nor the worktree's
+  `.git` pointer. Archiving removes a worktree without uncommitted changes
+  (the branch stays); unarchiving or resuming brings it back from the branch.
+  Outside git (or in a repository without commits) sessions share the folder;
+  on Linux the host creates `sandbox-runtime`'s read-only placeholders itself
+  and removes them when the last session there ends, because `sandbox-runtime`
+  leaves placeholders it did not create in place. Sessions created before
+  this keep working in the workspace folder. The host's own git commands run
+  with hooks and fsmonitor off, so nothing from the repository runs outside
+  the sandbox.
 - **Host-controlled agent configuration**, as found necessary:
   - Codex: a per-session wrapper (`CODEX_PATH`) plus `CODEX_CONFIG` turn off
     every MCP server in your `~/.codex/config.toml` and the workspace's

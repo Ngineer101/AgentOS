@@ -300,3 +300,159 @@ async fn profile_change_applies_without_restart() {
         "registry not reachable after switching to packages: {o}"
     );
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+async fn sh_in(
+    c: &Client,
+    n: &mut tokio::sync::mpsc::Receiver<agenthost_proto::jsonrpc::Notification>,
+    sid: &str,
+    cmd: &str,
+) -> String {
+    c.prompt(sid, &format!("sh {cmd}")).await.unwrap();
+    let (ev, _) = collect_until(n, T, |e| e.kind == EventType::TurnEnd && e.session_id == sid).await;
+    ev.iter()
+        .find(|e| e.kind == EventType::ToolResult && e.session_id == sid)
+        .map(|e| e.payload["output"].as_str().unwrap_or("").to_string())
+        .unwrap_or_default()
+}
+
+/// Two sessions in a git workspace, each in its own worktree inside the
+/// sandbox: git works there, the repository's config and hooks don't move,
+/// and neither session can see the other's worktree.
+#[tokio::test]
+async fn worktree_sessions_in_the_sandbox() {
+    let Some(tools) = tools() else {
+        eprintln!("SKIP: set AGENTHOST_TEST_TOOLS to run sandbox escape tests");
+        return;
+    };
+    let th = TestHost::start_with(|c| {
+        c.fake_agent_unsandboxed = false;
+        c.tools_dir = tools;
+    })
+    .await;
+    // Not under the test host's folder, which holds its socket (unreadable).
+    let repo_dir = short_tempdir();
+    let repo = std::fs::canonicalize(repo_dir.path()).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "hi\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "first"]);
+    let (c, mut n) = th.client().await;
+    let ws = c.add_workspace(repo.to_str().unwrap(), None).await.unwrap().workspace_id;
+    let a = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    let b = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    wait_state(&c, &a.session_id, SessionState::Idle, T).await;
+    wait_state(&c, &b.session_id, SessionState::Idle, T).await;
+    c.subscribe(&a.session_id, 0).await.unwrap();
+    c.subscribe(&b.session_id, 0).await.unwrap();
+    let (wa, wb) = (a.worktree.unwrap(), b.worktree.unwrap());
+    let git_dir = repo.join(".git");
+
+    let mut failures = vec![];
+    let mut check = |name: &str, ok: bool, detail: String| {
+        eprintln!("{} {name}", if ok { "PASS" } else { "FAIL" });
+        if !ok {
+            failures.push(format!("{name}: {detail}"));
+        }
+    };
+    let o = sh_in(&c, &mut n, &a.session_id, "echo x > new.txt && git add new.txt && git -c user.name=A -c user.email=a@example.com commit -q -m in-sandbox && git log -1 --format=%s").await;
+    check("git commits in the worktree", o.contains("in-sandbox"), o);
+    check(
+        "the commit is on the session's branch",
+        git(&repo, &["log", "-1", "--format=%s", &wa.branch]) == "in-sandbox",
+        String::new(),
+    );
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("echo '[core]' >> {}/config; echo rc=$?", git_dir.display())).await;
+    check("the repository's config is read-only", !std::fs::read_to_string(git_dir.join("config")).unwrap().ends_with("[core]\n"), o);
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("echo evil > {}/hooks/pre-commit; echo rc=$?", git_dir.display())).await;
+    check("the repository's hooks are read-only", !git_dir.join("hooks/pre-commit").exists(), o);
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("echo {} > {}/commondir; echo rc=$?", repo.display(), git_dir.display())).await;
+    check("nothing new at the top of .git", !git_dir.join("commondir").exists(), o);
+    let o = sh_in(&c, &mut n, &a.session_id, "echo 'gitdir: /tmp' > .git; echo rc=$?").await;
+    check(
+        "the worktree's .git pointer is read-only",
+        std::fs::read_to_string(std::path::Path::new(&wa.path).join(".git")).unwrap().contains("worktrees"),
+        o,
+    );
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("echo x > {}/main.txt; echo rc=$?", repo.display())).await;
+    check("your checkout is read-only", !repo.join("main.txt").exists(), o);
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("cat {}/README.md", repo.display())).await;
+    check("your checkout is readable", o.contains("hi"), o);
+    let o = sh_in(&c, &mut n, &a.session_id, &format!("ls {} 2>&1; cat {}/README.md 2>&1", wb.path, wb.path)).await;
+    check("the other session's worktree is unreadable", !o.contains("hi"), o);
+    let o = sh_in(&c, &mut n, &b.session_id, "git status --short; git log -1 --format=%s").await;
+    check("the other session is unaffected", o.contains("first"), o);
+    assert!(failures.is_empty(), "worktree sandbox tests failed:\n{}", failures.join("\n"));
+}
+
+/// Two sandboxed sessions in one folder outside git: ending one leaves the
+/// other's protection in place.
+#[tokio::test]
+async fn shared_folder_sessions_in_the_sandbox() {
+    let Some(tools) = tools() else {
+        eprintln!("SKIP: set AGENTHOST_TEST_TOOLS to run sandbox escape tests");
+        return;
+    };
+    let th = TestHost::start_with(|c| {
+        c.fake_agent_unsandboxed = false;
+        c.tools_dir = tools;
+    })
+    .await;
+    // Not under the test host's folder, which holds its socket (unreadable).
+    let dir = short_tempdir();
+    let folder = std::fs::canonicalize(dir.path()).unwrap();
+    let (c, mut n) = th.client().await;
+    let ws = c.add_workspace(folder.to_str().unwrap(), None).await.unwrap().workspace_id;
+    let a = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    let b = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    wait_state(&c, &a.session_id, SessionState::Idle, T).await;
+    wait_state(&c, &b.session_id, SessionState::Idle, T).await;
+    c.subscribe(&b.session_id, 0).await.unwrap();
+    assert_eq!(th.host.sessions.folder_users(&folder), 2);
+    c.request(m::SESSION_END, json!({"session_id": a.session_id})).await.unwrap();
+    wait_state(&c, &a.session_id, SessionState::Ended, T).await;
+    assert_eq!(th.host.sessions.folder_users(&folder), 1);
+    let o = sh_in(&c, &mut n, &b.session_id, "echo 'evil' > .bashrc; echo ok > b.txt; cat b.txt").await;
+    assert!(o.contains("ok"), "{o}");
+    assert!(
+        !std::fs::read_to_string(folder.join(".bashrc")).unwrap_or_default().contains("evil"),
+        "{o}"
+    );
+    c.request(m::SESSION_END, json!({"session_id": b.session_id})).await.unwrap();
+    wait_state(&c, &b.session_id, SessionState::Ended, T).await;
+    assert_eq!(th.host.sessions.folder_users(&folder), 0);
+    // Nothing left behind.
+    assert!(!folder.join(".bashrc").exists());
+}
+
+/// A quick task reads what it writes in its own folder (which sits in the
+/// scratch folder every other session is denied).
+#[tokio::test]
+async fn quick_tasks_can_read_their_own_folder() {
+    let Some(tools) = tools() else {
+        eprintln!("SKIP: set AGENTHOST_TEST_TOOLS to run sandbox escape tests");
+        return;
+    };
+    let th = TestHost::start_with(|c| {
+        c.fake_agent_unsandboxed = false;
+        c.tools_dir = tools;
+    })
+    .await;
+    let (c, mut n) = th.client().await;
+    let s = c.create_session(QUICK_WORKSPACE_ID, AgentKind::Fake).await.unwrap();
+    wait_state(&c, &s.session_id, SessionState::Idle, T).await;
+    c.subscribe(&s.session_id, 0).await.unwrap();
+    let o = sh_in(&c, &mut n, &s.session_id, "echo quick-hi > f.txt; cat f.txt").await;
+    assert!(o.contains("quick-hi"), "{o}");
+}

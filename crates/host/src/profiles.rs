@@ -145,6 +145,7 @@ fn check_folder(h: &Host, agent: AgentKind, dir: &Path) -> Result<(), String> {
         cfg.runtime_dir.clone(),
         cfg.scratch_dir(),
         cfg.session_tools_dir(),
+        cfg.worktrees_dir(),
     ];
     if let Some(p) = cfg.socket_path.parent() {
         host_data.push(p.to_path_buf());

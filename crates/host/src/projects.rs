@@ -264,6 +264,7 @@ pub fn set_roots(h: &Host, p: ProjectRootsParams) -> Result<Vec<String>, RpcErro
             cfg.runtime_dir.clone(),
             cfg.scratch_dir(),
             cfg.session_tools_dir(),
+            cfg.worktrees_dir(),
         ] {
             if crate::profiles::overlaps(&dir, &real(&protected)) {
                 return Err(RpcError::invalid_params(format!(

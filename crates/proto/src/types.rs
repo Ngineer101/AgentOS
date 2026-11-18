@@ -390,6 +390,72 @@ pub struct Session {
     /// for (`archived: true`). Archived sessions have ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<i64>,
+    /// The session's own git worktree, for sessions in a git workspace:
+    /// each session works on a branch of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<SessionWorktree>,
+    /// The agent's settings for this session (model, effort, …) as it last
+    /// reported them; empty when it reports none. Change one with
+    /// `session.set_config`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_options: Vec<SessionConfigOption>,
+    /// The agent can answer side questions (`session.side_ask`, the `/btw`
+    /// command) in a fork of the conversation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub side_questions: bool,
+}
+
+/// Where a session's worktree is and which branch it is on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionWorktree {
+    pub path: String,
+    pub branch: String,
+}
+
+/// One of an agent's session settings (ACP `configOptions`, `select` kind).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionConfigOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ACP's category: `model`, `thought_level` (effort), `mode`, … Clients
+    /// show `model` and `thought_level` in the composer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    pub current_value: String,
+    pub options: Vec<SessionConfigValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionConfigValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSetConfigParams {
+    pub session_id: String,
+    pub config_id: String,
+    pub value: String,
+}
+
+/// A side question (`/btw`): asked in a fork of the conversation, so the
+/// session itself is neither interrupted nor changed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSideAskParams {
+    pub session_id: String,
+    /// Continue this side conversation; omitted to start a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_id: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSideAskResult {
+    pub side_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -414,6 +480,15 @@ pub enum EventType {
     NetDenied,
     #[serde(rename = "turn.end")]
     TurnEnd,
+    /// `{side_id, text}`: a side question was asked.
+    #[serde(rename = "side.question")]
+    SideQuestion,
+    /// `{side_id, text}`: the answer (streamed as `session.delta` with `side_id`).
+    #[serde(rename = "side.message")]
+    SideMessage,
+    /// `{side_id, stop_reason, error?}`: the side answer is complete.
+    #[serde(rename = "side.end")]
+    SideEnd,
 }
 
 impl EventType {
@@ -429,6 +504,9 @@ impl EventType {
             EventType::ApprovalResolved => "approval.resolved",
             EventType::NetDenied => "net.denied",
             EventType::TurnEnd => "turn.end",
+            EventType::SideQuestion => "side.question",
+            EventType::SideMessage => "side.message",
+            EventType::SideEnd => "side.end",
         }
     }
 
@@ -453,9 +531,12 @@ pub struct Event {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionDelta {
     pub session_id: String,
-    /// `agent.message` or `agent.thought`.
+    /// `agent.message`, `agent.thought` or `side.message`.
     pub kind: EventType,
     pub text: String,
+    /// The side conversation a `side.message` chunk belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +614,33 @@ pub struct Connector {
     pub read_policy: ToolPolicy,
     pub tools: Vec<ConnectorTool>,
     pub created_at: i64,
+    /// The service's icon as a `data:image/png;base64,…` URL, fetched by
+    /// the host when the connector was added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectorSearchParams {
+    pub query: String,
+}
+
+/// An MCP server found in the integrations.sh catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectorSuggestion {
+    /// "linear.app".
+    pub domain: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The MCP endpoint, for `connector.add`.
+    pub url: String,
+    /// How it signs in: `oauth`, `none`, or what integrations.sh says
+    /// (`api_key`, …; those can't be added here yet).
+    pub auth: String,
+    /// The icon as a `data:` URL, when the host could fetch it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// The prefix a connector's tools get when agents see them

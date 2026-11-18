@@ -339,7 +339,15 @@ impl Conn {
             }
             m::SESSION_CREATE => {
                 let cp: SessionCreateParams = params(p)?;
-                to_value(h.sessions.create(cp, Some(&self.principal.label))?)
+                to_value(h.sessions.create(cp, Some(&self.principal.label)).await?)
+            }
+            m::SESSION_SET_CONFIG => {
+                let sp: SessionSetConfigParams = params(p)?;
+                to_value(h.sessions.set_config(sp).await?)
+            }
+            m::SESSION_SIDE_ASK => {
+                let sp: SessionSideAskParams = params(p)?;
+                to_value(h.sessions.side_ask(sp).await?)
             }
             m::SESSION_PROMPT => {
                 let pp: SessionPromptParams = params(p)?;
@@ -417,7 +425,8 @@ impl Conn {
             | m::CONNECTOR_UPDATE
             | m::CONNECTOR_REMOVE
             | m::CONNECTOR_SIGN_IN
-            | m::CONNECTOR_REFRESH => h.connector_call(method, p).await,
+            | m::CONNECTOR_REFRESH
+            | m::CONNECTOR_SEARCH => h.connector_call(method, p).await,
 
             m::UPLOAD_BEGIN => to_value(h.ctx.uploads.begin(params(p)?)?),
             m::UPLOAD_APPEND => to_value(h.ctx.uploads.append(params(p)?)?),
@@ -601,6 +610,7 @@ pub fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcEr
         &h.ctx.cfg.runtime_dir,
         &h.ctx.cfg.scratch_dir(),
         &h.ctx.cfg.session_tools_dir(),
+        &h.ctx.cfg.worktrees_dir(),
     ] {
         let prot = std::fs::canonicalize(protected).unwrap_or(protected.clone());
         if path.starts_with(&prot) || prot.starts_with(&path) {

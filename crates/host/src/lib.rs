@@ -25,6 +25,8 @@ pub mod store;
 pub mod uploads;
 pub mod util;
 pub mod voice;
+pub mod worktree;
+pub mod integrations;
 
 pub use config::HostConfig;
 pub use host::Host;

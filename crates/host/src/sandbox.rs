@@ -72,6 +72,8 @@ pub struct SandboxPolicy {
     pub workspace: PathBuf,
     pub temp_dir: PathBuf,
     pub write: Vec<PathBuf>,
+    /// Not writable although inside a writable path.
+    pub deny_write: Vec<PathBuf>,
     pub deny_read: Vec<PathBuf>,
     /// Re-allowed inside a denied folder (the host's pinned tools).
     pub allow_read: Vec<PathBuf>,
@@ -92,6 +94,19 @@ pub fn profile_hosts(profile: &NetworkProfile) -> Vec<String> {
     }
     hosts.extend(profile.custom_hosts.iter().cloned());
     hosts
+}
+
+fn reallow_writable(write: &[PathBuf], deny_read: &[PathBuf], allow_read: &mut Vec<PathBuf>) {
+    // Spelled either way: `/tmp/…` and `/private/tmp/…` on macOS.
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    for w in write {
+        let under = deny_read
+            .iter()
+            .any(|d| w.starts_with(d) || real(w).starts_with(real(d)));
+        if under && !allow_read.contains(w) {
+            allow_read.push(w.clone());
+        }
+    }
 }
 
 /// Derive a session's policy from its workspace, agent and network profile.
@@ -129,8 +144,10 @@ pub fn policy_for(
     // MCP gateway socket and every other session's temp folder.
     deny_read.push(cfg.data_dir.clone());
     deny_read.push(cfg.runtime_dir.clone());
-    // Other quick tasks' folders (this session's own is bound back in when it is one).
+    // Other quick tasks' folders and other sessions' worktrees (this
+    // session's own is bound back in when it is one).
     deny_read.push(cfg.scratch_dir());
+    deny_read.push(cfg.worktrees_dir());
     if let Some(p) = cfg.socket_path.parent() {
         deny_read.push(p.to_path_buf());
     }
@@ -141,11 +158,15 @@ pub fn policy_for(
     deny_read.dedup();
     // Adapters are installed under the data dir; agents must be able to run
     // them. The session's own generated files sit next to its temp folder.
-    let allow_read = vec![
+    let mut allow_read = vec![
         cfg.tools_dir.clone(),
         temp_dir.with_extension("codex"),
         temp_dir.with_extension("cfg"),
     ];
+    // A writable folder inside a denied one (a quick task's own folder in
+    // the scratch folder) must be readable too: Seatbelt does not re-allow
+    // reading a path because it may be written.
+    reallow_writable(&write, &deny_read, &mut allow_read);
 
     let mut allowed_hosts = agent.hosts.clone();
     // The runtime only needs a list to turn proxying on; the egress proxy
@@ -162,10 +183,57 @@ pub fn policy_for(
         workspace: workspace.to_path_buf(),
         temp_dir: temp_dir.to_path_buf(),
         write,
+        deny_write: vec![],
         deny_read,
         allow_read,
         allowed_hosts,
     }
+}
+
+/// The policy of a session working in its own git worktree, with `cwd` the
+/// workspace's folder inside it. The worktree is writable instead of the
+/// workspace (which stays readable), and so are the parts of the
+/// repository's `.git` that committing in a worktree writes to: objects,
+/// refs, reflogs and the worktree's own folder in `.git/worktrees`. Not the
+/// rest of `.git`: its config and hooks run outside the sandbox the next time
+/// you use git, and a file at the top of `.git` (`commondir`, say) can point
+/// your own checkout at a config the agent wrote. The worktree's `.git` file
+/// and the pointers in its own folder stay read-only for the same reason.
+pub fn policy_for_worktree(
+    cfg: &HostConfig,
+    agent: &AgentSpec,
+    cwd: &Path,
+    temp_dir: &Path,
+    profile: &NetworkProfile,
+    git: &crate::worktree::GitAccess,
+) -> SandboxPolicy {
+    let mut p = policy_for(cfg, agent, cwd, temp_dir, profile);
+    p.write.retain(|w| w != cwd);
+    let common = &git.common_dir;
+    let mut own = vec![
+        git.root.clone(),
+        common.join("objects"),
+        common.join("refs"),
+        common.join("logs"),
+        git.admin_dir.clone(),
+    ];
+    own.append(&mut p.write);
+    p.write = own;
+    p.deny_write = vec![
+        git.root.join(".git"),
+        git.admin_dir.join("commondir"),
+        git.admin_dir.join("gitdir"),
+    ];
+    // Read by git only when the main config turns it on, which the agent
+    // can't; denied anyway while it is there.
+    for f in ["config", "config.worktree"] {
+        if git.admin_dir.join(f).exists() {
+            p.deny_write.push(git.admin_dir.join(f));
+        }
+    }
+    p.deny_read.retain(|d| !p.write.iter().any(|w| d.starts_with(w)));
+    reallow_writable(&p.write, &p.deny_read, &mut p.allow_read);
+    p
 }
 
 /// Compile a policy to an `srt` settings file pointing at our proxy ports.
@@ -190,7 +258,7 @@ pub fn compile_srt(policy: &SandboxPolicy, http_port: u16, socks_port: u16) -> V
             "denyRead": paths(&policy.deny_read),
             "allowRead": paths(&policy.allow_read),
             "allowWrite": paths(&policy.write),
-            "denyWrite": []
+            "denyWrite": paths(&policy.deny_write)
         },
         "enableWeakerNestedSandbox": false,
         "enableWeakerNetworkIsolation": false,
@@ -501,6 +569,110 @@ pub const PROTECTED_NAMES: &[&str] = &[
     ".idea",
 ];
 
+/// Linux: create, in a folder several sessions share, the placeholders
+/// bubblewrap would otherwise create and remove itself: empty, read-only
+/// files for each missing protected name (and `.claude/commands`,
+/// `.claude/agents`, and `.git/hooks` in a repository without one). A
+/// sandbox that finds a placeholder already there mounts over it and leaves
+/// it in place when it exits (`sandbox-runtime` removes only the mount points
+/// it created), so one session ending no longer pulls the protection out
+/// from under the others. Returns what it created, for [`SharedFolders`] to
+/// remove when the last session in the folder ends.
+pub fn create_placeholders(dir: &Path) -> Vec<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut created = vec![];
+    let mut file = |p: PathBuf| {
+        if std::fs::symlink_metadata(&p).is_ok() {
+            return;
+        }
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(_) => {
+                let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
+                created.push(p);
+            }
+            Err(e) => tracing::warn!(path = %p.display(), "could not create sandbox placeholder: {e}"),
+        }
+    };
+    for name in PROTECTED_NAMES {
+        file(dir.join(name));
+    }
+    let claude = dir.join(".claude");
+    let made_claude = std::fs::symlink_metadata(&claude).is_err() && std::fs::create_dir(&claude).is_ok();
+    if claude.is_dir() {
+        file(claude.join("commands"));
+        file(claude.join("agents"));
+    }
+    if made_claude {
+        created.push(claude);
+    }
+    // An empty hooks folder, as `git init` makes one: kept afterwards.
+    let git = dir.join(".git");
+    if git.is_dir() && !git.join("hooks").exists() {
+        let _ = std::fs::create_dir(git.join("hooks"));
+    }
+    created
+}
+
+/// Folders sessions share (workspaces outside git, or repositories without
+/// a commit): how many live sandboxes use each, and the placeholders the host
+/// made there (Linux), removed when the last one ends.
+#[derive(Default)]
+pub struct SharedFolders {
+    users: std::sync::Mutex<std::collections::HashMap<PathBuf, (usize, Vec<PathBuf>)>>,
+}
+
+impl SharedFolders {
+    /// A sandbox is about to start in `dir`.
+    pub fn acquire(&self, dir: &Path) {
+        let mut users = self.users.lock().unwrap();
+        let entry = users.entry(dir.to_path_buf()).or_default();
+        entry.0 += 1;
+        if cfg!(target_os = "linux") {
+            // Seatbelt (macOS) denies by path and needs no mount points.
+            let made = create_placeholders(dir);
+            entry.1.extend(made);
+        }
+    }
+
+    /// A sandbox in `dir` has exited. The last one out removes the host's
+    /// placeholders and anything left behind since `since`.
+    pub fn release(&self, dir: &Path, since: std::time::SystemTime) {
+        let mut users = self.users.lock().unwrap();
+        let Some(entry) = users.get_mut(dir) else {
+            return;
+        };
+        entry.0 = entry.0.saturating_sub(1);
+        if entry.0 > 0 {
+            return;
+        }
+        let (_, made) = users.remove(dir).unwrap_or_default();
+        remove_placeholders(&made);
+        sweep_mount_points(dir, since);
+    }
+
+    pub fn users(&self, dir: &Path) -> usize {
+        self.users.lock().unwrap().get(dir).map(|e| e.0).unwrap_or(0)
+    }
+}
+
+/// Remove placeholders the host created, if they still are placeholders.
+fn remove_placeholders(made: &[PathBuf]) {
+    use std::os::unix::fs::PermissionsExt;
+    // Files first, then the folders that held them.
+    for p in made {
+        if let Ok(m) = std::fs::symlink_metadata(p) {
+            if m.file_type().is_file() && m.len() == 0 && m.permissions().mode() & 0o222 == 0 {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+    for p in made {
+        if p.is_dir() {
+            let _ = std::fs::remove_dir(p); // only when empty
+        }
+    }
+}
+
 /// Safety net for placeholders left behind when the runtime could not clean
 /// up (it was killed). Removes only empty, read-only regular files with a
 /// protected name, created after `since`; never anything with content.
@@ -656,6 +828,74 @@ mod tests {
         assert!(profile_hosts(&web).contains(&crate::proxy::ANY_PUBLIC_HOST.to_string()));
         // Quick tasks' folders are hidden from every session.
         assert!(p.deny_read.contains(&cfg.scratch_dir()));
+    }
+
+    #[test]
+    fn worktree_sessions_write_their_worktree_and_git_state_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let spec = crate::agents::spec(AgentKind::Claude, &cfg);
+        let root = cfg.worktrees_dir().join("ses_1");
+        let git = crate::worktree::GitAccess {
+            root: root.clone(),
+            common_dir: PathBuf::from("/work/repo/.git"),
+            admin_dir: PathBuf::from("/work/repo/.git/worktrees/ses_1"),
+        };
+        let p = policy_for_worktree(&cfg, &spec, &root.join("sub"), Path::new("/tmp/ah/s1"), &NetworkProfile::default(), &git);
+        for w in ["/work/repo/.git/objects", "/work/repo/.git/refs", "/work/repo/.git/logs", "/work/repo/.git/worktrees/ses_1"] {
+            assert!(p.write.contains(&PathBuf::from(w)), "{w}");
+        }
+        assert!(p.write.contains(&root));
+        // Not the workspace, not .git itself (config, hooks, commondir …).
+        assert!(!p.write.iter().any(|w| w == Path::new("/work/repo") || w == Path::new("/work/repo/.git")));
+        assert!(!p.write.contains(&root.join("sub")));
+        assert!(p.deny_write.contains(&root.join(".git")));
+        assert!(p.deny_write.contains(&PathBuf::from("/work/repo/.git/worktrees/ses_1/commondir")));
+        // Other worktrees are hidden; its own is readable again.
+        assert!(p.deny_read.contains(&cfg.worktrees_dir()));
+        assert!(p.allow_read.contains(&root));
+        assert_eq!(compile_srt(&p, 1, 2)["filesystem"]["denyWrite"].as_array().unwrap().len(), 3);
+
+        // A quick task can read the folder it writes.
+        let scratch = cfg.scratch_dir().join("ses_2");
+        let p = policy_for(&cfg, &spec, &scratch, Path::new("/tmp/ah/s2"), &NetworkProfile::default());
+        assert!(p.deny_read.contains(&cfg.scratch_dir()) && p.allow_read.contains(&scratch));
+    }
+
+    #[test]
+    fn host_placeholders_protect_a_shared_folder_until_the_last_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        std::fs::write(w.join(".bashrc"), "mine").unwrap();
+        let made = create_placeholders(w);
+        // Yours stays as it is; the missing ones are empty and read-only.
+        assert_eq!(std::fs::read_to_string(w.join(".bashrc")).unwrap(), "mine");
+        assert!(!made.contains(&w.join(".bashrc")));
+        for p in [w.join(".gitconfig"), w.join(".vscode"), w.join(".claude/commands")] {
+            let m = std::fs::metadata(&p).unwrap();
+            assert!(made.contains(&p) && m.len() == 0 && m.permissions().mode() & 0o222 == 0, "{}", p.display());
+        }
+        assert!(create_placeholders(w).is_empty(), "made twice");
+        remove_placeholders(&made);
+        assert!(!w.join(".gitconfig").exists() && !w.join(".claude").exists());
+        assert_eq!(std::fs::read_to_string(w.join(".bashrc")).unwrap(), "mine");
+
+        // Counting: only the last one out cleans up.
+        let f = SharedFolders::default();
+        f.acquire(w);
+        f.acquire(w);
+        assert_eq!(f.users(w), 2);
+        f.release(w, std::time::SystemTime::UNIX_EPOCH);
+        assert_eq!(f.users(w), 1);
+        if cfg!(target_os = "linux") {
+            assert!(w.join(".gitconfig").exists());
+        }
+        f.release(w, std::time::SystemTime::UNIX_EPOCH);
+        assert_eq!(f.users(w), 0);
+        assert!(!w.join(".gitconfig").exists());
+        assert_eq!(std::fs::read_to_string(w.join(".bashrc")).unwrap(), "mine");
     }
 
     #[test]

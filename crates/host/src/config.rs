@@ -33,7 +33,18 @@ pub struct HostConfig {
     pub file_secrets: bool,
     /// Test only: extra environment for agent processes.
     pub agent_env_overrides: Vec<(String, String)>,
+    /// The integrations.sh catalog `connector.search` asks
+    /// (`<base>/api/search?q=…`); `None` turns search off (tests).
+    pub integrations_url: Option<String>,
+    /// Where connector icons come from (`<base>?domain=…&sz=64`); `None`
+    /// fetches none (tests).
+    pub favicon_url: Option<String>,
 }
+
+/// The catalog `connector.search` uses.
+pub const INTEGRATIONS_URL: &str = "https://integrations.sh";
+/// Google's favicon service, for connector icons.
+pub const FAVICON_URL: &str = "https://www.google.com/s2/favicons";
 
 impl HostConfig {
     /// Defaults for the current user on this OS.
@@ -59,6 +70,8 @@ impl HostConfig {
             relay_url: None,
             file_secrets: false,
             agent_env_overrides: vec![],
+            integrations_url: Some(INTEGRATIONS_URL.into()),
+            favicon_url: Some(FAVICON_URL.into()),
         })
     }
 
@@ -78,6 +91,9 @@ impl HostConfig {
             relay_url: None,
             file_secrets: true,
             agent_env_overrides: vec![],
+            // Off: tests never reach the network unless they ask.
+            integrations_url: None,
+            favicon_url: None,
         }
     }
 
@@ -111,6 +127,12 @@ impl HostConfig {
         self.sibling("session-tools")
     }
 
+    /// Git worktrees, one per session in a git workspace: each session works
+    /// on a branch of its own, in a folder only it can see.
+    pub fn worktrees_dir(&self) -> PathBuf {
+        self.sibling("worktrees")
+    }
+
     /// Create directories with owner-only permissions and validate path lengths.
     pub fn prepare(&self) -> Result<()> {
         for d in [
@@ -119,6 +141,7 @@ impl HostConfig {
             &self.logs_dir(),
             &self.scratch_dir(),
             &self.session_tools_dir(),
+            &self.worktrees_dir(),
         ] {
             create_private_dir(d)?;
         }
