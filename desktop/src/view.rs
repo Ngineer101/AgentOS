@@ -372,7 +372,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
     let (title, subtitle) = match sess {
         Some(x) => {
             let ws = s.workspace(&x.workspace_id).map(|w| w.name.clone()).unwrap_or_default();
-            (x.title.clone().unwrap_or_else(|| s.login_label(x)), format!("{} — {ws}", s.login_label(x)))
+            // A live session's composer names its workspace and branch, so the header doesn't.
+            let sub = if crate::session::composer_shows_context(x) { s.login_label(x) } else { format!("{} — {ws}", s.login_label(x)) };
+            (x.title.clone().unwrap_or_else(|| s.login_label(x)), sub)
         }
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
@@ -380,7 +382,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         }
     };
     let sub_text = text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate();
-    let branch = sess.and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
+    let branch = sess.filter(|x| !crate::session::composer_shows_context(x)).and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
     // GNOME has no capsule: the status leads the header's subtitle.
     let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none()) {
         Some(x) => {
@@ -757,9 +759,9 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 layer = layer.child(menu_box(t, items, 280.0).pin(Some(*x), Some(*y), None, None));
             }
         }
-        Some(Menu::Config(id)) => {
-            if let Some((sid, opt)) = s.current().and_then(|x| x.config_options.iter().find(|o| &o.id == id).map(|o| (x.session_id.clone(), o))) {
-                layer = layer.child(crate::session::config_menu(t, &sid, opt));
+        Some(Menu::Model) => {
+            if let Some(sess) = s.current() {
+                layer = layer.children(crate::session::model_popover(s, sess, t));
             }
         }
         Some(Menu::Section(ws, x, y)) => {

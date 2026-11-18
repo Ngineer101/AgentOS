@@ -148,52 +148,101 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
             }
             (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx)
         });
-    let mut boxc = col().w_full().radius(14.0);
+    // One rounded container: where the work lands, files, the text, then the controls.
+    let mut boxc = col().key("composer-box").w_full().radius(if mac { 18.0 } else { 12.0 });
     boxc = if mac {
-        boxc.fill(Color::WHITE.alpha(0.06)).border(0.5, Color::WHITE.alpha(0.16)).shadow(6.0, 20.0, Color::BLACK.alpha(0.25))
+        boxc.fill(Color::WHITE.alpha(0.055)).border(0.5, Color::WHITE.alpha(0.15)).shadow(6.0, 20.0, Color::BLACK.alpha(0.22))
     } else {
-        boxc.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, color: Color::WHITE.alpha(0.06), ..Default::default() })
+        // libadwaita's .card: a raised fill and a 1 px shade, no border line.
+        boxc.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, color: Color::BLACK.alpha(0.3), ..Default::default() })
     };
-    if let Some(chips) = file_chips(s, id, t) {
-        boxc = boxc.child(chips);
+    let pad_x = if mac { 14.0 } else { 16.0 };
+    if let Some(line) = context_line(s, sess, t) {
+        boxc = boxc.child(line.px(pad_x).pt(if mac { 10.0 } else { 12.0 }));
     }
-    boxc = boxc.child(col().w_full().px(if mac { 14.0 } else { 16.0 }).pt(if mac { 10.0 } else { 12.0 }).pb(if mac { 4.0 } else { 6.0 }).child(rune::auto_grow(input, 1, 8)));
-    let uploading = s.files.get(id).is_some_and(|f| f.iter().any(|f| matches!(f.state, FileState::Uploading)));
-    let pickers = config_pickers(s, sess, t);
-    // With pickers in the bar the hint makes way for them.
-    let hint = if pickers.is_some() { "" } else if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
-    let send_size = if mac { 28.0 } else { 34.0 };
-    let send = row()
-        .key("send")
-        .size(send_size, send_size)
-        .radius(send_size / 2.0)
-        .center()
-        .fill(if uploading { t.accent.alpha(0.4) } else { t.accent })
-        .role("button")
-        .label("Send")
-        .shortcut_hint(keys(s.look, Cmd::Send))
-        .help(format!("Send ({})", keys(s.look, Cmd::Send)))
-        .focusable(true)
-        .hover(Color::WHITE.alpha(0.1))
-        .on_press(|s: &mut App| s.send_prompt())
-        .child(icon(&ic::SEND, if mac { 12.0 } else { 13.0 }).color(Color::WHITE));
+    if let Some(chips) = file_chips(s, id, t) {
+        boxc = boxc.child(chips.px(pad_x - 4.0));
+    }
+    boxc = boxc.child(col().w_full().px(pad_x).pt(if mac { 8.0 } else { 10.0 }).pb(if mac { 2.0 } else { 4.0 }).child(rune::auto_grow(input, 1, 8)));
+    let chip = model_chip(s, sess, t);
+    // Without a model chip the shortcut hint has the room.
+    let hint = if chip.is_some() { "" } else if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
     let actions = row()
         .w_full()
         .gap(if mac { 2.0 } else { 4.0 })
-        .px(8.0)
-        .pt(6.0)
-        .pb(8.0)
+        .px(if mac { 8.0 } else { 10.0 })
+        .pt(4.0)
+        .pb(if mac { 8.0 } else { 10.0 })
         .center_y()
         .child(if s.host_has_media() { media_controls(s, t) } else { row() })
-        .child(pickers.unwrap_or_else(row))
         .child(el().grow(1.0))
         .child(text(hint.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(if mac { t.text3 } else { t.text2 }).mr(10.0))
-        .child(send);
+        .child(chip.unwrap_or_else(row))
+        .child(send_button(s, sess, t));
     if let Some(sug) = slash_menu(s, sess, t) {
         area = area.child(sug);
     }
     let area = area.child(boxc.child(actions));
     column(t, area)
+}
+
+/// The composer's top line: the workspace and, with a worktree, its branch. The header leaves
+/// both out while the composer shows them, so each appears once.
+fn context_line(s: &App, sess: &Session, t: &Theme) -> Option<El> {
+    let ws = s.workspace(&sess.workspace_id).map(|w| w.name.clone());
+    let branch = sess.worktree.as_ref().map(|w| w.branch.clone());
+    if ws.is_none() && branch.is_none() {
+        return None;
+    }
+    let size = if t.mac() { 11.5 } else { 12.5 };
+    let mut r = row().key("composer-context").w_full().gap(if t.mac() { 8.0 } else { 10.0 }).center_y().min_w(0.0);
+    if let Some(w) = ws {
+        r = r.child(text(w).font(TextStyle::new(size, if t.mac() { 500.0 } else { 600.0 })).color(t.text2).truncate());
+    }
+    if let Some(b) = branch {
+        r = r.child(crate::view::branch_label(t, &b, t.text3, false).shrink().min_w(0.0));
+    }
+    Some(r)
+}
+
+/// Whether the composer shows the session's workspace and branch (a live session's does).
+pub fn composer_shows_context(sess: &Session) -> bool {
+    sess.archived_at.is_none() && !sess.state.is_terminal()
+}
+
+/// Whether the session can take a setting now (not starting, not over).
+fn config_ready(sess: &Session) -> bool {
+    !matches!(sess.state, SessionState::Created | SessionState::Starting) && !sess.state.is_terminal()
+}
+
+/// The circular send button: high contrast, dimmed with nothing to send. While the agent
+/// works and there's nothing to send it stops the turn instead.
+fn send_button(s: &App, sess: &Session, t: &Theme) -> El {
+    let mac = t.mac();
+    let id = sess.session_id.as_str();
+    let uploading = s.files.get(id).is_some_and(|f| f.iter().any(|f| matches!(f.state, FileState::Uploading)));
+    let has_files = s.files.get(id).is_some_and(|f| !f.is_empty());
+    let empty = s.prompt.text.trim().is_empty() && !has_files;
+    let working = matches!(sess.state, SessionState::Running | SessionState::WaitingApproval);
+    let size = if mac { 28.0 } else { 34.0 };
+    let b = row().key("send").size(size, size).radius(size / 2.0).center().role("button").focusable(true);
+    if working && empty {
+        return b
+            .label("Stop the Turn")
+            .help(format!("Stop the Turn ({})", keys(s.look, Cmd::Stop)))
+            .fill(t.text)
+            .hover(Color::BLACK.alpha(0.12))
+            .on_press_tx(|s: &mut App, tx: &mut Tx| run(s, Cmd::Stop, tx))
+            .child(icon(&ic::STOP_SM, if mac { 10.0 } else { 11.0 }).color(t.content));
+    }
+    let dim = empty || uploading;
+    b.label("Send")
+        .shortcut_hint(keys(s.look, Cmd::Send))
+        .help(format!("Send ({})", keys(s.look, Cmd::Send)))
+        .fill(if dim { Color::WHITE.alpha(if mac { 0.16 } else { 0.18 }) } else { t.text })
+        .hover(Color::BLACK.alpha(0.12))
+        .on_press(|s: &mut App| s.send_prompt())
+        .child(icon(&ic::SEND, if mac { 12.0 } else { 14.0 }).color(if dim { Color::WHITE.alpha(0.45) } else { t.content }))
 }
 
 /// "/btw — Ask a side question without interrupting", over the composer while you type "/".
@@ -233,85 +282,247 @@ fn slash_menu(s: &App, sess: &Session, t: &Theme) -> Option<El> {
     Some(c)
 }
 
-/// The composer's model and effort pickers, from the session's settings; None without any.
-fn config_pickers(s: &App, sess: &Session, t: &Theme) -> Option<El> {
-    let model = App::config_option(sess, "model");
-    let effort = App::config_option(sess, "thought_level");
-    if model.is_none() && effort.is_none() {
+/// The name of a setting's current value.
+fn current_name(o: &SessionConfigOption) -> String {
+    o.options.iter().find(|v| v.value == o.current_value).map(|v| v.name.clone()).unwrap_or_else(|| o.current_value.clone())
+}
+
+/// The agent's mark for the chip: its letter, monochrome, as the reference's model glyph.
+fn agent_mark(agent: AgentKind, size: f32, ink: Color) -> El {
+    let name = agent.display_name();
+    let letter = if agent == AgentKind::Codex { 'X' } else { name.chars().next().unwrap_or('?').to_ascii_uppercase() };
+    row()
+        .size(size, size)
+        .center()
+        .radius((size * 0.28).round())
+        .border(1.0, ink.alpha(0.8))
+        .child(text(letter.to_string()).font(TextStyle::new((size * 0.6).round(), 700.0)).color(ink))
+}
+
+/// The composer's model chip: the agent's mark, the model, a bolt with fast mode on. It opens
+/// the model popover; None when the session reports none of those settings.
+fn model_chip(s: &App, sess: &Session, t: &Theme) -> Option<El> {
+    if !App::has_model_settings(sess) {
         return None;
     }
-    let ready = !matches!(sess.state, SessionState::Created | SessionState::Starting) && !sess.state.is_terminal();
-    let mut r = row().key("config-pickers").gap(if t.mac() { 0.0 } else { 2.0 }).ml(if t.mac() { 4.0 } else { 6.0 }).center_y();
-    for (opt, glyph) in [(model, None), (effort, Some(&ic::GAUGE))] {
-        if let Some(o) = opt {
-            r = r.child(config_button(s, sess, o, glyph, ready, t));
-        }
-    }
-    Some(r)
-}
-
-fn config_button(s: &App, sess: &Session, o: &SessionConfigOption, glyph: Option<&'static rune::Icon>, ready: bool, t: &Theme) -> El {
     let mac = t.mac();
-    let current = o.options.iter().find(|v| v.value == o.current_value).map(|v| v.name.clone()).unwrap_or_else(|| o.current_value.clone());
-    let key = format!("config-{}", o.id);
-    let open = s.menu == Some(Menu::Config(o.id.clone()));
-    let ink = if ready { if mac { t.text2 } else { t.text } } else { t.text3 };
+    let model = App::config_option(sess, "model");
+    let effort = App::config_option(sess, "thought_level");
+    let fast = App::fast_option(sess);
+    let fast_on = fast.is_some_and(|o| o.current_value == "on");
+    let name = model.or(effort).map(current_name).unwrap_or_else(|| "Fast mode".into());
+    let ready = config_ready(sess);
+    let open = s.menu == Some(Menu::Model);
+    let ink = if !ready { t.text3 } else if open { t.text } else { t.text2 };
+    let mut what = vec![name.clone()];
+    if let Some(e) = effort.filter(|_| model.is_some()) {
+        what.push(format!("{} effort", current_name(e)));
+    }
+    if fast_on {
+        what.push("fast mode".into());
+    }
     let mut b = row()
-        .key(key.clone())
-        .h(if mac { 24.0 } else { 30.0 })
-        .pl(if mac { 7.0 } else { 9.0 })
-        .pr(if mac { 5.0 } else { 7.0 })
-        .gap(5.0)
+        .key("model-chip")
+        .h(if mac { 26.0 } else { 32.0 })
+        .px(if mac { 8.0 } else { 10.0 })
+        .mr(if mac { 6.0 } else { 8.0 })
+        .gap(if mac { 5.0 } else { 6.0 })
         .center_y()
-        .radius(if mac { 6.0 } else { 7.0 })
-        .role("combobox")
-        .label(format!("{}: {current}", o.name))
-        .help(o.description.clone().map(|d| format!("{} · {d}", o.name)).unwrap_or_else(|| o.name.clone()))
+        .radius(if mac { 13.0 } else { 16.0 })
+        .role("button")
+        .label(format!("Model: {}", what.join(", ")))
+        .help("Model, Effort and Fast Mode")
         .expanded(open)
         .focusable(ready)
-        .disabled(!ready);
-    if let Some(g) = glyph {
-        b = b.child(icon(g, if mac { 12.0 } else { 13.0 }).color(ink));
+        .disabled(!ready)
+        .child(agent_mark(sess.agent, if mac { 13.0 } else { 14.0 }, ink))
+        .child(text(clip(&name, 28)).font(TextStyle::new(if mac { 12.5 } else { 13.5 }, if mac { 400.0 } else { 500.0 })).color(ink));
+    if fast_on {
+        b = b.child(icon(&ic::BOLT, if mac { 11.0 } else { 12.0 }).color(ink));
     }
-    b = b.child(text(clip(&current, 28)).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, if mac { 400.0 } else { 600.0 })).color(ink)).child(icon(if mac { &ic::CHEVRON_D } else { &ic::CHEVRON_DOWN }, if mac { 8.0 } else { 11.0 }).color(ink));
     if open {
-        b = b.fill(Color::WHITE.alpha(0.1));
+        b = b.fill(Color::WHITE.alpha(0.10));
     }
     if !ready {
-        return b;
+        return Some(b);
     }
-    let (sid, opt) = (sess.session_id.clone(), o.clone());
-    b.hover(Color::WHITE.alpha(0.08)).press(Color::WHITE.alpha(0.12)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
-        if s.look.mac() && rune::popup_menu_supported() {
-            let mut menu = rune::PopupMenu::new();
-            for v in &opt.options {
-                menu = menu.item(rune::PopupItem::new(v.value.clone(), v.name.clone()).checked(v.value == opt.current_value));
-            }
-            let (sid, id) = (sid.clone(), opt.id.clone());
-            tx.popup_menu(menu, key.clone(), move |s: &mut App, picked, _| {
-                if let Some(v) = picked {
-                    s.set_config(&sid, &id, v);
-                }
-            });
-        } else {
-            let m = Menu::Config(opt.id.clone());
-            s.menu = if s.menu.as_ref() == Some(&m) { None } else { Some(m) };
-        }
-    })
+    Some(b.hover(Color::WHITE.alpha(0.07)).press(Color::WHITE.alpha(0.12)).on_press(|s: &mut App| {
+        s.effort_drag = None;
+        s.menu = if s.menu == Some(Menu::Model) { None } else { Some(Menu::Model) };
+    }))
 }
 
-/// The in-app list for a setting (GNOME, and where there's no native menu), over its button.
-pub fn config_menu(t: &Theme, session: &str, o: &SessionConfigOption) -> El {
-    let items = o
-        .options
-        .iter()
-        .map(|v| {
-            let (sid, id, val) = (session.to_string(), o.id.clone(), v.value.clone());
-            let note = v.description.clone().map(|d| clip(&d, 34)).unwrap_or_default();
-            Some(crate::view::Item::new(&v.name, note, move |s, _| s.set_config(&sid, &id, &val)).checked(v.value == o.current_value))
+/// The popover's width.
+fn popover_w(t: &Theme) -> f32 {
+    if t.mac() { 300.0 } else { 320.0 }
+}
+
+/// The model popover over its chip (NSPopover on macOS, GtkPopover on GNOME, each with its
+/// arrow): the models, an effort slider and the fast-mode switch, each only when the session
+/// has it. Escape or a click outside closes it (the menu layer).
+pub fn model_popover(s: &App, sess: &Session, t: &Theme) -> Vec<El> {
+    let mac = t.mac();
+    let sid = sess.session_id.clone();
+    // The panel's inset, and each section's inside it.
+    let (pad, inset) = (6.0, if mac { 8.0 } else { 10.0 });
+    let w = popover_w(t);
+    let mut sections: Vec<El> = vec![];
+    let title = |l: &str| text(l.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, if mac { 600.0 } else { 700.0 })).color(if mac { t.text3 } else { t.text2 });
+    if let Some(o) = App::config_option(sess, "model") {
+        let mut list = col().key("model-list").w_full().gap(if mac { 0.0 } else { 2.0 }).role("listbox").label(o.name.clone()).focus_group();
+        for v in &o.options {
+            let on = v.value == o.current_value;
+            let (sid, id, val) = (sid.clone(), o.id.clone(), v.value.clone());
+            let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(text(v.name.clone()).font(TextStyle::new(if mac { 13.0 } else { 14.5 }, 400.0)).color(t.text));
+            if let Some(d) = &v.description {
+                names = names.child(text(clip(d, 48)).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(t.text2).truncate());
+            }
+            let mut r = row()
+                .key(format!("model-{}", v.value))
+                .w_full()
+                .min_h(if mac { 30.0 } else { 40.0 })
+                .px(if mac { 8.0 } else { 10.0 })
+                .py(if mac { 4.0 } else { 5.0 })
+                .gap(10.0)
+                .center_y()
+                .radius(if mac { 6.0 } else { 7.0 })
+                .role("option")
+                .checked(on)
+                .label(v.name.clone())
+                .focusable(true)
+                .hover(Color::WHITE.alpha(if mac { 0.07 } else { 0.08 }))
+                .press(Color::WHITE.alpha(0.12))
+                .on_press(move |s: &mut App| {
+                    s.set_config(&sid, &id, &val);
+                })
+                .child(names);
+            r = r.child(if on { icon(&ic::CHECK, 14.0).color(t.accent) } else { el().size(14.0, 14.0) });
+            list = list.child(r);
+        }
+        sections.push(col().w_full().gap(if mac { 4.0 } else { 6.0 }).child(title(&o.name).px(if mac { 8.0 } else { 10.0 })).child(list));
+    }
+    if let Some(o) = App::config_option(sess, "thought_level") {
+        sections.push(effort_section(s, &sid, o, w - 2.0 * (pad + inset), t).px(inset));
+    }
+    if let Some(o) = App::fast_option(sess) {
+        let on = o.current_value == "on";
+        let (sid, id) = (sid.clone(), o.id.clone());
+        let mut label = col().grow(1.0).min_w(0.0).gap(1.0).child(text("Fast mode").font(TextStyle::new(if mac { 13.0 } else { 14.5 }, 400.0)).color(t.text));
+        if let Some(d) = &o.description {
+            label = label.child(text(clip(d, 48)).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, 400.0)).color(t.text2).truncate());
+        }
+        sections.push(
+            row()
+                .key("fast-mode")
+                .w_full()
+                .px(if mac { 8.0 } else { 10.0 })
+                .py(if mac { 2.0 } else { 4.0 })
+                .gap(10.0)
+                .center_y()
+                .child(label)
+                .child(t.switch(on, "Fast mode", move |s: &mut App| s.set_config(&sid, &id, if on { "off" } else { "on" })).key("fast-switch")),
+        );
+    }
+    let n = sections.len();
+    let mut panel = col()
+        .key("model-popover")
+        .w(w)
+        .padding(pad)
+        .radius(12.0)
+        .fill(if mac { rune::color::hex("#2f2f31").unwrap_or(Color::BLACK) } else { rune::color::hex("#36363a").unwrap_or(Color::BLACK) })
+        .border(if mac { 0.5 } else { 1.0 }, Color::WHITE.alpha(if mac { 0.13 } else { 0.12 }))
+        .shadow(10.0, 30.0, Color::BLACK.alpha(0.5))
+        .role("dialog")
+        .label("Model")
+        .focus_return("model-chip");
+    for (i, sec) in sections.into_iter().enumerate() {
+        panel = panel.child(sec.py(if mac { 6.0 } else { 8.0 }));
+        if i + 1 < n {
+            let line = el().h(if mac { 0.5 } else { 1.0 }).grow(1.0).fill(Color::WHITE.alpha(if mac { 0.10 } else { 0.08 }));
+            panel = panel.child(row().w_full().my(4.0).px(if mac { inset } else { 0.0 }).child(line));
+        }
+    }
+    let arrow_h = if mac { 10.0 } else { 8.0 };
+    let gap = 2.0;
+    let panel = panel.anchored("model-chip", rune::Side::Top, rune::Align::End, gap + arrow_h - 0.6);
+    let arrow = if mac { icon(&ic::POPOVER_ARROW_MAC, 20.0) } else { icon(&ic::POPOVER_ARROW_GNOME, 16.0) };
+    let arrow = arrow.key("model-popover-arrow").a11y_hidden().anchored("model-chip", rune::Side::Top, rune::Align::Center, gap);
+    vec![panel, arrow]
+}
+
+/// "Effort  High" over a stepped slider: one stop per level, tick dots, a neutral track.
+/// Dragging moves the knob and sets the level on release; arrow keys step it.
+fn effort_section(s: &App, sid: &str, o: &SessionConfigOption, width: f32, t: &Theme) -> El {
+    let mac = t.mac();
+    let n = o.options.len();
+    let at = s.effort_drag.filter(|&i| i < n).unwrap_or_else(|| crate::model::stop_of(o));
+    let level = o.options.get(at).map(|v| v.name.clone()).unwrap_or_default();
+    let knob = if mac { 18.0 } else { 20.0 };
+    let track_h = if mac { 4.0 } else { 6.0 };
+    let span = (width - knob).max(1.0);
+    let x_of = |i: usize| if n < 2 { 0.0 } else { span * i as f32 / (n - 1) as f32 };
+    let top = (knob - track_h) / 2.0;
+    let mut slider = col()
+        .key("effort-slider")
+        .w(width)
+        .h(knob)
+        .role("slider")
+        .label(o.name.clone())
+        .a11y_value(level.clone())
+        .range_value(at as f64, 0.0, n.saturating_sub(1) as f64)
+        .range_step(1.0)
+        .focus_ring(2.0, 1.0, t.focus)
+        .child(el().pin(Some(knob / 2.0), Some(top), None, None).w(span).h(track_h).radius(track_h / 2.0).fill(Color::WHITE.alpha(if mac { 0.12 } else { 0.15 })))
+        .child(el().pin(Some(knob / 2.0 - track_h / 2.0), Some(top), None, None).w(x_of(at) + track_h).h(track_h).radius(track_h / 2.0).fill(Color::WHITE.alpha(if mac { 0.55 } else { 0.6 })));
+    let dot = 4.0;
+    for i in 0..n {
+        let filled = i <= at;
+        slider = slider.child(el().pin(Some(knob / 2.0 + x_of(i) - dot / 2.0), Some((knob - dot) / 2.0), None, None).size(dot, dot).radius(dot / 2.0).fill(if filled { Color::BLACK.alpha(0.28) } else { Color::WHITE.alpha(0.3) }));
+    }
+    slider = slider.child(el().key("effort-knob").pin(Some(x_of(at)), Some(0.0), None, None).size(knob, knob).radius(knob / 2.0).fill(rune::color::hex("#ececec").unwrap_or(Color::WHITE)).shadow(1.0, 3.0, Color::BLACK.alpha(0.35)));
+    let values: Vec<String> = o.options.iter().map(|v| v.value.clone()).collect();
+    let current = crate::model::stop_of(o);
+    let (sid1, id1, v1) = (sid.to_string(), o.id.clone(), values.clone());
+    let (sid2, id2, v2) = (sid.to_string(), o.id.clone(), values.clone());
+    let (sid3, id3, v3) = (sid.to_string(), o.id.clone(), values);
+    let slider = slider
+        .on_drag(move |s: &mut App, d: &mut rune::Drag, _: &mut Tx| {
+            let i = crate::model::stop_at(v1.len(), d.x - knob / 2.0, span);
+            match d.phase {
+                rune::Phase::Down | rune::Phase::Move => s.effort_drag = Some(i),
+                rune::Phase::Up => {
+                    s.effort_drag = None;
+                    if !d.cancelled() && i != current {
+                        s.set_config(&sid1, &id1, &v1[i]);
+                    }
+                }
+            }
         })
-        .collect();
-    crate::view::menu_box(t, items, 320.0).key("config-menu").anchored(format!("config-{}", o.id), rune::Side::Top, rune::Align::Start, 6.0)
+        .on_step(move |s: &mut App, delta: i32, _: &mut Tx| {
+            let i = crate::model::step_stop(v2.len(), current, delta);
+            if i != current {
+                s.set_config(&sid2, &id2, &v2[i]);
+            }
+        })
+        .on_step_limit(move |s: &mut App, max: bool, _: &mut Tx| {
+            let i = if max { v3.len().saturating_sub(1) } else { 0 };
+            if i != current {
+                s.set_config(&sid3, &id3, &v3[i]);
+            }
+        });
+    col()
+        .key("effort")
+        .w_full()
+        .gap(if mac { 8.0 } else { 10.0 })
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .child(text(o.name.clone()).font(TextStyle::new(if mac { 13.0 } else { 14.5 }, 400.0)).color(t.text))
+                .child(el().grow(1.0))
+                .child(text(level).font(TextStyle::new(if mac { 13.0 } else { 14.5 }, 400.0)).color(t.text2)),
+        )
+        .child(slider)
 }
 
 /// Attach and microphone buttons, or the recording strip while recording.
@@ -342,7 +553,8 @@ fn media_controls(s: &App, t: &Theme) -> El {
                 .key("media")
                 .gap(if mac { 2.0 } else { 4.0 })
                 .center_y()
-                .child(t.icon_button(&ic::CLIP, if mac { 15.0 } else { 16.0 }, &format!("Attach Files ({})", keys(s.look, Cmd::Attach)), |s, tx| run(s, Cmd::Attach, tx)).key("attach"))
+                // macOS composers attach with a plus (Messages); GNOME's with a paperclip.
+                .child(t.icon_button(if mac { &ic::PLUS } else { &ic::CLIP }, if mac { 14.0 } else { 16.0 }, &format!("Attach Files ({})", keys(s.look, Cmd::Attach)), |s, tx| run(s, Cmd::Attach, tx)).key("attach"))
                 .child(t.icon_button(&ic::MIC, if mac { 15.0 } else { 16.0 }, &mic_help, |s, _| s.mic_press()).key("mic"))
         }
     }

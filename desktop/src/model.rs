@@ -52,8 +52,8 @@ pub enum Menu {
     Row(String, f32, f32),
     /// A sidebar section's context menu (its workspace), at a window point.
     Section(String, f32, f32),
-    /// The composer's picker for one of the session's settings (model, effort), by its id.
-    Config(String),
+    /// The composer's model popover: model, effort and fast mode.
+    Model,
 }
 
 /// One status vocabulary everywhere: the sidebar, the toolbar capsule, the header.
@@ -282,6 +282,8 @@ pub struct App {
     /// GNOME's keyboard shortcuts window.
     pub shortcuts_open: bool,
     pub menu: Option<Menu>,
+    /// The effort slider's stop while it's dragged; the setting changes on release.
+    pub effort_drag: Option<usize>,
     /// Filters the sidebar.
     pub search: TextEdit,
     /// Archived sessions (Settings › Archived), once asked for.
@@ -466,6 +468,7 @@ pub fn init() -> App {
         add_manual: false,
         conn_name: TextEdit::new(""),
         rename_error: None,
+        effort_drag: None,
     }
 }
 
@@ -1432,6 +1435,21 @@ impl App {
         sess.config_options.iter().find(|o| o.category.as_deref() == Some(category) && !o.options.is_empty())
     }
 
+    /// The fast-mode setting, as the Claude adapter reports it: id `fast` (or category
+    /// `model_config`) with exactly the values `on` and `off`.
+    pub fn fast_option(sess: &Session) -> Option<&SessionConfigOption> {
+        sess.config_options.iter().find(|o| {
+            let mut v: Vec<&str> = o.options.iter().map(|x| x.value.as_str()).collect();
+            v.sort_unstable();
+            (o.id == "fast" || o.category.as_deref() == Some("model_config")) && v == ["off", "on"]
+        })
+    }
+
+    /// Whether the composer's model chip has anything to show (a model, effort or fast mode).
+    pub fn has_model_settings(sess: &Session) -> bool {
+        Self::config_option(sess, "model").is_some() || Self::config_option(sess, "thought_level").is_some() || Self::fast_option(sess).is_some()
+    }
+
     pub fn set_config(&self, session: &str, config_id: &str, value: &str) {
         self.call(Tag::SessionUpdated, m::SESSION_SET_CONFIG, json!({"session_id": session, "config_id": config_id, "value": value}));
     }
@@ -1666,4 +1684,26 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Where a value of a stepped slider of `n` stops is: `current`'s index, else the first.
+pub fn stop_of(o: &SessionConfigOption) -> usize {
+    o.options.iter().position(|v| v.value == o.current_value).unwrap_or(0)
+}
+
+/// An arrow key's (or Page Up/Down's) step on a slider of `n` stops, clamped to its ends.
+pub fn step_stop(n: usize, from: usize, delta: i32) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    (from as i64 + delta as i64).clamp(0, n as i64 - 1) as usize
+}
+
+/// The stop nearest `x` on a slider of `n` stops spread evenly over `span` points (x and span
+/// measured from the first stop).
+pub fn stop_at(n: usize, x: f32, span: f32) -> usize {
+    if n < 2 || span <= 0.0 {
+        return 0;
+    }
+    ((x / span).clamp(0.0, 1.0) * (n - 1) as f32).round() as usize
 }

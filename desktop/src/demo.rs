@@ -224,7 +224,7 @@ fn base(s: &mut App) {
     s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, progress: None, error: None });
 }
 
-/// Claude Code's settings as ACP reports them: a model and an effort.
+/// Claude Code's settings as ACP reports them: a model, an effort and fast mode.
 fn config_options() -> Vec<SessionConfigOption> {
     let v = |value: &str, name: &str, d: Option<&str>| SessionConfigValue { value: value.into(), name: name.into(), description: d.map(String::from) };
     vec![
@@ -234,7 +234,7 @@ fn config_options() -> Vec<SessionConfigOption> {
             description: None,
             category: Some("model".into()),
             current_value: "opus".into(),
-            options: vec![v("default", "Default", Some("Opus for planning, Sonnet otherwise")), v("opus", "Opus 4.5", Some("The most capable")), v("sonnet", "Sonnet 4.5", Some("Fast, for everyday tasks")), v("haiku", "Haiku 4.5", Some("The fastest"))],
+            options: vec![v("opus", "Opus 4.5", Some("The most capable")), v("sonnet", "Sonnet 4.5", Some("Fast, for everyday tasks")), v("haiku", "Haiku 4.5", Some("The fastest"))],
         },
         SessionConfigOption {
             id: "effort".into(),
@@ -242,7 +242,15 @@ fn config_options() -> Vec<SessionConfigOption> {
             description: Some("How long the model thinks".into()),
             category: Some("thought_level".into()),
             current_value: "high".into(),
-            options: vec![v("low", "Low", None), v("medium", "Medium", None), v("high", "High", None)],
+            options: vec![v("low", "Low", None), v("medium", "Medium", None), v("high", "High", None), v("max", "Max", None)],
+        },
+        SessionConfigOption {
+            id: "fast".into(),
+            name: "Fast mode".into(),
+            description: Some("Faster output at a higher cost".into()),
+            category: None,
+            current_value: "on".into(),
+            options: vec![v("on", "On", None), v("off", "Off", None)],
         },
         SessionConfigOption { id: "mode".into(), name: "Mode".into(), description: None, category: Some("mode".into()), current_value: "default".into(), options: vec![v("default", "Ask", None), v("plan", "Plan", None)] },
     ]
@@ -336,6 +344,13 @@ fn chip(s: &mut App) {
         "ses_1".into(),
         vec![PendingFile { local_id: 1, name: "ci-run-4812.log".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "ci-run-4812.log".into(), mime: "text/plain".into(), size: 49_152 }) }],
     );
+}
+
+/// The session's turn ended: it waits for you.
+fn idle(s: &mut App, id: &str) {
+    if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == id) {
+        x.state = SessionState::Idle;
+    }
 }
 
 fn session(s: &mut App) {
@@ -540,7 +555,40 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("composer-picker-open", |s| {
         session(s);
         s.approvals.clear();
-        s.menu = Some(Menu::Config("model".into()));
+        s.menu = Some(Menu::Model);
+    }),
+    // The composer at rest: nothing typed, so Send is dimmed.
+    ("composer", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+    }),
+    // While the agent works an empty composer's button stops the turn.
+    ("composer-working", |s| {
+        session(s);
+        s.approvals.clear();
+        if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_1") {
+            x.state = SessionState::Running;
+        }
+    }),
+    // A session without model settings: no chip, the shortcut hint instead.
+    ("composer-no-model", |s| {
+        session(s);
+        s.screen = Screen::Session("ses_3".into());
+    }),
+    ("model-popover", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.menu = Some(Menu::Model);
+    }),
+    // The effort knob mid-drag, on Max (the setting changes on release).
+    ("model-popover-drag", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.menu = Some(Menu::Model);
+        s.effort_drag = Some(3);
     }),
     ("composer-slash", |s| {
         session(s);

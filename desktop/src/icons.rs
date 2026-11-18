@@ -59,5 +59,9 @@ icon!(BUBBLE, "ah-bubble", 14.0, r#"<path d="M2.5 2h9a1.5 1.5 0 0 1 1.5 1.5v5A1.
 // Toasts: information and failure.
 icon!(INFO, "ah-info", 16.0, r##"<circle cx="8" cy="8" r="7" fill="currentColor"/><rect x="7.2" y="7" width="1.6" height="5" rx="0.8" fill="#1e1e1e"/><circle cx="8" cy="4.7" r="1" fill="#1e1e1e"/>"##);
 icon!(ERROR, "ah-error", 16.0, r##"<circle cx="8" cy="8" r="7" fill="currentColor"/><rect x="7.2" y="3.8" width="1.6" height="5.4" rx="0.8" fill="#1e1e1e"/><circle cx="8" cy="11.6" r="1" fill="#1e1e1e"/>"##);
-// Effort (thought level): a gauge.
-icon!(GAUGE, "ah-gauge", 14.0, r#"<path d="M2 10.5a5 5 0 1 1 10 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/><path d="M7 10.5l2.6-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="10.5" r="1.1" fill="currentColor"/>"#);
+// The model popover's arrow, pointing down at its chip: the popover's own fill with its
+// border on the two slanted edges, in the bottom half of the box (macOS and GNOME colours).
+icon!(POPOVER_ARROW_MAC, "ah-pop-arrow-mac", 20.0, r##"<path d="M0 10.6L10 20L20 10.6z" fill="#2f2f31"/><path d="M0.4 10.6L10 19.6L19.6 10.6" stroke="#ffffff" stroke-opacity="0.13" stroke-width="0.6" fill="none"/>"##);
+icon!(POPOVER_ARROW_GNOME, "ah-pop-arrow-gnome", 16.0, r##"<path d="M0 8.6L8 16L16 8.6z" fill="#36363a"/><path d="M0.5 8.6L8 15.5L15.5 8.6" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1" fill="none"/>"##);
+// Send's stop while the agent works.
+icon!(STOP_SM, "ah-stop-sm", 12.0, r#"<rect x="2" y="2" width="8" height="8" rx="1.6" fill="currentColor"/>"#);

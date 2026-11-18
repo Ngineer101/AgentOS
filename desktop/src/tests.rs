@@ -754,6 +754,60 @@ fn model_and_effort_come_from_config_options() {
     assert_eq!(model::App::config_option(s, "model").map(|o| o.current_value.as_str()), Some("opus"));
     assert_eq!(model::App::config_option(s, "thought_level").map(|o| o.id.as_str()), Some("effort"));
     assert!(model::App::config_option(app.session("ses_2").unwrap(), "model").is_none());
+    // The chip shows for a session with settings, not for one without.
+    assert!(model::App::has_model_settings(s));
+    assert!(!model::App::has_model_settings(app.session("ses_2").unwrap()));
+}
+
+#[test]
+fn fast_mode_is_an_on_off_setting() {
+    let app = demo("model-popover");
+    let s = app.session("ses_1").unwrap();
+    let fast = model::App::fast_option(s).expect("the demo's fast option");
+    assert_eq!((fast.id.as_str(), fast.current_value.as_str()), ("fast", "on"));
+    let v = |value: &str| SessionConfigValue { value: value.into(), name: value.into(), description: None };
+    let opt = |id: &str, category: Option<&str>, values: &[&str]| SessionConfigOption {
+        id: id.into(),
+        name: id.into(),
+        description: None,
+        category: category.map(String::from),
+        current_value: values.first().map(|x| x.to_string()).unwrap_or_default(),
+        options: values.iter().map(|x| v(x)).collect(),
+    };
+    let mut sess = s.clone();
+    // By category, in either order.
+    sess.config_options = vec![opt("speed", Some("model_config"), &["off", "on"])];
+    assert_eq!(model::App::fast_option(&sess).map(|o| o.id.as_str()), Some("speed"));
+    // Not with other values, or another id and category.
+    sess.config_options = vec![opt("fast", None, &["on", "off", "auto"])];
+    assert!(model::App::fast_option(&sess).is_none());
+    sess.config_options = vec![opt("turbo", Some("mode"), &["on", "off"])];
+    assert!(model::App::fast_option(&sess).is_none());
+    // Fast mode alone is enough for the chip.
+    sess.config_options = vec![opt("fast", None, &["off", "on"])];
+    assert!(model::App::has_model_settings(&sess));
+}
+
+#[test]
+fn effort_steps_through_its_levels() {
+    let app = demo("model-popover");
+    let e = model::App::config_option(app.session("ses_1").unwrap(), "thought_level").unwrap();
+    assert_eq!(e.options.iter().map(|v| v.value.as_str()).collect::<Vec<_>>(), ["low", "medium", "high", "max"]);
+    let at = model::stop_of(e);
+    assert_eq!(at, 2, "high");
+    assert_eq!(model::step_stop(4, at, 1), 3);
+    assert_eq!(model::step_stop(4, 3, 1), 3, "clamps at Max");
+    assert_eq!(model::step_stop(4, at, -10), 0, "Page Down to Low");
+    assert_eq!(model::step_stop(0, 0, 1), 0);
+    // A drag lands on the nearest stop.
+    assert_eq!(model::stop_at(4, 0.0, 300.0), 0);
+    assert_eq!(model::stop_at(4, 140.0, 300.0), 1);
+    assert_eq!(model::stop_at(4, 160.0, 300.0), 2);
+    assert_eq!(model::stop_at(4, 999.0, 300.0), 3);
+    assert_eq!(model::stop_at(4, -5.0, 300.0), 0);
+    assert_eq!(model::stop_at(1, 50.0, 300.0), 0);
+    assert!(demo("composer").menu.is_none());
+    assert_eq!(demo("model-popover").menu, Some(model::Menu::Model));
 }
 
 #[test]
