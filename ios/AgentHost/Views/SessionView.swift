@@ -74,13 +74,11 @@ struct SessionView: View {
         return model.sessionTitle(s)
     }
 
-    /// "● Your turn · ⑂ fix-flaky-resume" with a worktree, else
-    /// "● Your turn · Claude Code (Personal)". The dot has the status's
-    /// colour, as in the list.
+    /// "● ⑂ fix-flaky-resume" with a worktree, else "● Claude Code
+    /// (Personal)". The dot alone carries the status, in its list colour.
     private var subtitle: Text? {
         guard let s = session else { return nil }
         let status = SessionStatus(state: s.state)
-        let label = s.isArchived ? "Archived" : status.label
         let dotColor: Color = s.isArchived || status == .ended ? Color(uiColor: .tertiaryLabel) : status.color
         let dot = Text(Image(systemName: "circle.fill"))
             .font(.system(size: 6))
@@ -92,7 +90,7 @@ struct SessionView: View {
         } else {
             detail = Text(model.agentLoginLabel(s))
         }
-        return dot + Text(" \(label) · ") + detail
+        return dot + Text(" ") + detail
     }
 
     /// The title menu: what the session runs as and where, then Copy
@@ -244,22 +242,19 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sessionTitleBar(title, subtitle: subtitle) { titleMenu }
         .toolbar {
-            if !sides.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        if sideSelection == nil || !sides.contains(where: { $0.id == sideSelection }) {
-                            sideSelection = sides.last?.id
-                        }
-                        showSides = true
-                    } label: {
-                        ToolbarIcon(systemName: "bubble.left.and.text.bubble.right")
-                    }
-                    .accessibilityLabel("Side questions")
-                    .accessibilityValue("\(sides.count)")
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if !sides.isEmpty {
+                        Button {
+                            if sideSelection == nil || !sides.contains(where: { $0.id == sideSelection }) {
+                                sideSelection = sides.last?.id
+                            }
+                            showSides = true
+                        } label: {
+                            Label("Side Chats (\(sides.count))", systemImage: "bubble.left.and.text.bubble.right")
+                        }
+                        Divider()
+                    }
                     Button {
                         Task { await run { try await model.cancel(sessionId) } }
                     } label: {
@@ -559,7 +554,7 @@ struct SessionView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
-                .accessibilityLabel(sideQuestion != nil ? "Ask side question" : "Send")
+                .accessibilityLabel(sideQuestion != nil ? "Ask in side chat" : "Send")
             }
         }
     }
@@ -1721,7 +1716,7 @@ struct SideQuestionsSheet: View {
                     )
                 }
             }
-            .navigationTitle("Side Questions")
+            .navigationTitle("Side Chats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
