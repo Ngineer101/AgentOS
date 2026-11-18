@@ -19,8 +19,8 @@ struct ApprovalView: View {
         NavigationStack {
             List {
                 if initial.isInstall {
-                    Section(caps: "Install") {
-                        Text(initial.summary ?? "A tool on this computer")
+                    Section(caps: initial.approveLabel) {
+                        Text(initial.summary ?? "A command on this computer")
                     }
                     if let reason = initial.reason {
                         Section(caps: "Why") {
@@ -33,7 +33,7 @@ struct ApprovalView: View {
                     } header: {
                         Text("RUNS")
                     } footer: {
-                        Text("On this computer, as you, outside the sandbox. The package manager may run the package's install scripts with your permissions.")
+                        Text("On this computer, as you, outside the sandbox. " + initial.note)
                     }
                 } else {
                     Section(caps: "Connector") {
@@ -75,7 +75,7 @@ struct ApprovalView: View {
                     }
                 }
             }
-            .navigationTitle(initial.isInstall ? "Install a Tool?" : "\(ApprovalRequestRow.humanize(initial.tool)) on \(initial.connectorName)?")
+            .navigationTitle(initial.isInstall ? initial.askTitle : "\(ApprovalRequestRow.humanize(initial.tool)) on \(initial.connectorName)?")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -91,7 +91,7 @@ struct ApprovalView: View {
                 HStack(spacing: 10) {
                     Button("Deny") { answer(false) }
                         .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red, height: 50))
-                    Button(initial.isInstall ? "Install" : "Approve") { answer(true) }
+                    Button(initial.isInstall ? initial.approveLabel : "Approve") { answer(true) }
                         .buttonStyle(CapsuleButtonStyle(fill: .accentColor, height: 50))
                 }
                 .disabled(sending || current == nil || !model.link.isOnline)

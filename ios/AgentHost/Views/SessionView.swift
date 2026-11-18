@@ -1220,7 +1220,7 @@ struct ApprovalRequestRow: View {
                     .background(Palette.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(a.summary ?? "Install a tool on this computer?")
+                    Text(a.summary ?? "Run a command on this computer?")
                         .font(.headline)
                     Text(pending == nil ? "Answered" : "Runs as you, outside the sandbox · \(expiresText(a))")
                         .font(.footnote)
@@ -1239,13 +1239,13 @@ struct ApprovalRequestRow: View {
                     .textSelection(.enabled)
             }
             if let pending {
-                Text("The package manager may run the package's install scripts with your permissions. Install only what you expected.")
+                Text(a.note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Button("Deny") { answer(pending, approve: false) }
                         .buttonStyle(CapsuleButtonStyle(fill: Color.white.opacity(0.1), foreground: Palette.red))
-                    Button("Install") { answer(pending, approve: true) }
+                    Button(a.approveLabel) { answer(pending, approve: true) }
                         .buttonStyle(CapsuleButtonStyle(fill: .accentColor))
                 }
                 .disabled(sending || !model.link.isOnline)

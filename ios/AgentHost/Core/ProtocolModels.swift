@@ -489,6 +489,15 @@ struct PendingApprovalModel: Codable, Identifiable, Hashable {
     var command: String? { argument("command") }
     /// Why the agent asks.
     var reason: String? { argument("reason").flatMap { $0.isEmpty ? nil : $0 } }
+    /// What the approve button does ("Install", "Push"); older hosts only
+    /// ever asked to install.
+    var approveLabel: String { argument("approve_label") ?? "Install" }
+    /// What to watch for before approving.
+    var note: String {
+        argument("note") ?? "The package manager may run the package's install scripts with your permissions. Install only what you expected."
+    }
+    /// The sheet's title ("Install a Tool?", "Push to GitHub?").
+    var askTitle: String { argument("ask_title") ?? "Install a Tool?" }
 
     /// One line for lists and banners.
     var listLine: String { summary ?? "\(connectorName) · \(tool)" }
