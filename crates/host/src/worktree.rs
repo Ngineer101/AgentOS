@@ -13,16 +13,17 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Run `git -C <dir> <args>` and return its trimmed output.
-async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+/// `git -C <dir> <args>` as the host runs it, outside any sandbox: nothing
+/// from the repository runs (no hooks, e.g. `post-checkout` on `worktree
+/// add` or `pre-push`, which a repository can point into files the agent
+/// writes; no fsmonitor command), and the host's own environment can't point
+/// git somewhere else or make it prompt.
+pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    // Outside the sandbox, so nothing from the repository runs: no hooks
-    // (`post-checkout` on `worktree add`), no fsmonitor command.
     cmd.arg("-C")
         .arg(dir)
         .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"])
         .args(args);
-    // The host's own environment must not point git somewhere else.
     for v in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -36,7 +37,14 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     cmd.env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
+/// Run `git -C <dir> <args>` and return its trimmed output.
+async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let mut cmd = git_command(dir, args);
     let out = cmd
         .output()
         .await

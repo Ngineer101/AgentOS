@@ -11,6 +11,7 @@ pub mod bus;
 pub mod config;
 pub mod ctx;
 pub mod host;
+pub mod gitremote;
 pub mod installer;
 pub mod mcp;
 pub mod profiles;

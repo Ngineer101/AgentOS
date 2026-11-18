@@ -99,7 +99,11 @@ before write tools by default. Installing a tool on your computer goes only
 through the gateway's built-in `agenthost__install_tool`: you see the exact
 command and the agent's reason, and it runs as you, outside the sandbox, only
 after you approve (a registry package name and plain version only, no shell,
-one at a time, logged to the audit log). The host listens on no network port. See
+one at a time, logged to the audit log). Pushing works the same way: the
+sandbox can't read your git credentials, so `agenthost__git_push` asks you
+to approve the exact `git push` and the host runs it with your credentials
+(fetching runs without asking); nothing from the repository, such as its
+hooks, runs outside the sandbox. The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development

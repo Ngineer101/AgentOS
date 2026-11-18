@@ -44,6 +44,10 @@ const MCP_PROTOCOL: &str = "2025-06-18";
 /// The host's own tool: install a command-line tool on the user's computer
 /// (outside the sandbox), always after the user approves.
 pub const INSTALL_TOOL: &str = "agenthost__install_tool";
+/// Push a branch with the user's git credentials, after they approve.
+pub const GIT_PUSH_TOOL: &str = "agenthost__git_push";
+/// Fetch with the user's git credentials (changes nothing on the remote).
+pub const GIT_FETCH_TOOL: &str = "agenthost__git_fetch";
 
 struct SessionReg {
     session_id: String,
@@ -94,6 +98,43 @@ pub fn exposed_name(slug: &str, tool: &str) -> String {
 
 pub fn slug(name: &str) -> String {
     agenthost_proto::connector_slug(name)
+}
+
+/// The definitions of `agenthost__git_push` and `agenthost__git_fetch`.
+fn git_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": GIT_PUSH_TOOL,
+            "description": "[AgentHost] Push a branch of this session's repository with the user's own git credentials, which your sandbox can't read \
+                 (so `git push` inside it fails). The user sees the exact command and approves or denies it; nothing runs until they approve. \
+                 Commit first. Only remotes the repository already has; branch names only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "branch": {"type": "string", "description": "The local branch to push (optional; the branch checked out in this session's folder)."},
+                    "remote": {"type": "string", "description": "A remote the repository has (optional; the branch's upstream, else origin)."},
+                    "remote_branch": {"type": "string", "description": "The branch name on the remote (optional; the same name)."},
+                    "set_upstream": {"type": "boolean", "description": "Track the pushed branch (git push --set-upstream)."},
+                    "force_with_lease": {"type": "boolean", "description": "Replace the remote branch if nobody else pushed to it (git push --force-with-lease). Only when the user asked for it."},
+                    "reason": {"type": "string", "description": "One sentence for the user: what this push is."}
+                },
+                "required": ["reason"]
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true, "title": "Push with the user's credentials"}
+        }),
+        json!({
+            "name": GIT_FETCH_TOOL,
+            "description": "[AgentHost] Fetch from a remote of this session's repository with the user's own git credentials (git fetch <remote>), \
+                 which your sandbox can't read. Runs without asking; it changes nothing on the remote. Merge or rebase yourself afterwards.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "remote": {"type": "string", "description": "A remote the repository has (optional; origin)."}
+                }
+            },
+            "annotations": {"readOnlyHint": true, "openWorldHint": true, "title": "Fetch with the user's credentials"}
+        }),
+    ]
 }
 
 fn text_result(text: &str, is_error: bool) -> Value {
@@ -387,6 +428,9 @@ impl Gateway {
         if name == INSTALL_TOOL {
             return self.install_tool(session_id, args).await;
         }
+        if name == GIT_PUSH_TOOL || name == GIT_FETCH_TOOL {
+            return self.git_tool(session_id, name == GIT_PUSH_TOOL, args).await;
+        }
         let call_id = new_id("mcp");
         let tools = self.list_tools(workspace_id);
         let mut found = tools.iter().find(|(_, _, d)| d["name"] == name).cloned();
@@ -542,12 +586,13 @@ impl Gateway {
 
     /// The host's own tools, as listed to agents.
     fn builtin_tools(&self) -> Vec<Value> {
+        let mut tools = git_tools();
         let found = crate::installer::available(self.ctx.cfg.install_bin_dir.as_deref());
         if found.is_empty() {
-            return vec![];
+            return tools;
         }
         let names: Vec<&str> = found.iter().map(|m| m.name()).collect();
-        vec![json!({
+        tools.push(json!({
             "name": INSTALL_TOOL,
             "description": format!(
                 "[AgentHost] Install a command-line tool on the user's computer, outside your sandbox, so the user (and later sessions) can run it. \
@@ -568,7 +613,111 @@ impl Gateway {
                 "required": ["manager", "package", "reason"]
             },
             "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true, "title": "Install a tool on this computer"}
-        })]
+        }));
+        tools
+    }
+
+    /// The folder a session's git commands run in: its worktree, or its
+    /// workspace.
+    fn session_git_dir(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        let s = self.ctx.store.session_get(session_id).ok()??;
+        if let Some(w) = &s.worktree {
+            return Some(std::path::PathBuf::from(&w.path));
+        }
+        let ws = self.ctx.store.workspace_get(&s.workspace_id).ok()??;
+        Some(std::path::PathBuf::from(ws.path))
+    }
+
+    /// `agenthost__git_push` (asks first) and `agenthost__git_fetch` (doesn't).
+    async fn git_tool(self: &Arc<Self>, session_id: &str, push: bool, args: Value) -> Value {
+        let call_id = new_id("mcp");
+        let tool = if push { "git_push" } else { "git_fetch" };
+        let exposed = if push { GIT_PUSH_TOOL } else { GIT_FETCH_TOOL };
+        let s = |k: &str| args[k].as_str().map(str::to_string);
+        let base = json!({
+            "tool_call_id": call_id, "name": tool, "exposed_name": exposed, "arguments": args,
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "tool_kind": if push { ToolKind::Write } else { ToolKind::Read },
+            "policy": if push { ToolPolicy::Ask } else { ToolPolicy::Auto }
+        });
+        let _ = self.ctx.append(session_id, EventType::ToolCall, base);
+        let finish = |status: &str, output: &str| {
+            let (out, truncated) = truncate(output, crate::session::TOOL_OUTPUT_LIMIT);
+            let _ = self.ctx.append(
+                session_id,
+                EventType::ToolResult,
+                json!({"tool_call_id": call_id, "name": tool, "status": status, "output": out, "truncated": truncated, "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID}),
+            );
+        };
+        if self.rate_limited(session_id) {
+            finish("failed", "rate limit reached");
+            return text_result("agenthost: too many calls this minute; try again shortly", true);
+        }
+        let Some(dir) = self.session_git_dir(session_id) else {
+            finish("failed", "no such session");
+            return text_result("agenthost: this session's folder is unknown", true);
+        };
+        let plan = if push {
+            crate::gitremote::plan_push(
+                &dir,
+                s("remote").as_deref(),
+                s("branch").as_deref(),
+                s("remote_branch").as_deref(),
+                args["force_with_lease"].as_bool().unwrap_or(false),
+                args["set_upstream"].as_bool().unwrap_or(false),
+            )
+            .await
+        } else {
+            crate::gitremote::plan_fetch(&dir, s("remote").as_deref()).await
+        };
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("agenthost: {e}"), true);
+            }
+        };
+        if push {
+            let reason = s("reason").unwrap_or_default();
+            let mut note = "Uses your git credentials. Nothing from the repository runs (its hooks are skipped).".to_string();
+            if plan.force {
+                note = format!("Replaces the remote branch if nobody else pushed to it since your last fetch. {note}");
+            }
+            let shown = json!({
+                "command": plan.command(),
+                "remote": plan.remote,
+                "branch": plan.branch,
+                "force": plan.force,
+                "reason": reason,
+                "runs": "on this computer, as you, outside the sandbox",
+                "approve_label": if plan.force { "Force-Push" } else { "Push" },
+                "ask_title": "Push?",
+                "note": note,
+            });
+            let decision = self
+                .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+                .await;
+            self.ctx.audit.log(
+                "git.decision",
+                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision}),
+            );
+            if decision != ApprovalDecision::Approve {
+                finish("denied", "the user denied this push");
+                return text_result("The user denied this push.", true);
+            }
+        }
+        let out = crate::gitremote::run(&plan).await;
+        self.ctx.audit.log(
+            "git.done",
+            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "ok": out.ok}),
+        );
+        let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
+        finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        if out.ok {
+            text_result(&format!("Ran `{}` with the user's credentials:\n{output}", plan.command()), false)
+        } else {
+            text_result(&format!("`{}` failed:\n{output}", plan.command()), true)
+        }
     }
 
     /// `agenthost__install_tool`: check the request, ask the user, run it.
@@ -616,6 +765,9 @@ impl Gateway {
             "version": plan.version,
             "reason": reason,
             "runs": "on this computer, as you, outside the sandbox",
+            "approve_label": "Install",
+            "ask_title": "Install a Tool?",
+            "note": "The package manager may run the package's install scripts with your permissions. Install only what you expected.",
         });
         let decision = self
             .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", "install_tool", &shown, Some(plan.summary()))
