@@ -101,10 +101,8 @@ async fn pair_then_use_sessions_over_the_relay() {
         .any(|e| e.kind == EventType::AgentMessage
             && e.payload["text"] == "echo: secret prompt words"));
     let prompt = ev.iter().find(|e| e.kind == EventType::Prompt).unwrap();
-    assert!(prompt.payload["device"]
-        .as_str()
-        .unwrap()
-        .contains(&state.device_id));
+    // Named by the device, not its id.
+    assert_eq!(prompt.payload["device"], "Test phone");
 
     // Desktop-only methods are refused for the phone.
     let e = phone

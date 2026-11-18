@@ -645,6 +645,15 @@ pub struct ConnectorSuggestion {
 
 /// The prefix a connector's tools get when agents see them
 /// (`<slug>__<tool>`): its name, lowercased, with runs of anything else as `_`.
+/// A device as people read it: its name. Older events say "iPhone (dev_…)";
+/// the id in brackets is left out.
+pub fn device_display_name(label: &str) -> &str {
+    match label.rfind(" (dev_") {
+        Some(i) if label.ends_with(')') => &label[..i],
+        _ => label,
+    }
+}
+
 pub fn connector_slug(name: &str) -> String {
     let mut s = String::new();
     for c in name.to_ascii_lowercase().chars() {
@@ -1103,6 +1112,13 @@ pub struct VoiceProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_names_leave_out_the_id() {
+        assert_eq!(device_display_name("iPhone (dev_1ff8d2a306a682421fd0)"), "iPhone");
+        assert_eq!(device_display_name("Nico's iPhone"), "Nico's iPhone");
+        assert_eq!(device_display_name("local"), "local");
+    }
 
     #[test]
     fn connector_names_and_slugs() {

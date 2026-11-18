@@ -128,7 +128,7 @@ struct DemoData {
             live(session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
                          "What changed in Rust 1.92?", ago: 3, lastSeq: 4)),
             live(session(Self.flakySession, "ws-relay", "claude", "claude-work", SessionStateName.waitingApproval,
-                         "Fix the flaky resume test", ago: 1, lastSeq: 5), branch: "agenthost/fix-flaky-resume"),
+                         "Fix the flaky resume test", ago: 1, lastSeq: 10), branch: "agenthost/fix-flaky-resume"),
             live(session("demo-oauth", "ws-relay", "codex", "codex", SessionStateName.running,
                          "Add OAuth refresh", ago: 5), branch: "agenthost/oauth-refresh"),
             live(session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
@@ -202,18 +202,36 @@ struct DemoData {
                 "text": .string("The resume test fails about one run in ten on CI. Find out why and fix it."),
                 "device": .string("Nico's iPhone"),
             ]),
-            Self.event(Self.flakySession, 2, EventKind.toolCall, t0 + 5000, [
+            Self.event(Self.flakySession, 2, EventKind.agentThought, t0 + 3000, [
+                "text": .string("Run the test first, then look at how the helper waits for state."),
+            ]),
+            Self.event(Self.flakySession, 3, EventKind.toolCall, t0 + 5000, [
                 "tool_call_id": .string("call-1"), "name": .string("shell"), "source": .string("sandbox"),
                 "arguments": .object(["command": .string("cargo test -p agenthost-host")]),
             ]),
-            Self.event(Self.flakySession, 3, EventKind.toolResult, t0 + 60_000, [
+            Self.event(Self.flakySession, 4, EventKind.toolResult, t0 + 60_000, [
                 "tool_call_id": .string("call-1"), "status": .string("completed"),
                 "output": .string("test result: ok. 48 passed; 0 failed; 0 ignored"), "exit_code": .number(0),
             ]),
-            Self.event(Self.flakySession, 4, EventKind.agentMessage, t0 + 90_000, [
+            Self.event(Self.flakySession, 5, EventKind.toolCall, t0 + 62_000, [
+                "tool_call_id": .string("call-2"), "name": .string("shell"), "source": .string("sandbox"),
+                "arguments": .object(["command": .string("rg -n wait_state crates/host/tests")]),
+            ]),
+            Self.event(Self.flakySession, 6, EventKind.toolResult, t0 + 63_000, [
+                "tool_call_id": .string("call-2"), "status": .string("completed"),
+                "output": .string("common/mod.rs:212: pub async fn wait_state("), "exit_code": .number(0),
+            ]),
+            Self.event(Self.flakySession, 7, EventKind.toolCall, t0 + 64_000, [
+                "tool_call_id": .string("call-3"), "name": .string("fetch"), "source": .string("sandbox"),
+                "arguments": .object(["url": .string("https://docs.rs/tokio/latest/tokio/time/fn.timeout.html")]),
+            ]),
+            Self.event(Self.flakySession, 8, EventKind.toolResult, t0 + 66_000, [
+                "tool_call_id": .string("call-3"), "status": .string("completed"), "output": .string("<html>…"),
+            ]),
+            Self.event(Self.flakySession, 9, EventKind.agentMessage, t0 + 90_000, [
                 "text": .string("The test passes locally. The flake comes from a race: `wait_state` polls before the resumed session writes its first event. I made the helper wait for the event instead."),
             ]),
-            HostEvent(sessionId: Self.flakySession, seq: 5, type: EventKind.approvalRequested,
+            HostEvent(sessionId: Self.flakySession, seq: 10, type: EventKind.approvalRequested,
                       payload: approvalPayload, ts: t0 + 100_000),
         ] { _ = flaky.ingest(e) }
 

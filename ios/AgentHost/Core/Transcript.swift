@@ -119,7 +119,7 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
                 seq: e.seq,
                 text: p["text"].string ?? "",
                 attachments: AttachmentInfo.list(from: p["attachments"]),
-                device: p["device"].string,
+                device: p["device"].string.map(deviceDisplayName),
                 ts: e.ts
             ))
         case EventKind.agentMessage:
@@ -179,7 +179,7 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
             rows.append(.approvalResolved(
                 seq: e.seq,
                 decision: p["decision"].string ?? "",
-                device: p["device"].string ?? "",
+                device: deviceDisplayName(p["device"].string ?? ""),
                 timedOut: p["timed_out"].bool ?? false
             ))
         case EventKind.netDenied:
@@ -205,4 +205,11 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
         }
     }
     return rows
+}
+
+/// A device as people read it: its name. Older events say "iPhone (dev_…)";
+/// the id in brackets is left out.
+func deviceDisplayName(_ label: String) -> String {
+    guard label.hasSuffix(")"), let r = label.range(of: " (dev_", options: .backwards) else { return label }
+    return String(label[..<r.lowerBound])
 }

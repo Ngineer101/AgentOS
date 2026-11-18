@@ -349,7 +349,8 @@ impl Remote {
         let principal = Principal {
             device_id: Some(rec.device.device_id.clone()),
             capabilities: rec.device.capabilities.clone(),
-            label: format!("{} ({})", rec.device.name, rec.device.device_id),
+            // The device id is in the audit entries next to the label.
+            label: rec.device.name.clone(),
         };
         let _ = self.ctx.store.device_seen(&rec.device.device_id);
         let (in_tx, in_rx) = mpsc::channel::<String>(256);

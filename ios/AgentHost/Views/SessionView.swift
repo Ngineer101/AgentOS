@@ -111,8 +111,13 @@ struct SessionView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
                     }
-                    ForEach(rows) { row in
-                        TranscriptRowView(row: row) { a in approvalShown = a }
+                    ForEach(groupActivity(rows)) { item in
+                        switch item {
+                        case let .row(row):
+                            TranscriptRowView(row: row) { a in approvalShown = a }
+                        case let .activity(_, group):
+                            ActivityGroupRow(rows: group)
+                        }
                     }
                     if let s = model.streaming[sessionId] {
                         StreamingRow(streaming: s)
@@ -691,16 +696,35 @@ struct ThoughtRow: View {
     @State private var expanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            Text(text)
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain")
+                        .font(.caption)
+                        .frame(width: 16)
+                    Text("Thinking")
+                        .font(.footnote)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
                 .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            Label("Thinking", systemImage: "brain")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 24)
+            }
         }
     }
 }
@@ -733,22 +757,22 @@ struct ToolCallRow: View {
             Button {
                 withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     if let c = tool.connectorName, model.connectorIcon(id: nil, name: c) != nil {
-                        ConnectorIcon(id: nil, name: c, size: 20)
+                        ConnectorIcon(id: nil, name: c, size: 16)
                     } else {
                         Image(systemName: summary.icon)
-                            .font(.footnote)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                            .frame(width: 20)
+                            .frame(width: 16)
                     }
                     Text(summary.text)
-                        .font(summary.monospaced ? .footnote.monospaced() : .subheadline)
-                        .foregroundStyle(.primary)
+                        .font(summary.monospaced ? .caption.monospaced() : .footnote)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if tool.status != "completed" { statusIcon }
                     Spacer(minLength: 4)
-                    statusIcon
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
@@ -782,35 +806,59 @@ struct ToolCallRow: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.cell, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var summary: (icon: String, text: String, monospaced: Bool) {
-        let args = tool.arguments
+    private var summary: ToolSummary { tool.summary }
+
+    private var statusLabel: String {
+        tool.statusLabel
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        ToolStatusIcon(tool: tool)
+    }
+}
+
+/// What a tool call did, in a few words, and which kind of action it was
+/// (for "Ran 3 commands, opened 2 pages").
+struct ToolSummary {
+    enum Kind { case command, page, file, connector, other }
+    var icon: String
+    var text: String
+    var monospaced: Bool
+    var kind: Kind
+}
+
+extension ToolRow {
+    var summary: ToolSummary {
+        let args = arguments
         if let cmd = args["command"].string ?? args["cmd"].string {
-            return ("apple.terminal", cmd, true)
+            return ToolSummary(icon: "apple.terminal", text: cmd, monospaced: true, kind: .command)
         }
         if case let .array(parts) = args["command"] {
-            return ("apple.terminal", parts.compactMap(\.string).joined(separator: " "), true)
+            return ToolSummary(icon: "apple.terminal", text: parts.compactMap(\.string).joined(separator: " "),
+                               monospaced: true, kind: .command)
         }
         if let url = args["url"].string {
             let host = URL(string: url)?.host() ?? url
-            return ("globe", tool.status == nil ? "Opening \(host)…" : "Opened \(host)", false)
+            return ToolSummary(icon: "globe", text: status == nil ? "Opening \(host)…" : "Opened \(host)",
+                               monospaced: false, kind: .page)
         }
         if let path = args["path"].string ?? args["file_path"].string {
-            return ("doc.text", "\(tool.name) \(URL(fileURLWithPath: path).lastPathComponent)", true)
+            return ToolSummary(icon: "doc.text", text: "\(name) \(URL(fileURLWithPath: path).lastPathComponent)",
+                               monospaced: true, kind: .file)
         }
-        if let c = tool.connectorName {
-            return ("puzzlepiece.extension", "\(c) · \(tool.name)", false)
+        if let c = connectorName {
+            return ToolSummary(icon: "puzzlepiece.extension", text: "\(c) · \(name)", monospaced: false, kind: .connector)
         }
-        return ("wrench.and.screwdriver", tool.name, true)
+        return ToolSummary(icon: "wrench.and.screwdriver", text: name, monospaced: true, kind: .other)
     }
 
-    private var statusLabel: String {
-        switch tool.status {
+    var statusLabel: String {
+        switch status {
         case nil: return "running"
         case "completed"?: return "done"
         case "denied"?: return "denied"
@@ -818,20 +866,149 @@ struct ToolCallRow: View {
         }
     }
 
-    @ViewBuilder
-    private var statusIcon: some View {
+    var failed: Bool { status != nil && status != "completed" }
+}
+
+/// Running, done, denied or failed, as a small symbol.
+struct ToolStatusIcon: View {
+    let tool: ToolRow
+
+    var body: some View {
         switch tool.status {
         case nil:
             ProgressView().controlSize(.mini)
         case "completed"?:
-            Image(systemName: "checkmark").font(.caption.weight(.semibold)).foregroundStyle(.green)
+            Image(systemName: "checkmark").font(.caption2.weight(.semibold)).foregroundStyle(.green)
         case "denied"?:
-            Image(systemName: "hand.raised.slash").font(.caption).foregroundStyle(.orange)
+            Image(systemName: "hand.raised.slash").font(.caption2).foregroundStyle(.orange)
         default:
             Image(systemName: tool.sandboxDenied ? "lock.trianglebadge.exclamationmark" : "xmark")
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.red)
         }
+    }
+}
+
+/// A transcript row, or a run of tool calls and thinking shown as one line.
+enum TranscriptItem: Identifiable {
+    case row(TranscriptRow)
+    case activity(id: String, rows: [TranscriptRow])
+
+    var id: String {
+        switch self {
+        case let .row(r): return r.id
+        case let .activity(id, _): return id
+        }
+    }
+}
+
+/// Fold each run of two or more tool calls and thoughts into one item, the
+/// way Claude's app shows a turn's work.
+func groupActivity(_ rows: [TranscriptRow]) -> [TranscriptItem] {
+    var items: [TranscriptItem] = []
+    var run: [TranscriptRow] = []
+    func flush() {
+        if run.count >= 2, run.contains(where: { if case .tool = $0 { return true }; return false }) {
+            items.append(.activity(id: "g" + run[0].id, rows: run))
+        } else {
+            items.append(contentsOf: run.map(TranscriptItem.row))
+        }
+        run = []
+    }
+    for r in rows {
+        switch r {
+        case .tool, .thought: run.append(r)
+        default:
+            flush()
+            items.append(.row(r))
+        }
+    }
+    flush()
+    return items
+}
+
+/// "Ran 3 commands, opened 2 pages ›": tap to see each call. While a call
+/// runs, the line says what it is doing.
+struct ActivityGroupRow: View {
+    let rows: [TranscriptRow]
+    @State private var expanded = false
+
+    private var tools: [ToolRow] {
+        rows.compactMap { if case let .tool(t) = $0 { return t }; return nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    if let running = tools.last(where: { $0.status == nil }) {
+                        ProgressView().controlSize(.mini).frame(width: 16)
+                        Text(running.summary.text)
+                            .font(running.summary.monospaced ? .caption.monospaced() : .footnote)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Image(systemName: "checklist")
+                            .font(.caption)
+                            .frame(width: 16)
+                        Text(title)
+                            .font(.footnote)
+                            .lineLimit(1)
+                        let failed = tools.filter(\.failed).count
+                        if failed > 0 {
+                            Text("\(failed) failed")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityHint(expanded ? "Hides the steps" : "Shows each step")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { r in
+                        switch r {
+                        case let .tool(t): ToolCallRow(tool: t)
+                        case let .thought(_, text): ThoughtRow(text: text)
+                        default: EmptyView()
+                        }
+                    }
+                }
+                .padding(.leading, 8)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(.quaternary).frame(width: 1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "Ran 3 commands, opened 2 pages, used 1 tool".
+    private var title: String {
+        func n(_ k: ToolSummary.Kind) -> Int { tools.filter { $0.summary.kind == k }.count }
+        func plural(_ c: Int, _ one: String, _ many: String) -> String { c == 1 ? "1 \(one)" : "\(c) \(many)" }
+        var parts: [String] = []
+        if n(.command) > 0 { parts.append("ran " + plural(n(.command), "command", "commands")) }
+        if n(.page) > 0 { parts.append("opened " + plural(n(.page), "page", "pages")) }
+        if n(.file) > 0 { parts.append("worked on " + plural(n(.file), "file", "files")) }
+        let other = n(.connector) + n(.other)
+        if other > 0 { parts.append("used " + plural(other, "tool", "tools")) }
+        if parts.isEmpty { return "Thought" }
+        let s = parts.joined(separator: ", ")
+        return s.prefix(1).uppercased() + s.dropFirst()
     }
 }
 

@@ -488,7 +488,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
     let p = &e.payload;
     Some(match e.kind {
         EventType::Prompt => {
-            let device = str_of(&p["device"]);
+            let device = agenthost_proto::device_display_name(&str_of(&p["device"])).to_string();
             let mut c = col().items_end().gap(4.0).max_w(520.0).child(
                 col()
                     .px(13.0)
@@ -574,7 +574,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
         EventType::ApprovalRequested => approval_card(s, sess, e, t)?,
         EventType::ApprovalResolved => {
             let decision = str_of(&p["decision"]);
-            let by = str_of(&p["device"]);
+            let by = agenthost_proto::device_display_name(&str_of(&p["device"])).to_string();
             let word = match decision.as_str() {
                 "approve" | "approved" => "Approved",
                 "deny" | "denied" => "Denied",
