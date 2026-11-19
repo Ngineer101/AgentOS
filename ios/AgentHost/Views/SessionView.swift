@@ -140,18 +140,6 @@ struct SessionView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        if animated {
-            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-        } else {
-            proxy.scrollTo("bottom", anchor: .bottom)
-            // The LazyVStack only measures rows as they come on screen, so
-            // a long jump can stop short of the end; once they're measured
-            // a second pass finishes it.
-            DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
-        }
-    }
-
     private func startRename() {
         renameText = session?.title ?? ""
         renaming = true
@@ -229,7 +217,7 @@ struct SessionView: View {
                 // A message or two arriving glides into view; the
                 // transcript loading (or a backlog replaying) jumps
                 // straight to its end instead of animating from the top.
-                scrollToBottom(proxy, animated: old > 0 && new - old <= 2)
+                proxy.scrollToBottom(animated: old > 0 && new - old <= 2)
             }
             .onChange(of: model.streaming[sessionId]?.text) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
@@ -237,7 +225,7 @@ struct SessionView: View {
             .onAppear {
                 // onAppear runs before the first layout, when scrollTo has
                 // nothing to scroll; wait a turn so it lands.
-                DispatchQueue.main.async { scrollToBottom(proxy, animated: false) }
+                DispatchQueue.main.async { proxy.scrollToBottom(animated: false) }
             }
             .onDrop(of: [.image, .fileURL, .data], isTargeted: $dropTargeted) { providers in
                 guard canAttach else { return false }
@@ -1859,9 +1847,13 @@ struct SideQuestionsSheet: View {
                 .padding(16)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .startsAtBottom()
+            .onAppear { DispatchQueue.main.async { proxy.scrollToBottom(animated: false) } }
             .onChange(of: c) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
+        // Each conversation gets its own scroll view, so switching tabs
+        // opens the other one at its end rather than at this one's offset.
+        .id(c.id)
     }
 
     private var followUpBar: some View {
@@ -2354,6 +2346,21 @@ enum DemoMenuOpener {
     }
 }
 #endif
+
+extension ScrollViewProxy {
+    /// Scrolls to the `"bottom"` marker at the end of a conversation.
+    func scrollToBottom(animated: Bool) {
+        if animated {
+            withAnimation { scrollTo("bottom", anchor: .bottom) }
+        } else {
+            scrollTo("bottom", anchor: .bottom)
+            // A LazyVStack only measures rows as they come on screen, so a
+            // long jump can stop short of the end; once they're measured a
+            // second pass finishes it.
+            DispatchQueue.main.async { scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+}
 
 extension View {
     /// Opens a scroll view at its end, like Messages. Only the initial
