@@ -2,6 +2,7 @@ import Foundation
 import LocalAuthentication
 import Network
 import SwiftUI
+import UserNotifications
 
 /// Where the app is, top level.
 enum AppPhase: Equatable {
@@ -137,6 +138,27 @@ final class AppModel: ObservableObject {
     @Published private(set) var sidePending: [String: [String]] = [:]
     /// Side conversations the user closed (this run of the app).
     @Published private(set) var closedSides: Set<String> = []
+
+    // Push notifications (protocol 4; see AppModel+Push.swift).
+    /// `push.status` from the host (nil before it answers, or on older hosts).
+    @Published var pushStatus: PushStatusModel?
+    /// The user wants notifications on this iPhone (stored locally; the
+    /// registration is renewed on every connection while on).
+    @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: AppModel.notificationsEnabledKey)
+    /// What this iPhone is notified about (sent with every `push.register`).
+    @Published var pushPrefs = AppModel.storedPushPrefs
+    /// Whether iOS lets AgentHost show notifications.
+    @Published var pushAuthorization: UNAuthorizationStatus = .notDetermined
+    /// The pairing flow's "Notifications" step, after the first connection.
+    @Published var showPushOnboarding = false
+    /// A session to open from a notification (SessionsView navigates there).
+    @Published var openSessionRequest: String?
+    /// The session on screen: its notifications are not shown while it is.
+    var visibleSessionId: String?
+    /// The APNs device token, once iOS gave it (this run of the app).
+    var pushToken: Data?
+    /// `remoteToken()` callers waiting for iOS.
+    var pushTokenWaiters: [UUID: CheckedContinuation<Data, Error>] = [:]
 
     // MARK: Private state
 
@@ -443,6 +465,8 @@ final class AppModel: ObservableObject {
         if isDemo { return }
         guard phase == .ready else { return }
         connect()
+        Task { await refreshPushAuthorization() }
+        if let sid = visibleSessionId { removeDeliveredNotifications(sessionId: sid) }
     }
 
     /// Hide everything and drop the connection and keys from memory.
@@ -466,6 +490,8 @@ final class AppModel: ObservableObject {
         let stored = StoredCredentials(creds)
         try CredentialStore.save(stored, requireUserPresence: requireUnlock)
         UserDefaults.standard.removeObject(forKey: Self.removedFlag)
+        // After the first connection: offer notifications (host protocol 4+).
+        UserDefaults.standard.set(true, forKey: Self.offerPushKey)
         // Locked meanwhile: the keys are saved; the next unlock loads them.
         guard phase == .unpaired else { return }
         TranscriptCache.deleteAll()
@@ -479,6 +505,16 @@ final class AppModel: ObservableObject {
     /// Forget this host on this phone. The desktop should also revoke the
     /// device (a phone cannot call `device.revoke`).
     func unpair() {
+        // Best effort: tell the host to stop sending notifications here. The
+        // call keeps the old connection (taken out of the model, so `wipe`
+        // doesn't close it) and closes it when answered.
+        if notificationsEnabled || pushStatus?.thisDevice != nil, link.isOnline, let c = client {
+            client = nil
+            Task.detached {
+                _ = try? await c.call(method: RPC.pushUnregister, paramsJson: "{}")
+                c.disconnect()
+            }
+        }
         wipe()
         phase = .unpaired
     }
@@ -496,6 +532,7 @@ final class AppModel: ObservableObject {
         TranscriptCache.deleteAll()
         credentials = nil
         clearContent()
+        forgetPush()
     }
 
     private func clearContent() {
@@ -515,6 +552,8 @@ final class AppModel: ObservableObject {
         sidePending = [:]
         pendingSession = [:]
         closedSides = []
+        pushStatus = nil
+        openSessionRequest = nil
         hostProtocolVersion = nil
         watched = []
         subscribed = []
@@ -651,6 +690,7 @@ final class AppModel: ObservableObject {
         for p in outbox where p.failure == nil {
             await deliver(p)
         }
+        await didConnectPush()
     }
 
     // MARK: Projects
@@ -699,6 +739,7 @@ final class AppModel: ObservableObject {
         }
         await refreshApprovals()
         await refreshScreen()
+        await refreshPushStatus()
         if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
             connectors = list
             iconCache = [:]
@@ -1259,7 +1300,12 @@ final class AppModel: ObservableObject {
         transcripts = d.transcripts
         connectors = d.connectors
         screenStatus = d.screenStatus
-        hostProtocolVersion = RPC.screenProtocolVersion
+        hostProtocolVersion = RPC.pushProtocolVersion
+        notificationsEnabled = d.screen == .notifications
+        pushPrefs = PushPrefsModel()
+        pushStatus = d.pushStatus(for: d.screen)
+        pushAuthorization = .authorized
+        showPushOnboarding = d.screen == .pairNotifications || d.screen == .pairAPNsKey
         link = .online
         phase = d.screen == .pair ? .unpaired : .ready
     }

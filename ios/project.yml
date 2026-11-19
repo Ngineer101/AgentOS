@@ -23,8 +23,13 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: AgentHost
+      # Push key + decryption, shared with the notification extension.
+      - path: Shared
       - path: Generated/agenthost_ffi.swift
     dependencies:
+      # Notification Service Extension: decrypts each notification's content
+      # (embedded in the app's PlugIns).
+      - target: AgentHostNotifications
       # Static library + C header + module map (module `agenthost_ffiFFI`),
       # built by build-rust.sh. Static, so it is linked, not embedded.
       - framework: Frameworks/AgentHostFFI.xcframework
@@ -34,6 +39,22 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: Speech.framework
       - sdk: Network.framework
+      - sdk: UserNotifications.framework
+    entitlements:
+      path: AgentHost/AgentHost.entitlements
+      properties:
+        # Push Notifications capability (needs a paid Apple Developer
+        # account). Xcode's distribution export (TestFlight, App Store, Ad Hoc)
+        # switches this to "production"; the app reads the value from its
+        # embedded provisioning profile to tell the host which APNs server to use.
+        aps-environment: development
+        # The app's own group first, so the device credentials and the Secure
+        # Enclave key stay private to the app (new items go to the first
+        # group); the shared group holds only the notification key, which the
+        # extension reads.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)dev.agenthost.ios
+          - $(AppIdentifierPrefix)dev.agenthost.shared
     info:
       path: AgentHost/Info.plist
       properties:
@@ -54,6 +75,9 @@ targets:
         NSSpeechRecognitionUsageDescription: AgentHost uses iOS dictation to turn your voice into text, on this iPhone where it can.
         NSFaceIDUsageDescription: AgentHost asks for Face ID before showing your sessions and releasing this device's key.
         ITSAppUsesNonExemptEncryption: false
+        # "<TEAMID>." at build time: the team id sent with the APNs key
+        # (push.set_key) and the prefix of the shared Keychain group.
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.agenthost.ios
@@ -69,3 +93,42 @@ targets:
         # The screen viewer's demo clip (DemoData, DEBUG only) stays out of releases.
         Release:
           EXCLUDED_SOURCE_FILE_NAMES: DemoScreen.h264
+
+  # Notification Service Extension: opens the encrypted content of each push
+  # (Shared/PushCrypto.swift) with the key the app keeps in the shared
+  # Keychain group; on any failure the generic alert is shown.
+  AgentHostNotifications:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: AgentHostNotifications
+      - path: Shared
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: Security.framework
+    entitlements:
+      path: AgentHostNotifications/AgentHostNotifications.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)dev.agenthost.shared
+    info:
+      path: AgentHostNotifications/Info.plist
+      properties:
+        CFBundleDisplayName: AgentHost Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        # Must start with the app's bundle id.
+        PRODUCT_BUNDLE_IDENTIFIER: dev.agenthost.ios.notifications
+        PRODUCT_NAME: AgentHostNotifications
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        # The same team as the app.
+        DEVELOPMENT_TEAM: ""
+        APPLICATION_EXTENSION_API_ONLY: true

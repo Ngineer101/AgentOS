@@ -4,6 +4,8 @@ enum Route: Hashable {
     case session(String)
     case settings
     case archived
+    /// Settings → Notifications (protocol 4 hosts).
+    case notifications
 }
 
 /// Sessions grouped by workspace (Quick tasks first) under a large title with
@@ -142,6 +144,8 @@ struct SessionsView: View {
                     SettingsView()
                 case .archived:
                     ArchivedSessionsView()
+                case .notifications:
+                    NotificationsSettingsView()
                 }
             }
             .archiveFlow($archiving)
@@ -165,9 +169,22 @@ struct SessionsView: View {
                     .environmentObject(model)
             }
         }
+        .onAppear { openRequestedSession() }
+        .onChange(of: model.openSessionRequest) { _, _ in openRequestedSession() }
         #if DEBUG
         .task { openDemoScreen() }
         #endif
+    }
+
+    /// A tapped notification: show its session, over whatever was open.
+    private func openRequestedSession() {
+        guard let sid = model.openSessionRequest else { return }
+        model.openSessionRequest = nil
+        showNew = false
+        showScreen = false
+        showApprovalList = false
+        approvalShown = nil
+        path = [.session(sid)]
     }
 
     /// Demo screenshots: the screen viewer starts streaming at once.
@@ -202,7 +219,8 @@ struct SessionsView: View {
         case .plain: path = [.session(DemoData.plainSession)]
         case .subagents: path = [.session(DemoData.subagentSession)]
         case .screen, .screenPicker: showScreen = true
-        case .sessions, .pair: break
+        case .notifications: path = [.settings, .notifications]
+        case .sessions, .pair, .pairNotifications, .pairAPNsKey: break
         }
     }
     #endif
