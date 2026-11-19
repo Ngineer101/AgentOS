@@ -222,6 +222,18 @@ impl DevRelay {
         });
         while let Some(Ok(msg)) = stream.next().await {
             match (role.as_str(), msg) {
+                // Answered in order with the control messages, echoing an id,
+                // like the Worker.
+                ("host", Message::Text(t))
+                    if serde_json::from_str::<Value>(&t).is_ok_and(|v| v["type"] == "ping") =>
+                {
+                    let v: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
+                    let mut pong = json!({"type":"pong"});
+                    if v["id"].is_u64() {
+                        pong["id"] = v["id"].clone();
+                    }
+                    let _ = tx.send(Ctl::Msg(Message::Text(pong.to_string())));
+                }
                 ("host", Message::Text(t)) => self.host_control(&rid, &t),
                 ("host", Message::Binary(b)) => {
                     let Some((&n, rest)) = b.split_first() else {

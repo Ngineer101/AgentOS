@@ -332,6 +332,8 @@ pub enum ToastKind {
 pub enum ToastAction {
     /// "Show": open the session and scroll to the approval card.
     ShowApproval { session_id: String, approval_id: String },
+    /// "Settings" (GNOME: "Preferences"): open Settings on this tab.
+    OpenSettings(Tab),
 }
 
 /// A short message over the window that goes by itself (AdwToast, or a floating panel on macOS).
@@ -469,6 +471,9 @@ pub struct App {
     pub workspaces: Vec<Workspace>,
     pub sessions: Vec<Session>,
     pub connectors: Vec<Connector>,
+    /// The host's own tools (opening pull requests, pushing, installing) and their policies;
+    /// empty for a host without `builtin.list`.
+    pub builtins: Vec<BuiltinTool>,
     pub devices: Vec<Device>,
     pub approvals: Vec<PendingApproval>,
     pub transcripts: HashMap<String, Transcript>,
@@ -586,6 +591,7 @@ pub fn init() -> App {
         workspaces: vec![],
         sessions: vec![],
         connectors: vec![],
+        builtins: vec![],
         devices: vec![],
         approvals: vec![],
         transcripts: HashMap::new(),
@@ -840,6 +846,45 @@ impl App {
             .collect()
     }
 
+    /// One of the host's own tools, by name ("create_pull_request").
+    pub fn builtin(&self, name: &str) -> Option<&BuiltinTool> {
+        self.builtins.iter().find(|b| b.name == name)
+    }
+
+    /// Let one of the host's own tools run without asking, or ask first again.
+    pub fn set_builtin_policy(&self, name: &str, policy: ToolPolicy) {
+        self.call(Tag::BuiltinSet { announce: None }, m::BUILTIN_SET_POLICY, json!({"name": name, "policy": policy}));
+    }
+
+    /// Whether an approval's card offers "Approve and Don't Ask Again": one of the host's
+    /// own tools that Settings can let run without asking, but never a force-push.
+    pub fn can_stop_asking(&self, a: &PendingApproval) -> bool {
+        a.connector_id == BUILTIN_CONNECTOR_ID && a.arguments["force"] != json!(true) && self.builtin(&a.tool).is_some_and(|b| b.can_auto && b.policy == ToolPolicy::Ask)
+    }
+
+    /// "Approve and Don't Ask Again": stop asking for this tool, and approve this request.
+    pub fn approve_and_stop_asking(&self, approval_id: &str) {
+        let Some(a) = self.approvals.iter().find(|a| a.approval_id == approval_id) else { return };
+        if !self.can_stop_asking(a) {
+            return self.respond(approval_id, true);
+        }
+        self.call(Tag::BuiltinSet { announce: Some(a.tool.clone()) }, m::BUILTIN_SET_POLICY, json!({"name": a.tool, "policy": ToolPolicy::Auto}));
+        self.respond(approval_id, true);
+    }
+
+    /// The toast after "Approve and Don't Ask Again": what changed and where to undo it.
+    pub fn no_ask_line(&self, name: &str) -> String {
+        let place = if self.look.mac() { "Settings → Connectors" } else { "Preferences → Connectors" };
+        match name {
+            "create_pull_request" => format!("Pull requests now open without asking — change this in {place}"),
+            "git_push" => format!("Pushes now run without asking (a force-push still asks) — change this in {place}"),
+            other => {
+                let title = self.builtin(other).map(|b| b.title.clone()).unwrap_or_else(|| crate::session::humanize(other));
+                format!("{title} no longer asks — change this in {place}")
+            }
+        }
+    }
+
     /// Answer an approval.
     pub fn respond(&self, approval_id: &str, approve: bool) {
         let (what, decision) = if approve { ("Approve", "approve") } else { ("Deny", "deny") };
@@ -910,7 +955,10 @@ impl App {
         match r {
             Refresh::None => {}
             Refresh::Workspaces => self.call(Tag::Workspaces, m::WORKSPACE_LIST, json!({})),
-            Refresh::Connectors => self.call(Tag::Connectors, m::CONNECTOR_LIST, json!({})),
+            Refresh::Connectors => {
+                self.call(Tag::Connectors, m::CONNECTOR_LIST, json!({}));
+                self.call(Tag::Builtins, m::BUILTIN_LIST, json!({}));
+            }
             Refresh::Devices => self.call(Tag::Devices, m::DEVICE_LIST, json!({})),
             Refresh::Approvals => self.call(Tag::Approvals, m::APPROVAL_LIST, json!({})),
             Refresh::HostInfo => self.call(Tag::HostInfo, m::HOST_INFO, json!({})),
@@ -1335,6 +1383,22 @@ impl App {
                     if let Some(sub) = v["subscription_id"].as_str() {
                         self.sub_ids.insert(id, sub.to_string());
                     }
+                }
+                (Tag::Builtins, Ok(v)) => self.builtins = parse(v).unwrap_or_default(),
+                // An older host without built-in tool settings.
+                (Tag::Builtins, Err(_)) => self.builtins.clear(),
+                (Tag::BuiltinSet { announce }, Ok(v)) => {
+                    if let Some(list) = parse::<Vec<BuiltinTool>>(v) {
+                        self.builtins = list;
+                    }
+                    if let Some(name) = announce.filter(|n| self.builtin(n).is_some_and(|b| b.policy == ToolPolicy::Auto)) {
+                        let text = self.no_ask_line(&name);
+                        self.push_toast(ToastKind::Info, text, Some(ToastAction::OpenSettings(Tab::Connectors)), std::time::Instant::now());
+                    }
+                }
+                (Tag::BuiltinSet { .. }, Err(e)) => {
+                    self.error = Some(format!("Could not change the setting: {}", e.message));
+                    self.call(Tag::Builtins, m::BUILTIN_LIST, json!({}));
                 }
                 (Tag::Quiet, _) => {}
                 (Tag::Action { refresh, .. }, Ok(_)) => self.refresh(refresh),
@@ -1831,6 +1895,7 @@ impl App {
                 self.open_session(&session_id);
                 tx.scroll_into_view("approval-card");
             }
+            Some(ToastAction::OpenSettings(tab)) => self.open_settings(tab),
             None => {}
         }
     }
@@ -1867,7 +1932,7 @@ impl App {
         let live: HashSet<&str> = self.approvals.iter().map(|a| a.approval_id.as_str()).collect();
         self.toasts.retain(|t| match &t.action {
             Some(ToastAction::ShowApproval { approval_id, .. }) => live.contains(approval_id.as_str()),
-            None => true,
+            Some(ToastAction::OpenSettings(_)) | None => true,
         });
     }
 

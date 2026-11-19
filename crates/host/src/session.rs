@@ -1050,11 +1050,12 @@ impl Actor {
             crate::worktree::ensure(&self.repo_path, &wt)
                 .await
                 .map_err(|e| StartFailure::new(format!("{e:#}"), Value::Null))?;
-            git_access = Some(
-                crate::worktree::access(Path::new(&wt.path))
-                    .await
-                    .map_err(|e| StartFailure::new(format!("the session's worktree {} is not usable: {e:#}", wt.path), Value::Null))?,
-            );
+            let access = crate::worktree::access(Path::new(&wt.path))
+                .await
+                .map_err(|e| StartFailure::new(format!("the session's worktree {} is not usable: {e:#}", wt.path), Value::Null))?;
+            crate::worktree::protect_common_dir(&access.common_dir)
+                .map_err(|e| StartFailure::new(format!("could not protect the repository's .git: {e:#}"), Value::Null))?;
+            git_access = Some(access);
         }
         if !workspace_path.is_dir() {
             return Err(StartFailure::new(

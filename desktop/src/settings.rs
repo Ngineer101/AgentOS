@@ -1059,7 +1059,63 @@ fn connectors(s: &App, t: &Theme) -> El {
             None => col(),
         }
     };
-    col().key("connectors").w_full().gap(18.0).child(split(t, left, detail))
+    let mut c = col().key("connectors").w_full().gap(18.0).child(split(t, left, detail));
+    if !s.builtins.is_empty() {
+        c = c.child(builtin_tools(s, t));
+    }
+    c
+}
+
+/// A built-in tool's policy, as its pop-up shows it (in the case the tab's other pop-ups use).
+fn builtin_policy_name(_t: &Theme, p: ToolPolicy) -> &'static str {
+    match p {
+        ToolPolicy::Auto => "Don't Ask",
+        _ => "Ask First",
+    }
+}
+
+/// The host's own tools (opening pull requests, pushing, installing): whether each asks
+/// before it runs. Installing always asks; so does a force-push, whatever Push says.
+fn builtin_tools(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let rows = s
+        .builtins
+        .iter()
+        .map(|b| {
+            let trailing = if b.can_auto {
+                let key = format!("builtin-{}", b.name);
+                let (k2, name, current) = (key.clone(), b.name.clone(), b.policy);
+                let label = builtin_policy_name(t, b.policy);
+                let names = [builtin_policy_name(t, ToolPolicy::Ask), builtin_policy_name(t, ToolPolicy::Auto)];
+                popup_button(t, key, label).label(format!("{}: {label}", b.title)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                    if rune::popup_menu_supported() {
+                        let menu = [ToolPolicy::Ask, ToolPolicy::Auto]
+                            .into_iter()
+                            .zip(names)
+                            .fold(rune::PopupMenu::new(), |m, (p, n)| m.item(rune::PopupItem::new(policy_id(p), n).checked(p == current)));
+                        let name = name.clone();
+                        tx.popup_menu(menu, k2.clone(), move |s: &mut App, picked, _| {
+                            if let Some(p) = picked.and_then(policy_of).filter(|p| *p != current) {
+                                s.set_builtin_policy(&name, p);
+                            }
+                        });
+                    } else {
+                        s.set_builtin_policy(&name, if current == ToolPolicy::Auto { ToolPolicy::Ask } else { ToolPolicy::Auto });
+                    }
+                })
+            } else {
+                t.small("Always Asks").key(format!("builtin-{}", b.name))
+            };
+            form_row(t, &b.title, Some(b.description.clone()), trailing).key(format!("builtin-row-{}", b.name))
+        })
+        .collect();
+    section(
+        t,
+        if mac { "Built-in tools" } else { "Built-in Tools" },
+        None,
+        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentHost's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins.")),
+    )
+    .key("builtin-tools")
 }
 
 fn add_connector(s: &App, t: &Theme) -> El {

@@ -321,7 +321,12 @@ export class RelayObject extends DurableObject<Env> {
 
     switch (msg.type) {
       case "ping":
-        safeSend(host, JSON.stringify({ type: "pong" }));
+        // Echo an id so the host can tell when everything it sent before
+        // this ping has been handled (the auto-response has none).
+        safeSend(
+          host,
+          JSON.stringify(Number.isSafeInteger(msg.id) ? { type: "pong", id: msg.id } : { type: "pong" }),
+        );
         return;
 
       case "device.allow": {

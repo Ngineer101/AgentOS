@@ -28,6 +28,8 @@ pub fn layer(s: &App, t: &Theme) -> Option<El> {
             text: x.text.clone(),
             action: x.action.as_ref().map(|a| match a {
                 ToastAction::ShowApproval { .. } => "Show",
+                ToastAction::OpenSettings(_) if t.mac() => "Settings",
+                ToastAction::OpenSettings(_) => "Preferences",
             }),
             id: Some(x.id),
             error_field: false,

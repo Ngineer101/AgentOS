@@ -177,6 +177,132 @@ pub async fn run(plan: &Plan) -> Outcome {
     }
 }
 
+/// A pull request the host will open with the user's GitHub CLI.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrPlan {
+    pub dir: PathBuf,
+    pub program: PathBuf,
+    pub title: String,
+    pub body: String,
+    pub base: String,
+    pub head: String,
+    pub draft: bool,
+}
+
+impl PrPlan {
+    /// The command as the user reads it (the body goes in on stdin).
+    pub fn command(&self) -> String {
+        format!(
+            "gh pr create --base {} --head {} --title {:?}{} --body-file -",
+            self.base,
+            self.head,
+            self.title,
+            if self.draft { " --draft" } else { "" }
+        )
+    }
+
+    pub fn summary(&self) -> String {
+        format!("Open a {}pull request: {}", if self.draft { "draft " } else { "" }, self.title)
+    }
+}
+
+/// Check a pull request request. `head` defaults to the branch checked out
+/// in `dir`; `base` to the remote's default branch (gh decides) when empty.
+pub async fn plan_pr(
+    dir: &Path,
+    program: &Path,
+    title: &str,
+    body: &str,
+    base: Option<&str>,
+    head: Option<&str>,
+    draft: bool,
+) -> Result<PrPlan, String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 256 || title.contains(['\n', '\r']) {
+        return Err("give the pull request a one-line title of at most 256 characters".into());
+    }
+    if body.len() > 64 * 1024 {
+        return Err("the description is longer than 64 KB".into());
+    }
+    let head = match head.map(str::trim).filter(|h| !h.is_empty()) {
+        Some(h) => h.to_string(),
+        None => output(dir, &["symbolic-ref", "--short", "HEAD"])
+            .await
+            .map_err(|_| "no branch is checked out here; name the head branch".to_string())?,
+    };
+    if !valid_branch(dir, &head).await {
+        return Err(format!("{head:?} is not a branch name"));
+    }
+    let base = match base.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(b) => b.to_string(),
+        None => {
+            let d = output(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await.unwrap_or_default();
+            d.strip_prefix("origin/").unwrap_or("main").to_string()
+        }
+    };
+    if !valid_branch(dir, &base).await {
+        return Err(format!("{base:?} is not a branch name"));
+    }
+    if base == head {
+        return Err("the head and base branches are the same".into());
+    }
+    Ok(PrPlan {
+        dir: dir.to_path_buf(),
+        program: program.to_path_buf(),
+        title: title.to_string(),
+        body: body.to_string(),
+        base,
+        head,
+        draft,
+    })
+}
+
+/// Open the pull request as the user, outside any sandbox. git commands gh
+/// runs itself get the same protection as the host's own (no hooks, no
+/// fsmonitor), through git's environment configuration.
+pub async fn run_pr(plan: &PrPlan) -> Outcome {
+    use tokio::io::AsyncWriteExt;
+    let mut cmd = tokio::process::Command::new(&plan.program);
+    cmd.current_dir(&plan.dir)
+        .args(["pr", "create", "--base", &plan.base, "--head", &plan.head, "--title", &plan.title, "--body-file", "-"]);
+    if plan.draft {
+        cmd.arg("--draft");
+    }
+    cmd.env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_COUNT", "2")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "/dev/null")
+        .env("GIT_CONFIG_KEY_1", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_1", "false")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Outcome { ok: false, output: format!("could not run gh: {e}") },
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(plan.body.as_bytes()).await;
+    }
+    match tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output()).await {
+        Err(_) => Outcome { ok: false, output: "stopped after 5 minutes".into() },
+        Ok(Err(e)) => Outcome { ok: false, output: format!("could not run gh: {e}") },
+        Ok(Ok(out)) => {
+            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+            let err = String::from_utf8_lossy(&out.stderr);
+            if !err.trim().is_empty() {
+                text.push('\n');
+                text.push_str(&err);
+            }
+            let (text, _) = crate::util::truncate(text.trim(), OUTPUT_LIMIT);
+            Outcome { ok: out.status.success(), output: text }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

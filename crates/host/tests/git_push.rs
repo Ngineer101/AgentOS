@@ -113,3 +113,135 @@ async fn pushes_run_only_after_approval_and_fetches_run_without_asking() {
     let audit = std::fs::read_to_string(th.host.ctx.cfg.logs_dir().join("audit.jsonl")).unwrap();
     assert!(audit.contains("git.decision") && audit.contains("git.done"));
 }
+
+/// A fake `gh` that records its arguments and the description it was given.
+fn fake_gh(dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("programs");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.join("gh-log.txt");
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" >> '{0}'\ncat >> '{0}'\necho 'https://github.com/o/r/pull/7'\n",
+        log.display()
+    );
+    let p = bin.join("gh");
+    std::fs::write(&p, script).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    log
+}
+
+#[tokio::test]
+async fn pull_requests_open_only_after_approval_with_the_text_shown() {
+    let dir = short_tempdir();
+    let log = fake_gh(dir.path());
+    let mut cfg = test_config(dir.path());
+    cfg.install_bin_dir = Some(dir.path().join("programs"));
+    let th = TestHost::start_in(dir, cfg).await;
+    git(&th.workspace, &["init", "-q", "-b", "main"]);
+    std::fs::write(th.workspace.join("README.md"), "hello\n").unwrap();
+    git(&th.workspace, &["add", "."]);
+    git(&th.workspace, &["commit", "-q", "-m", "first"]);
+
+    let (c, mut n) = th.client().await;
+    let ws = th.workspace_id(&c).await;
+    let sid = c.create_session(&ws, AgentKind::Fake).await.unwrap().session_id;
+    wait_state(&c, &sid, SessionState::Idle, T).await;
+    c.subscribe(&sid, 0).await.unwrap();
+    let branch = c
+        .call::<Session>(m::SESSION_GET, json!({"session_id": sid}))
+        .await
+        .unwrap()
+        .worktree
+        .unwrap()
+        .branch;
+
+    let ask = r#"mcp agenthost__create_pull_request {"title":"Dark prompt bubbles","body":"Readable on a phone.","base":"main","reason":"You asked for a PR"}"#;
+    c.prompt(&sid, ask).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let req = ev.last().unwrap().payload.clone();
+    assert_eq!(req["summary"], "Open a pull request: Dark prompt bubbles");
+    assert_eq!(req["arguments"]["details"], "Readable on a phone.");
+    assert_eq!(req["arguments"]["head"], branch.as_str());
+    c.request(m::APPROVAL_RESPOND, json!({"approval_id": req["approval_id"], "decision": "deny"}))
+        .await
+        .unwrap();
+    collect_until(&mut n, T, turn_end).await;
+    assert!(!log.exists(), "gh ran without approval");
+
+    c.prompt(&sid, ask).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let id = ev.last().unwrap().payload["approval_id"].clone();
+    c.request(m::APPROVAL_RESPOND, json!({"approval_id": id, "decision": "approve"}))
+        .await
+        .unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    let result = ev
+        .iter()
+        .find(|e| e.kind == EventType::ToolResult && e.payload["name"] == "create_pull_request")
+        .unwrap();
+    assert_eq!(result.payload["status"], "completed", "{}", result.payload["output"]);
+    assert!(result.payload["output"].as_str().unwrap().contains("pull/7"));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains(&format!("pr create --base main --head {branch} --title Dark prompt bubbles --body-file -")), "{logged}");
+    assert!(logged.contains("Readable on a phone."), "{logged}");
+}
+
+#[tokio::test]
+async fn pull_requests_and_pushes_can_run_without_asking_but_force_pushes_and_installs_always_ask() {
+    let dir = short_tempdir();
+    let log = fake_gh(dir.path());
+    let mut cfg = test_config(dir.path());
+    cfg.install_bin_dir = Some(dir.path().join("programs"));
+    let th = TestHost::start_in(dir, cfg).await;
+    let remote = th.workspace.parent().unwrap().join("remote.git");
+    git(th.workspace.parent().unwrap(), &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
+    git(&th.workspace, &["init", "-q", "-b", "main"]);
+    std::fs::write(th.workspace.join("README.md"), "hello\n").unwrap();
+    git(&th.workspace, &["add", "."]);
+    git(&th.workspace, &["commit", "-q", "-m", "first"]);
+    git(&th.workspace, &["remote", "add", "origin", remote.to_str().unwrap()]);
+
+    let (c, mut n) = th.client().await;
+    // Asks by default; installing can't be switched off.
+    let list: Vec<BuiltinTool> = c.call(m::BUILTIN_LIST, json!({})).await.unwrap();
+    assert!(list.iter().all(|t| t.policy == ToolPolicy::Ask));
+    assert!(!list.iter().find(|t| t.name == "install_tool").unwrap().can_auto);
+    assert!(c
+        .request(m::BUILTIN_SET_POLICY, json!({"name": "install_tool", "policy": "auto"}))
+        .await
+        .is_err());
+    for name in ["create_pull_request", "git_push"] {
+        let l: Vec<BuiltinTool> = c
+            .call(m::BUILTIN_SET_POLICY, json!({"name": name, "policy": "auto"}))
+            .await
+            .unwrap();
+        assert_eq!(l.iter().find(|t| t.name == name).unwrap().policy, ToolPolicy::Auto);
+    }
+
+    let ws = th.workspace_id(&c).await;
+    let sid = c.create_session(&ws, AgentKind::Fake).await.unwrap().session_id;
+    wait_state(&c, &sid, SessionState::Idle, T).await;
+    c.subscribe(&sid, 0).await.unwrap();
+
+    // A push and a pull request run straight away.
+    c.prompt(&sid, r#"mcp agenthost__git_push {"reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(!ev.iter().any(|e| e.kind == EventType::ApprovalRequested));
+    assert!(ev.iter().any(|e| e.kind == EventType::ToolResult && e.payload["name"] == "git_push" && e.payload["status"] == "completed"));
+    c.prompt(&sid, r#"mcp agenthost__create_pull_request {"title":"T","body":"B","base":"main"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(!ev.iter().any(|e| e.kind == EventType::ApprovalRequested));
+    assert!(log.exists());
+
+    // A force-push still asks.
+    c.prompt(&sid, r#"mcp agenthost__git_push {"force_with_lease":true,"reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let id = ev.last().unwrap().payload["approval_id"].clone();
+    c.request(m::APPROVAL_RESPOND, json!({"approval_id": id, "decision": "deny"})).await.unwrap();
+    collect_until(&mut n, T, turn_end).await;
+
+    // Phones can't change it.
+    assert!(!m::Capability::phone().contains(&m::required_capability(m::BUILTIN_SET_POLICY).unwrap()));
+    let audit = std::fs::read_to_string(th.host.ctx.cfg.logs_dir().join("audit.jsonl")).unwrap();
+    assert!(audit.contains("builtin.policy") && audit.contains("\"auto\":true"));
+}
