@@ -28,6 +28,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 
+/// Pinned like the agent adapters; `agenthostd install-tools` installs it
+/// and builds its engine.
+pub const SCREEN_RELAY_PACKAGE: &str = "screen-relay@0.1.2";
+
 const POLICY_KEY: &str = "screen.policy";
 /// screen-relay session name, so `down` never touches a session of yours.
 const SESSION_NAME: &str = "agenthost";
@@ -186,11 +190,12 @@ impl Screen {
         })
     }
 
+    /// The pinned copy in the tools folder, else one on PATH.
     fn bin(&self) -> Option<PathBuf> {
-        self.ctx
-            .cfg
-            .screen_relay_bin
+        let cfg = &self.ctx.cfg;
+        cfg.screen_relay_bin
             .clone()
+            .or_else(|| Some(cfg.tools_dir.join("node_modules/.bin/screen-relay")).filter(|p| p.is_file()))
             .or_else(|| which("screen-relay"))
     }
 
@@ -231,7 +236,7 @@ impl Screen {
             ];
         }
         let installed = self.bin().is_some();
-        let missing = "screen-relay is not installed: npm install -g screen-relay && screen-relay install";
+        let missing = "screen-relay is not installed: agenthostd install-tools";
         if cfg!(target_os = "macos") {
             return vec![
                 ScreenModeInfo {

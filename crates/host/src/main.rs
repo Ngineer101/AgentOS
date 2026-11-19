@@ -157,6 +157,7 @@ fn install_tools(cfg: &HostConfig) -> Result<()> {
         agents::CLAUDE_ACP_PACKAGE,
         agents::SANDBOX_RUNTIME_PACKAGE,
         agents::GEMINI_CLI_PACKAGE,
+        agenthost_host::screen::SCREEN_RELAY_PACKAGE,
     ];
     println!("Installing into {}:", cfg.tools_dir.display());
     for p in packages {
@@ -175,6 +176,29 @@ fn install_tools(cfg: &HostConfig) -> Result<()> {
     if !status.success() {
         bail!("npm install failed");
     }
+    build_screen_engine(cfg);
     println!("Done.");
     Ok(())
+}
+
+/// screen-relay's engine is C++ built on this machine, after its system
+/// packages (brew on macOS; apt, dnf, pacman or apk on Linux, which asks for
+/// sudo). screen-relay asks before installing them. Only phone screen sharing
+/// needs it, so a skipped or failed build doesn't fail install-tools.
+fn build_screen_engine(cfg: &HostConfig) {
+    let bin = cfg.tools_dir.join("node_modules/.bin/screen-relay");
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.arg("install");
+    if !cfg!(target_os = "macos") {
+        // X11 for the browser desktop, Wayland to attach to compositors like Hyprland.
+        cmd.args(["--backend", "all"]);
+    }
+    println!("Building screen-relay's engine (for phone screen sharing):");
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        _ => println!(
+            "  Skipped. Screen sharing needs it: run `{} install` when you want it.",
+            bin.display()
+        ),
+    }
 }
