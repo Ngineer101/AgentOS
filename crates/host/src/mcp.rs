@@ -50,6 +50,9 @@ pub const GIT_PUSH_TOOL: &str = "agenthost__git_push";
 pub const GIT_FETCH_TOOL: &str = "agenthost__git_fetch";
 /// Open a pull request with the user's GitHub CLI, after they approve.
 pub const PR_TOOL: &str = "agenthost__create_pull_request";
+/// Run any command-line program as the user, outside the sandbox, after
+/// they approve (or a prefix they let run without asking).
+pub const RUN_COMMAND_TOOL: &str = "agenthost__run_command";
 
 struct SessionReg {
     session_id: String,
@@ -109,11 +112,15 @@ const BUILTINS: &[(&str, &str, &str, bool)] = &[
     ("create_pull_request", "Open pull requests", "Opens a GitHub pull request with your GitHub CLI login.", true),
     ("git_push", "Push branches", "Pushes with your git credentials. A force-push always asks.", true),
     ("install_tool", "Install tools on this computer", "Runs a package manager as you, outside the sandbox. Always asks.", false),
+    ("run_command", "Run commands as you", "Runs a program as you, outside the sandbox, with your logins. Asks, except for the commands you let run.", false),
 ];
 
 fn policy_key(name: &str) -> String {
     format!("builtin_policy.{name}")
 }
+
+/// Command prefixes `run_command` runs without asking.
+const ALLOWED_COMMANDS_KEY: &str = "builtin_policy.run_command.allowed";
 
 impl Gateway {
     /// Whether one of the host's own tools asks first (the default) or not.
@@ -134,14 +141,51 @@ impl Gateway {
                 description: description.to_string(),
                 policy: self.builtin_policy(name),
                 can_auto: *can_auto,
+                allowed: if *name == "run_command" { self.allowed_commands() } else { vec![] },
             })
             .collect()
+    }
+
+    /// The command prefixes the user let run without asking.
+    pub fn allowed_commands(&self) -> Vec<Vec<String>> {
+        let list: Vec<Vec<String>> = self.ctx.store.setting_get(ALLOWED_COMMANDS_KEY).ok().flatten().unwrap_or_default();
+        // A prefix saved before the rules tightened no longer counts.
+        list.into_iter().filter(|r| crate::hostcmd::rememberable(r)).collect()
+    }
+
+    /// Let a command prefix run without asking (`auto`), or ask again (`ask`).
+    fn set_command_policy(&self, rule: &[String], policy: ToolPolicy) -> Result<(), String> {
+        let mut list = self.allowed_commands();
+        list.retain(|r| r != rule);
+        match policy {
+            ToolPolicy::Auto => {
+                if !crate::hostcmd::rememberable(rule) {
+                    return Err(format!(
+                        "{} always asks: give a program and its subcommand (gh pr edit); shells, interpreters and build tools always ask",
+                        crate::hostcmd::display(rule)
+                    ));
+                }
+                list.push(rule.to_vec());
+            }
+            ToolPolicy::Ask => {}
+            ToolPolicy::Disabled => return Err("commands can ask or run without asking".into()),
+        }
+        self.ctx.store.setting_set(ALLOWED_COMMANDS_KEY, &list).map_err(|e| e.to_string())?;
+        self.ctx.audit.log("builtin.command_policy", json!({"command": rule, "policy": policy}));
+        Ok(())
     }
 
     pub fn set_builtin_policy(&self, p: &BuiltinPolicyParams) -> Result<Vec<BuiltinTool>, String> {
         let Some((_, _, _, can_auto)) = BUILTINS.iter().find(|(n, ..)| *n == p.name) else {
             return Err(format!("no built-in tool {:?}", p.name));
         };
+        if p.name == "run_command" {
+            let Some(rule) = &p.command else {
+                return Err("run_command asks unless you let a command run: name the command".into());
+            };
+            self.set_command_policy(rule, p.policy)?;
+            return Ok(self.builtin_list());
+        }
         match p.policy {
             ToolPolicy::Auto if !can_auto => return Err(format!("{} always asks", p.name)),
             ToolPolicy::Disabled => return Err("built-in tools can ask or run without asking".into()),
@@ -173,6 +217,30 @@ fn pr_tool_def() -> Value {
             "required": ["title", "body"]
         },
         "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true, "title": "Open a pull request as the user"}
+    })
+}
+
+/// The definition of `agenthost__run_command`.
+fn run_command_def() -> Value {
+    json!({
+        "name": RUN_COMMAND_TOOL,
+        "description": "[AgentHost] Run a command-line program on the user's computer as the user, outside your sandbox, in this session's folder, \
+             with the user's own logins (GitHub CLI, cloud and deploy CLIs, keyring), which your sandbox can't read. Use it when a command \
+             fails in the sandbox for want of the user's credentials or network, e.g. `gh pr edit`, `gh pr comment`, `gh issue create`, `gh api`. \
+             The user sees the exact command and approves or denies it; nothing runs until they approve (unless they let that command run \
+             without asking). No shell: give the program and its arguments as a list; pipes, redirects and `$(…)` aren't read. Pass long text \
+             (a description) on stdin, e.g. [\"gh\", \"pr\", \"edit\", \"6\", \"--body-file\", \"-\"]. Nothing prompts; 10-minute limit. \
+             For pushing, fetching and opening pull requests prefer agenthost__git_push, agenthost__git_fetch and agenthost__create_pull_request.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "The program (a name on the user's PATH, no path) and its arguments, e.g. [\"gh\", \"pr\", \"edit\", \"6\", \"--title\", \"New title\"]."},
+                "stdin": {"type": "string", "description": "Text for the program's standard input (optional)."},
+                "reason": {"type": "string", "description": "One sentence for the user: what this does and why."}
+            },
+            "required": ["command", "reason"]
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true, "title": "Run a command as the user"}
     })
 }
 
@@ -507,6 +575,9 @@ impl Gateway {
         if name == PR_TOOL {
             return self.pr_tool(session_id, args).await;
         }
+        if name == RUN_COMMAND_TOOL {
+            return self.run_command(session_id, args).await;
+        }
         if name == GIT_PUSH_TOOL || name == GIT_FETCH_TOOL {
             return self.git_tool(session_id, name == GIT_PUSH_TOOL, args).await;
         }
@@ -666,6 +737,7 @@ impl Gateway {
     /// The host's own tools, as listed to agents.
     fn builtin_tools(&self) -> Vec<Value> {
         let mut tools = git_tools();
+        tools.push(run_command_def());
         if crate::installer::find("gh", self.ctx.cfg.install_bin_dir.as_deref()).is_some() {
             tools.push(pr_tool_def());
         }
@@ -897,6 +969,125 @@ impl Gateway {
             text_result(&format!("Ran `{}` with the user's credentials:\n{output}", plan.command()), false)
         } else {
             text_result(&format!("`{}` failed:\n{output}", plan.command()), true)
+        }
+    }
+
+    /// Folders a session can write: programs there never run outside the sandbox.
+    fn session_writable_dirs(&self) -> Vec<std::path::PathBuf> {
+        let c = &self.ctx.cfg;
+        vec![c.session_tools_dir(), c.worktrees_dir(), c.scratch_dir()]
+    }
+
+    /// `agenthost__run_command`: show the exact command, ask (unless the user
+    /// let it run), run it as the user in the session's folder.
+    async fn run_command(self: &Arc<Self>, session_id: &str, args: Value) -> Value {
+        let call_id = new_id("mcp");
+        let tool = "run_command";
+        let argv: Option<Vec<String>> = match &args["command"] {
+            Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string)).collect(),
+            _ => None,
+        };
+        let stdin = args["stdin"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+        let reason = args["reason"].as_str().unwrap_or_default().trim().to_string();
+        let rule = argv.as_deref().and_then(|a| self.allowed_commands().into_iter().find(|r| crate::hostcmd::matches(r, a)));
+        let dir = self.session_git_dir(session_id);
+        // An allowed command that names a file outside the session's folder still asks.
+        let outside = match (&argv, &dir) {
+            (Some(a), Some(d)) => crate::hostcmd::outside_file(d, a),
+            _ => None,
+        };
+        let rule = rule.filter(|_| outside.is_none());
+        let base = json!({
+            "tool_call_id": call_id, "name": tool, "exposed_name": RUN_COMMAND_TOOL, "arguments": args,
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "tool_kind": ToolKind::Write, "policy": if rule.is_some() { ToolPolicy::Auto } else { ToolPolicy::Ask }
+        });
+        let _ = self.ctx.append(session_id, EventType::ToolCall, base);
+        let finish = |status: &str, output: &str| {
+            let (out, truncated) = truncate(output, crate::session::TOOL_OUTPUT_LIMIT);
+            let _ = self.ctx.append(
+                session_id,
+                EventType::ToolResult,
+                json!({"tool_call_id": call_id, "name": tool, "status": status, "output": out, "truncated": truncated, "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID}),
+            );
+        };
+        if self.rate_limited(session_id) {
+            finish("failed", "rate limit reached");
+            return text_result("agenthost: too many calls this minute; try again shortly", true);
+        }
+        let Some(argv) = argv else {
+            let e = "give `command` as a list of strings: the program, then its arguments";
+            finish("failed", e);
+            return text_result(&format!("agenthost: {e}"), true);
+        };
+        let Some(dir) = dir else {
+            finish("failed", "no such session");
+            return text_result("agenthost: this session's folder is unknown", true);
+        };
+        let plan = crate::hostcmd::plan(
+            &dir,
+            &argv,
+            stdin.as_deref(),
+            self.ctx.cfg.install_bin_dir.as_deref(),
+            &[self.session_writable_dirs(), vec![dir.clone()]].concat(),
+        );
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("agenthost: {e}"), true);
+            }
+        };
+        let decision = if rule.is_some() {
+            ApprovalDecision::Approve
+        } else {
+            let input = plan.stdin.as_deref().unwrap_or_default();
+            let (mut details, cut) = truncate(input, 4000);
+            if cut {
+                details.push_str(&format!("\n[… {} more bytes not shown]", input.len() - details.len()));
+            }
+            let offer = plan.rule();
+            let mut note = "Runs with your logins and your access to files, in this session's folder; its output goes back to the agent. Run only what you expected.".to_string();
+            if let Some(a) = &outside {
+                note = format!("Names a file outside this session's folder ({a}). {note}");
+            }
+            let shown = json!({
+                "command": plan.command(),
+                "argv": plan.argv,
+                "details": details,
+                "details_label": "Input",
+                "reason": reason,
+                "runs": "on this computer, as you, outside the sandbox",
+                "approve_label": "Run",
+                "ask_title": "Run a Command?",
+                "note": note,
+                "outside_file": outside,
+                "allow_rule": offer,
+                "allow_rule_text": offer.as_deref().map(crate::hostcmd::display),
+            });
+            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+                .await
+        };
+        self.ctx.audit.log(
+            "command.decision",
+            json!({"session_id": session_id, "argv": plan.argv, "dir": plan.dir, "decision": decision, "auto": rule}),
+        );
+        if decision != ApprovalDecision::Approve {
+            finish("denied", "the user denied this command");
+            return text_result("The user denied this command.", true);
+        }
+        let out = crate::hostcmd::run(&plan).await;
+        self.ctx.audit.log(
+            "command.done",
+            json!({"session_id": session_id, "argv": plan.argv, "dir": plan.dir, "ok": out.ok, "code": out.code}),
+        );
+        let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
+        finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        if out.ok {
+            text_result(&format!("Ran `{}` as the user, outside the sandbox:\n{output}", plan.command()), false)
+        } else {
+            let code = out.code.map(|c| format!(" (exit code {c})")).unwrap_or_default();
+            text_result(&format!("`{}` failed{code}:\n{output}", plan.command()), true)
         }
     }
 

@@ -937,11 +937,12 @@ pub struct PendingApproval {
     pub summary: Option<String>,
 }
 
-/// One of the host's own tools (pushing, pull requests, installing), and
+/// One of the host's own tools (pushing, pull requests, installing,
+/// running commands), and
 /// whether it asks before it runs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BuiltinTool {
-    /// "create_pull_request", "git_push", "install_tool".
+    /// "create_pull_request", "git_push", "install_tool", "run_command".
     pub name: String,
     pub title: String,
     pub description: String,
@@ -950,12 +951,21 @@ pub struct BuiltinTool {
     /// False for a tool that always asks (installing; a force-push always
     /// asks whatever this says).
     pub can_auto: bool,
+    /// `run_command` only: the command prefixes that run without asking
+    /// (`["gh", "pr", "edit"]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<Vec<String>>,
 }
 
+/// `builtin.set_policy`. For `run_command`, `command` names a prefix
+/// (`["gh", "pr", "edit"]`, as an approval's `allow_rule` offers it):
+/// `auto` lets it run without asking, `ask` asks again.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BuiltinPolicyParams {
     pub name: String,
     pub policy: ToolPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
 }
 
 /// The `connector_id` of approvals for the host's own tools (installing a

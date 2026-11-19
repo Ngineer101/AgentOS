@@ -12,6 +12,7 @@ pub mod config;
 pub mod ctx;
 pub mod host;
 pub mod gitremote;
+pub mod hostcmd;
 pub mod installer;
 pub mod mcp;
 pub mod profiles;
