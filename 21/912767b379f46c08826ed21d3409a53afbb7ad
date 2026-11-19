@@ -1,0 +1,21 @@
+desktop/src/session.rs
+  s_423798dd93817e::t_83c9f2f202b4d0 908-909,911-924
+desktop/src/view.rs
+  s_423798dd93817e::t_9ffafff0ee30da 466-467,589
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "21912767b379f46c08826ed21d3409a53afbb7ad",
+  "prompts": {},
+  "sessions": {
+    "s_423798dd93817e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_423798dd93817e",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
