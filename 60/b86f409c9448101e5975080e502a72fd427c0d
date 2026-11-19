@@ -1,0 +1,31 @@
+desktop/src/bridge.rs
+  s_c8d875e09ed415::t_39704052ca8f99 57-59
+desktop/src/demo.rs
+  s_c8d875e09ed415::t_09087a05cdf766 757-766
+desktop/src/model.rs
+  s_c8d875e09ed415::t_c025e9a4051f6b 111-120,184-208,1086,1089,1093-1094,1110-1112,1115,1117-1119,1614-1630,2212-2218,2239-2242
+desktop/src/session.rs
+  s_c8d875e09ed415::t_3417b39c00822b 91-92,95-104,716-731,769
+desktop/src/tests.rs
+  s_c8d875e09ed415::t_649d595513e4b5 70-74,78-80,88-109,220-222
+ios/AgentHost/Core/Transcript.swift
+  s_c8d875e09ed415::t_a3c29aa6258429 365-389
+ios/AgentHost/Views/SessionView.swift
+  s_c8d875e09ed415::t_49c76a72704383 52-59,167,217-219,233-239,1402-1418,1424-1427,1430,1434,1442-1443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60b86f409c9448101e5975080e502a72fd427c0d",
+  "prompts": {},
+  "sessions": {
+    "s_c8d875e09ed415": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_c8d875e09ed415",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
