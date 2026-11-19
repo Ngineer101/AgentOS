@@ -1096,7 +1096,7 @@ fn built_in_tool_policies_round_trip_through_the_host() {
     let mut app = connect(&socket);
     app.builtins.clear();
     app.open_settings(model::Tab::Connectors);
-    pump(&mut app, |a| a.builtins.len() == 3);
+    pump(&mut app, |a| a.builtins.len() == 4);
     let pr = app.builtin("create_pull_request").unwrap().clone();
     assert_eq!((pr.policy, pr.can_auto), (ToolPolicy::Ask, true));
     assert!(!app.builtin("install_tool").unwrap().can_auto);
@@ -1140,10 +1140,20 @@ fn dont_ask_again_is_offered_only_where_settings_could_allow_it() {
     assert!(offered("push-approval"));
     assert!(!offered("force-push-approval"), "a force-push always asks");
     assert!(!offered("install-approval"), "installing always asks");
+    assert!(offered("command-approval"), "a command offers its prefix");
     assert!(!offered("session"), "a connector's tool has its own policies");
     // Pushes already run unasked in the base demo: nothing to offer.
     let mut app = demo("push-approval");
     app.builtins[1].policy = ToolPolicy::Auto;
+    let a = app.approvals[0].clone();
+    assert!(!app.can_stop_asking(&a));
+    // A command whose prefix already runs unasked, or a shell (no prefix offered): no offer.
+    let mut app = demo("command-approval");
+    app.builtins[3].allowed.push(vec!["gh".into(), "pr".into(), "edit".into()]);
+    let a = app.approvals[0].clone();
+    assert!(!app.can_stop_asking(&a));
+    let mut app = demo("command-approval");
+    app.approvals[0].arguments["allow_rule"] = serde_json::Value::Null;
     let a = app.approvals[0].clone();
     assert!(!app.can_stop_asking(&a));
     // A host without built-in tool settings: no offer.
@@ -1177,4 +1187,29 @@ fn dont_ask_again_toasts_and_its_button_opens_settings() {
     app.apply(bridge::FromHost::Reply { tag: bridge::Tag::BuiltinSet { announce: Some("create_pull_request".into()) }, result: Err(agenthost_proto::jsonrpc::RpcError { code: -32602, message: "nope".into(), data: None }) });
     assert!(app.toasts.is_empty());
     assert_eq!(app.error.as_deref(), Some("Could not change the setting: nope"));
+}
+
+/// "Always Allow “gh pr edit”": the host's reply lists the prefix, a toast names it and
+/// where to undo it; Ask First in Settings takes it off again.
+#[test]
+fn always_allowing_a_command_names_it_and_settings_can_undo_it() {
+    let mut app = demo("command-approval");
+    let rule: Vec<String> = vec!["gh".into(), "pr".into(), "edit".into()];
+    assert_eq!(model::allow_rule(&app.approvals[0]), Some(rule.clone()));
+    let mut list = app.builtins.clone();
+    list[3].allowed.push(rule.clone());
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::CommandSet { announce: Some(rule.clone()) }, result: Ok(serde_json::to_value(&list).unwrap()) });
+    assert!(app.builtin("run_command").unwrap().allowed.contains(&rule));
+    assert_eq!(app.toasts.len(), 1);
+    assert!(app.toasts[0].text.starts_with("\u{201c}gh pr edit\u{201d} commands now run without asking — change this in "), "{}", app.toasts[0].text);
+    assert_eq!(app.toasts[0].action, Some(model::ToastAction::OpenSettings(model::Tab::Connectors)));
+    // Taking it off again (Settings' Ask First) needs no toast.
+    let mut app = demo("command-approval");
+    let list = app.builtins.clone();
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::CommandSet { announce: None }, result: Ok(serde_json::to_value(&list).unwrap()) });
+    assert!(app.toasts.is_empty());
+    // A refusal: an error, no toast saying it worked.
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::CommandSet { announce: Some(rule) }, result: Err(agenthost_proto::jsonrpc::RpcError { code: -32602, message: "bash always asks".into(), data: None }) });
+    assert!(app.toasts.is_empty());
+    assert_eq!(app.error.as_deref(), Some("Could not change the setting: bash always asks"));
 }
