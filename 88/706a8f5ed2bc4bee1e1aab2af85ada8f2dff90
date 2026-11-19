@@ -1,0 +1,45 @@
+ios/.gitignore
+  s_a2f7e5fa6e8cac::t_405c178a27dbdf 4-6
+ios/AgentHost/App/AgentHostApp.swift
+  s_a2f7e5fa6e8cac::t_71b9cf192cad35 2,13,44-65,69-118,141-145
+ios/AgentHost/App/AppModel+Push.swift
+  s_a2f7e5fa6e8cac::t_0525a458fd4e63 1-433
+ios/AgentHost/App/AppModel.swift
+  s_a2f7e5fa6e8cac::t_17c04a99c04318 5,142-162,468-469,493-494,508-517,535,555-556,693,742,1303-1308
+ios/AgentHost/App/DemoData.swift
+  s_a2f7e5fa6e8cac::t_67d18c01b7c2a3 11-13,44-60
+ios/AgentHost/Core/PushModels.swift
+  s_a2f7e5fa6e8cac::t_105ffeef73f2ae 1-123
+ios/AgentHost/Views/NotificationsView.swift
+  s_a2f7e5fa6e8cac::t_6cb2850a11d426 1-491
+ios/AgentHost/Views/SessionView.swift
+  s_a2f7e5fa6e8cac::t_8e05b43b46d052 308,338-341
+ios/AgentHost/Views/SessionsView.swift
+  s_a2f7e5fa6e8cac::t_a9d7b849ebc67c 7-8,147-148,172-173,179-189,222-223
+ios/AgentHost/Views/SettingsView.swift
+  s_a2f7e5fa6e8cac::t_920a792a466bd7 3,15,44,106-118
+ios/AgentHostNotifications/NotificationService.swift
+  s_a2f7e5fa6e8cac::t_5366659c1a7030 1-55
+ios/README.md
+  s_a2f7e5fa6e8cac::t_b05f1e5f225e81 12-13,30-32,67,74-103,119,125,150-152
+ios/Shared/PushCrypto.swift
+  s_a2f7e5fa6e8cac::t_ddd45581df28ca 1-144
+ios/project.yml
+  s_a2f7e5fa6e8cac::t_abc5fa9ebbd47f 26-27,30-32,42-57,78-80,96-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88706a8f5ed2bc4bee1e1aab2af85ada8f2dff90",
+  "prompts": {},
+  "sessions": {
+    "s_a2f7e5fa6e8cac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a2f7e5fa6e8cac",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
