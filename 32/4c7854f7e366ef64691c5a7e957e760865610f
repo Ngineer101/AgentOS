@@ -1,0 +1,72 @@
+Cargo.lock
+  h_e31f15a7c97762 114,124,315-320,664-675,683,760,777,806-819,845-864,899-908,942-947,1062,1131-1160,1197-1205,1283,1285,1678-1689,1720-1729,1819-1827,2011,2041-2050,2181-2194,2399,2709-2722,3576
+README.md
+  h_e31f15a7c97762 85-94,125-128
+crates/cli/src/main.rs
+  h_e31f15a7c97762 96-98,194-288,644
+crates/host/Cargo.toml
+  h_e31f15a7c97762 37,41-44
+crates/host/src/api.rs
+  h_e31f15a7c97762 464-494
+crates/host/src/config.rs
+  h_e31f15a7c97762 54-56,95,123
+crates/host/src/host.rs
+  h_e31f15a7c97762 40,104,112
+crates/host/src/lib.rs
+  h_e31f15a7c97762 21,49
+crates/host/src/push.rs
+  h_e31f15a7c97762 1-870
+crates/host/src/store.rs
+  h_e31f15a7c97762 104-113,147-193,931,933-934,937-983,987-1027
+crates/host/tests/push.rs
+  h_e31f15a7c97762 1-328
+crates/proto/src/lib.rs
+  h_e31f15a7c97762 21-22
+crates/proto/src/methods.rs
+  h_e31f15a7c97762 108-119,183,191-193,203-204,230,261-266
+crates/proto/src/types.rs
+  h_e31f15a7c97762 1294-1452
+desktop/Cargo.lock
+  h_e31f15a7c97762 188,198,603-608,1186-1197,1205,1300,1317,1394-1407,1433-1452,1578-1587,1633-1638,1827,1913-1942,2032-2040,2118,2120,3320-3331,3423-3432,3682-3690,3980,4024-4033,4371-4384,4587,5164-5177,6781
+docs/status.md
+  h_e31f15a7c97762 45
+ios/.gitignore
+  h_e31f15a7c97762 4-6
+ios/AgentHost/App/AgentHostApp.swift
+  h_e31f15a7c97762 2,13,44-65,69-118,141-145
+ios/AgentHost/App/AppModel+Push.swift
+  h_e31f15a7c97762 1-433
+ios/AgentHost/App/AppModel.swift
+  h_e31f15a7c97762 5,142-162,468-469,493-494,508-517,535,555-556,693,742,1303-1308
+ios/AgentHost/App/DemoData.swift
+  h_e31f15a7c97762 11-13,44-60
+ios/AgentHost/Core/PushModels.swift
+  h_e31f15a7c97762 1-123
+ios/AgentHost/Views/NotificationsView.swift
+  h_e31f15a7c97762 1-491
+ios/AgentHost/Views/SessionView.swift
+  h_e31f15a7c97762 335,365-368
+ios/AgentHost/Views/SessionsView.swift
+  h_e31f15a7c97762 7-8,147-148,172-173,179-189,222-223
+ios/AgentHost/Views/SettingsView.swift
+  h_e31f15a7c97762 3,15,44,106-118
+ios/AgentHostNotifications/NotificationService.swift
+  h_e31f15a7c97762 1-55
+ios/README.md
+  h_e31f15a7c97762 12-13,30-32,67,74-103,119,125,150-152
+ios/Shared/PushCrypto.swift
+  h_e31f15a7c97762 1-144
+ios/project.yml
+  h_e31f15a7c97762 26-27,30-32,42-57,78-80,96-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "324c7854f7e366ef64691c5a7e957e760865610f",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
