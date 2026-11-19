@@ -140,6 +140,18 @@ struct SessionView: View {
         }
     }
 
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        if animated {
+            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+        } else {
+            proxy.scrollTo("bottom", anchor: .bottom)
+            // The LazyVStack only measures rows as they come on screen, so
+            // a long jump can stop short of the end; once they're measured
+            // a second pass finishes it.
+            DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
     private func startRename() {
         renameText = session?.title ?? ""
         renaming = true
@@ -212,13 +224,21 @@ struct SessionView: View {
                 .padding(.bottom, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: rows.count) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            .startsAtBottom()
+            .onChange(of: rows.count) { old, new in
+                // A message or two arriving glides into view; the
+                // transcript loading (or a backlog replaying) jumps
+                // straight to its end instead of animating from the top.
+                scrollToBottom(proxy, animated: old > 0 && new - old <= 2)
             }
             .onChange(of: model.streaming[sessionId]?.text) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear {
+                // onAppear runs before the first layout, when scrollTo has
+                // nothing to scroll; wait a turn so it lands.
+                DispatchQueue.main.async { scrollToBottom(proxy, animated: false) }
+            }
             .onDrop(of: [.image, .fileURL, .data], isTargeted: $dropTargeted) { providers in
                 guard canAttach else { return false }
                 reportSkipped(composer.addItemProviders(providers, model: model))
@@ -2334,3 +2354,16 @@ enum DemoMenuOpener {
     }
 }
 #endif
+
+extension View {
+    /// Opens a scroll view at its end, like Messages. Only the initial
+    /// offset: a short conversation still sits at the top.
+    @ViewBuilder
+    func startsAtBottom() -> some View {
+        if #available(iOS 18, *) {
+            defaultScrollAnchor(.bottom, for: .initialOffset)
+        } else {
+            self
+        }
+    }
+}
