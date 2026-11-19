@@ -1,0 +1,29 @@
+desktop/src/bridge.rs
+  s_9a152b5d7e2e6b::t_6c068ae6ed1e72 57-59
+desktop/src/demo.rs
+  s_9a152b5d7e2e6b::t_e41ffdf3e15e76 183-193,397-409,664
+desktop/src/model.rs
+  s_9a152b5d7e2e6b::t_acb30bb6d48ff3 880-881,883-892,895-896,902-906,910-920,1594-1603,2320-2325
+desktop/src/session.rs
+  s_9a152b5d7e2e6b::t_8dba47de8b505e 1038-1049
+desktop/src/settings.rs
+  s_9a152b5d7e2e6b::t_8a417ed222528b 11,1078-1080,1086-1100,1107,1112-1140
+desktop/src/tests.rs
+  s_9a152b5d7e2e6b::t_f0c0f48cbae6fd 1099,1143,1150-1158,1191-1215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "499aeee9e57073784a67540bcfe84a08a73e7339",
+  "prompts": {},
+  "sessions": {
+    "s_9a152b5d7e2e6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_9a152b5d7e2e6b",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
