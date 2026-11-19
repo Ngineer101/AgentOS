@@ -82,6 +82,16 @@ code. To try it without Cloudflare: `agenthostd dev-relay` and
 pairs the CLI as a device, and `agenthost --remote phone.json …` runs any
 command through the relay.
 
+Notifications: the iPhone app can notify you when a session needs your
+approval (and, if you ask, when an agent finishes its turn or a session
+fails). Turn them on while pairing or in Settings → Notifications. The host
+sends them through Apple's APNs with the APNs key (`.p8`) of the Apple
+Developer account the app is signed with: the phone asks for it once per
+host, or run `agenthost push setup --key AuthKey_XXXXXXXXXX.p8 --team-id <TEAM ID>`.
+What a notification says is encrypted to the phone; Apple only sees
+"A session needs you". `agenthost push status` and `agenthost push test`
+show and check it.
+
 ## Security model in one paragraph
 
 Every session runs in a sandbox (bubblewrap + seccomp on Linux, Seatbelt on
@@ -105,7 +115,10 @@ to approve the exact `git push` and the host runs it with your credentials
 (fetching runs without asking), and `agenthost__create_pull_request` opens
 a pull request with your GitHub CLI after you approve its title and
 description; nothing from the repository, such as its hooks, runs outside
-the sandbox. The host listens on no network port. See
+the sandbox. Push notifications go from the host straight to Apple's APNs
+(the relay is not involved); their content is sealed with a key each phone
+gives the host (ChaCha20-Poly1305) and opened on the phone, so Apple sees
+only a generic alert. The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development

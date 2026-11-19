@@ -1281,6 +1281,165 @@ pub struct ScreenAttachParams {
     pub ticket: String,
 }
 
+// ---------------------------------------------------------------------------
+// Push notifications (APNs)
+// ---------------------------------------------------------------------------
+
+/// Which events a phone wants a notification for.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushPrefs {
+    /// A tool call waits for approval.
+    #[serde(default = "yes")]
+    pub approvals: bool,
+    /// The agent finished its turn (the session is waiting for you).
+    #[serde(default)]
+    pub turn_done: bool,
+    /// A session failed.
+    #[serde(default)]
+    pub failed: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for PushPrefs {
+    fn default() -> Self {
+        Self {
+            approvals: true,
+            turn_done: false,
+            failed: false,
+        }
+    }
+}
+
+/// APNs environment a device token belongs to.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PushEnvironment {
+    /// Development-signed builds (`api.sandbox.push.apple.com`).
+    Sandbox,
+    /// TestFlight and App Store builds (`api.push.apple.com`).
+    Production,
+}
+
+impl PushEnvironment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PushEnvironment::Sandbox => "sandbox",
+            PushEnvironment::Production => "production",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "sandbox" => PushEnvironment::Sandbox,
+            "production" => PushEnvironment::Production,
+            _ => return None,
+        })
+    }
+    pub fn other(&self) -> Self {
+        match self {
+            PushEnvironment::Sandbox => PushEnvironment::Production,
+            PushEnvironment::Production => PushEnvironment::Sandbox,
+        }
+    }
+}
+
+/// `push.set_key`: the host's APNs auth key (from the Apple Developer
+/// account the iOS app is signed with). Stored in the host's secret store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushSetKeyParams {
+    /// The `.p8` file's contents (PEM, PKCS#8, P-256).
+    pub key_p8: String,
+    /// The key's 10-character id (in the file name: `AuthKey_<KEY_ID>.p8`).
+    pub key_id: String,
+    /// The 10-character Apple team id.
+    pub team_id: String,
+}
+
+/// `push.register`: this device wants notifications. Paired devices only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushRegisterParams {
+    /// The APNs device token, hex.
+    pub token: String,
+    /// The app's bundle id (the APNs topic).
+    pub topic: String,
+    pub environment: PushEnvironment,
+    /// 32 random bytes (base64url) the phone made: the host encrypts each
+    /// notification's content with it (ChaCha20-Poly1305), so Apple sees
+    /// only a generic alert.
+    pub key: String,
+    #[serde(default)]
+    pub prefs: PushPrefs,
+}
+
+/// `push.set_prefs`: change what this device is notified about.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushSetPrefsParams {
+    pub prefs: PushPrefs,
+}
+
+/// `push.test`: send a test notification. A device tests itself; the desktop
+/// names one (`device_id`) or, leaving it out, every registered device.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PushTestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushTestResult {
+    /// Devices that got it.
+    pub sent: u32,
+    /// Why it did not reach the others (APNs' reason, e.g. `BadDeviceToken`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+/// One device that gets notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushDevice {
+    pub device_id: String,
+    pub name: String,
+    pub environment: PushEnvironment,
+    pub prefs: PushPrefs,
+    pub registered_at: i64,
+    /// The last time APNs refused a notification for it, and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+/// `push.status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushStatus {
+    /// The host has an APNs key and can send notifications.
+    pub configured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    /// The calling device's registration (phones only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub this_device: Option<PushDevice>,
+    /// Every registered device (the desktop only; empty for phones).
+    #[serde(default)]
+    pub devices: Vec<PushDevice>,
+}
+
+/// The decrypted content of a notification (the `e` field of the APNs
+/// payload, sealed with the device's key).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushContent {
+    /// `approval`, `turn_done`, `failed` or `test`.
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

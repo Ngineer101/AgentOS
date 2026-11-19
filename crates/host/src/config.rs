@@ -51,6 +51,9 @@ pub struct HostConfig {
     pub screen_idle_stop: Option<std::time::Duration>,
     /// Test only: how long one viewer may watch (15 minutes otherwise).
     pub screen_max_view: Option<std::time::Duration>,
+    /// Test only: an APNs stand-in (`http://127.0.0.1:port`, HTTP/2 without
+    /// TLS); requests go to `<url>/sandbox/3/device/…` or `<url>/production/…`.
+    pub apns_url: Option<String>,
 }
 
 /// The catalog `connector.search` uses.
@@ -89,6 +92,7 @@ impl HostConfig {
             screen_engine_token_file: None,
             screen_idle_stop: None,
             screen_max_view: None,
+            apns_url: None,
         })
     }
 
@@ -116,6 +120,7 @@ impl HostConfig {
             screen_engine_token_file: None,
             screen_idle_stop: None,
             screen_max_view: None,
+            apns_url: None,
         }
     }
 

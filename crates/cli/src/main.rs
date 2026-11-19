@@ -93,6 +93,9 @@ enum Cmd {
     /// Screen sharing with paired phones (through screen-relay).
     #[command(subcommand)]
     Screen(ScreenCmd),
+    /// Push notifications to paired iPhones (through Apple's APNs).
+    #[command(subcommand)]
+    Push(PushCmd),
     /// Send any protocol method.
     Raw {
         method: String,
@@ -186,6 +189,101 @@ enum ScreenCmd {
         #[arg(long)]
         r#type: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PushCmd {
+    /// Whether the host has an APNs key, and which phones get notifications.
+    Status,
+    /// Give the host the APNs key of the Apple Developer account the iOS app
+    /// is signed with (Certificates, Identifiers & Profiles → Keys). A phone
+    /// can do this while pairing instead.
+    Setup {
+        /// The key file, AuthKey_<KEY ID>.p8.
+        #[arg(long)]
+        key: PathBuf,
+        /// The key's id (read from the file name when left out).
+        #[arg(long)]
+        key_id: Option<String>,
+        /// Your Apple team id (Apple Developer → Membership).
+        #[arg(long)]
+        team_id: String,
+    },
+    /// Send a test notification to every registered phone, or one.
+    Test {
+        #[arg(long)]
+        device: Option<String>,
+    },
+    /// Forget the APNs key; phones stop getting notifications.
+    RemoveKey,
+}
+
+/// `AuthKey_ABC123DEFG.p8` → `ABC123DEFG`.
+fn key_id_from_file_name(path: &std::path::Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let id = stem.strip_prefix("AuthKey_")?;
+    (id.len() == 10 && id.chars().all(|c| c.is_ascii_alphanumeric())).then(|| id.to_ascii_uppercase())
+}
+
+async fn push_cmd(c: &Client, cmd: PushCmd, json_out: bool) -> Result<()> {
+    let st: PushStatus = match cmd {
+        PushCmd::Status => c.call(m::PUSH_STATUS, json!({})).await?,
+        PushCmd::Setup { key, key_id, team_id } => {
+            let Some(key_id) = key_id.or_else(|| key_id_from_file_name(&key)) else {
+                bail!("can't read the key id from the file name; add --key-id");
+            };
+            let pem = std::fs::read_to_string(&key)
+                .with_context(|| format!("reading {}", key.display()))?;
+            c.call(m::PUSH_SET_KEY, json!({"key_p8": pem, "key_id": key_id, "team_id": team_id}))
+                .await?
+        }
+        PushCmd::Test { device } => {
+            let r: PushTestResult = c.call(m::PUSH_TEST, json!({"device_id": device})).await?;
+            if json_out {
+                print_json(&serde_json::to_value(&r)?);
+            } else {
+                println!("Sent to {} phone{}.", r.sent, if r.sent == 1 { "" } else { "s" });
+                for e in &r.errors {
+                    println!("Not sent: {e}");
+                }
+            }
+            return Ok(());
+        }
+        PushCmd::RemoveKey => c.call(m::PUSH_CLEAR_KEY, json!({})).await?,
+    };
+    if json_out {
+        print_json(&serde_json::to_value(&st)?);
+        return Ok(());
+    }
+    match (&st.key_id, &st.team_id) {
+        (Some(k), Some(t)) if st.configured => println!("APNs key: {k} (team {t})"),
+        _ => println!("APNs key: not set up (`agenthost push setup`, or pair an iPhone)"),
+    }
+    if let Some(d) = &st.this_device {
+        println!("This device: {} ({})", d.name, d.environment.as_str());
+    }
+    if st.devices.is_empty() && st.this_device.is_none() {
+        println!("No phone has turned notifications on.");
+    }
+    for d in &st.devices {
+        let mut what = vec![];
+        if d.prefs.approvals {
+            what.push("approvals");
+        }
+        if d.prefs.turn_done {
+            what.push("finished turns");
+        }
+        if d.prefs.failed {
+            what.push("failures");
+        }
+        let what = if what.is_empty() { "nothing".to_string() } else { what.join(", ") };
+        print!("{}  {}  {}  {}", d.device_id, d.name, d.environment.as_str(), what);
+        match &d.last_error {
+            Some(e) => println!("  (last refused: {e})"),
+            None => println!(),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -543,6 +641,7 @@ async fn run(cli: Cli) -> Result<()> {
     let remote_state = cli.remote.clone();
     match cli.cmd {
         Cmd::Screen(cmd) => screen_cmd(&c, cmd, remote_state.as_deref(), json_out).await?,
+        Cmd::Push(cmd) => push_cmd(&c, cmd, json_out).await?,
         Cmd::Status => {
             let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
             if json_out {

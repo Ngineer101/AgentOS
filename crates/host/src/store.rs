@@ -101,6 +101,16 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS agent_profiles_name ON agent_profiles(agent, name COLLATE NOCASE);
 CREATE UNIQUE INDEX IF NOT EXISTS agent_profiles_dir ON agent_profiles(config_dir);
+CREATE TABLE IF NOT EXISTS push_devices (
+    device_id TEXT PRIMARY KEY REFERENCES devices(device_id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    environment TEXT NOT NULL,
+    content_key BLOB NOT NULL,
+    prefs TEXT NOT NULL,
+    registered_at INTEGER NOT NULL,
+    last_error TEXT
+);
 CREATE TABLE IF NOT EXISTS connector_tool_policy (
     connector_id TEXT NOT NULL REFERENCES connectors(connector_id) ON DELETE CASCADE,
     tool TEXT NOT NULL,
@@ -132,6 +142,53 @@ pub struct DeviceRecord {
 
 pub struct Store {
     conn: Mutex<Connection>,
+}
+
+/// A device's APNs registration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PushRow {
+    pub device_id: String,
+    /// The device's name (from `devices`).
+    pub name: String,
+    pub token: String,
+    pub topic: String,
+    pub environment: PushEnvironment,
+    /// 32 bytes the phone chose: notifications' content is sealed with it.
+    pub content_key: Vec<u8>,
+    pub prefs: PushPrefs,
+    pub registered_at: i64,
+    pub last_error: Option<String>,
+}
+
+impl PushRow {
+    pub fn view(&self) -> PushDevice {
+        PushDevice {
+            device_id: self.device_id.clone(),
+            name: self.name.clone(),
+            environment: self.environment,
+            prefs: self.prefs,
+            registered_at: self.registered_at,
+            last_error: self.last_error.clone(),
+        }
+    }
+}
+
+const PUSH_COLS: &str = "p.device_id, d.name, p.token, p.topic, p.environment, p.content_key, p.prefs, p.registered_at, p.last_error";
+
+fn row_push(r: &rusqlite::Row) -> rusqlite::Result<PushRow> {
+    let env: String = r.get(4)?;
+    let prefs: String = r.get(6)?;
+    Ok(PushRow {
+        device_id: r.get(0)?,
+        name: r.get(1)?,
+        token: r.get(2)?,
+        topic: r.get(3)?,
+        environment: PushEnvironment::parse(&env).unwrap_or(PushEnvironment::Production),
+        content_key: r.get(5)?,
+        prefs: serde_json::from_str(&prefs).unwrap_or_default(),
+        registered_at: r.get(7)?,
+        last_error: r.get(8)?,
+    })
 }
 
 fn enum_str<T: serde::Serialize>(v: &T) -> String {
@@ -871,11 +928,101 @@ impl Store {
     /// Revoke: the key is deleted from the host (replaced by an unusable
     /// marker so the row keeps its history) and the device can never
     /// complete a handshake again.
+    /// Its push registration goes too.
     pub fn device_revoke(&self, id: &str) -> Result<bool> {
-        Ok(self.db().execute(
+        let db = self.db();
+        let n = db.execute(
             "UPDATE devices SET revoked_at = ?2, public_key = 'revoked:' || device_id, relay_key = 'revoked:' || device_id WHERE device_id = ?1 AND revoked_at IS NULL",
             params![id, now_ms()],
+        )?;
+        db.execute("DELETE FROM push_devices WHERE device_id = ?1", params![id])?;
+        Ok(n > 0)
+    }
+
+    // ---- push registrations ----
+
+    /// Register (or replace) a device's APNs token.
+    pub fn push_register(
+        &self,
+        device_id: &str,
+        token: &str,
+        topic: &str,
+        environment: PushEnvironment,
+        content_key: &[u8],
+        prefs: &PushPrefs,
+    ) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO push_devices (device_id, token, topic, environment, content_key, prefs, registered_at, last_error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+             ON CONFLICT(device_id) DO UPDATE SET token = excluded.token, topic = excluded.topic,
+               environment = excluded.environment, content_key = excluded.content_key,
+               prefs = excluded.prefs, registered_at = excluded.registered_at, last_error = NULL",
+            params![
+                device_id,
+                token,
+                topic,
+                environment.as_str(),
+                content_key,
+                serde_json::to_string(prefs)?,
+                now_ms()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn push_unregister(&self, device_id: &str) -> Result<bool> {
+        Ok(self
+            .db()
+            .execute("DELETE FROM push_devices WHERE device_id = ?1", params![device_id])?
+            > 0)
+    }
+
+    pub fn push_set_prefs(&self, device_id: &str, prefs: &PushPrefs) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE push_devices SET prefs = ?2 WHERE device_id = ?1",
+            params![device_id, serde_json::to_string(prefs)?],
         )? > 0)
+    }
+
+    /// APNs answered with a token from the other environment (an app built
+    /// differently than it thought): remember the one that works.
+    pub fn push_set_environment(&self, device_id: &str, env: PushEnvironment) -> Result<()> {
+        self.db().execute(
+            "UPDATE push_devices SET environment = ?2 WHERE device_id = ?1",
+            params![device_id, env.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn push_set_error(&self, device_id: &str, error: Option<&str>) -> Result<()> {
+        self.db().execute(
+            "UPDATE push_devices SET last_error = ?2 WHERE device_id = ?1",
+            params![device_id, error],
+        )?;
+        Ok(())
+    }
+
+    pub fn push_get(&self, device_id: &str) -> Result<Option<PushRow>> {
+        Ok(self
+            .db()
+            .query_row(
+                &format!("SELECT {PUSH_COLS} FROM push_devices p JOIN devices d ON d.device_id = p.device_id WHERE p.device_id = ?1 AND d.revoked_at IS NULL"),
+                params![device_id],
+                row_push,
+            )
+            .optional()?)
+    }
+
+    /// Registrations of devices that are still paired.
+    pub fn push_list(&self) -> Result<Vec<PushRow>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT {PUSH_COLS} FROM push_devices p JOIN devices d ON d.device_id = p.device_id WHERE d.revoked_at IS NULL ORDER BY p.registered_at"
+        ))?;
+        let rows = st
+            .query_map([], row_push)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     // ---- connectors ----
