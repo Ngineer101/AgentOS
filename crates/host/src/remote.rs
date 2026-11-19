@@ -32,6 +32,8 @@ const RELAY_SECRET: &str = "host-relay-key";
 enum Out {
     Text(String),
     Binary(Vec<u8>),
+    /// A ping with an id, whose pong is reported on the sender (see `relay_caught_up`).
+    Barrier(oneshot::Sender<()>),
 }
 
 struct Pairing {
@@ -150,6 +152,19 @@ impl Remote {
         self.send(Out::Text(v.to_string()));
     }
 
+    /// Wait until the relay has handled every control message sent so far.
+    /// A ping with an id isn't the keepalive the relay auto-answers, so it is
+    /// handled in order with the rest, and its pong (echoing the id) means the
+    /// messages ahead of it are applied. Gives up after a few seconds: an
+    /// older relay doesn't echo the id, and a dropped link re-sends on connect.
+    async fn relay_caught_up(&self) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Out::Barrier(tx));
+        if !matches!(tokio::time::timeout(Duration::from_secs(5), rx).await, Ok(Ok(()))) {
+            tracing::warn!("relay did not confirm pending control messages");
+        }
+    }
+
     fn device_keys_b64(&self) -> Vec<String> {
         self.ctx
             .store
@@ -218,19 +233,27 @@ impl Remote {
         {
             self.control(json!({"type":"pairing.open","token_hash": b64(&tunnel::sha256(&tunnel::pairing_token(&p.secret))),"expires_at": p.expires_at}));
         }
+        // Pings sent by `relay_caught_up`, by id, until their pong comes back.
+        let barriers: Arc<Mutex<HashMap<u64, oneshot::Sender<()>>>> = Default::default();
+        let writer_barriers = barriers.clone();
         let writer = tokio::spawn(async move {
             let mut ping = tokio::time::interval(RELAY_PING);
+            let mut next_id = 0u64;
             loop {
-                tokio::select! {
-                    o = rx.recv() => {
-                        let Some(o) = o else { break };
-                        let msg = match o { Out::Text(t) => WsMsg::Text(t), Out::Binary(b) => WsMsg::Binary(b) };
-                        if sink.send(msg).await.is_err() { break; }
-                    }
-                    _ = ping.tick() => {
-                        if sink.send(WsMsg::Text(r#"{"type":"ping"}"#.to_string())).await.is_err() { break; }
-                    }
-                }
+                let msg = tokio::select! {
+                    o = rx.recv() => match o {
+                        None => break,
+                        Some(Out::Text(t)) => WsMsg::Text(t),
+                        Some(Out::Binary(b)) => WsMsg::Binary(b),
+                        Some(Out::Barrier(done)) => {
+                            next_id += 1;
+                            writer_barriers.lock().unwrap().insert(next_id, done);
+                            WsMsg::Text(json!({"type":"ping","id":next_id}).to_string())
+                        }
+                    },
+                    _ = ping.tick() => WsMsg::Text(r#"{"type":"ping"}"#.to_string()),
+                };
+                if sink.send(msg).await.is_err() { break; }
             }
         });
         // The relay answers every ping; silence this long means the link is
@@ -256,6 +279,12 @@ impl Remote {
                         Some("closed") => {
                             let id = v["conn_id"].as_str().unwrap_or_default();
                             self.conns.lock().unwrap().remove(id);
+                        }
+                        Some("pong") => {
+                            let done = v["id"].as_u64().and_then(|id| barriers.lock().unwrap().remove(&id));
+                            if let Some(done) = done {
+                                let _ = done.send(());
+                            }
                         }
                         Some("error") => tracing::warn!("relay error: {}", v["message"]),
                         _ => {}
@@ -469,7 +498,7 @@ impl Remote {
         result
     }
 
-    fn pair_start(&self) -> Result<PairStartResult, RpcError> {
+    async fn pair_start(&self) -> Result<PairStartResult, RpcError> {
         let url = self.url.clone().ok_or_else(|| {
             RpcError::new(
                 codes::UNAVAILABLE,
@@ -506,6 +535,9 @@ impl Remote {
             used: false,
             decision: None,
         });
+        // Only hand out the code once the relay knows it: a phone that scans
+        // it straight away would otherwise be refused (4403).
+        self.relay_caught_up().await;
         self.ctx
             .audit
             .log("pairing.start", json!({"pairing_id": pairing_id}));
@@ -557,7 +589,7 @@ impl DeviceAdmin for Remote {
                     .collect();
                 Ok(serde_json::to_value(list).unwrap())
             }
-            m::DEVICE_PAIR_START => Ok(serde_json::to_value(self.pair_start()?).unwrap()),
+            m::DEVICE_PAIR_START => Ok(serde_json::to_value(self.pair_start().await?).unwrap()),
             m::DEVICE_PAIR_CONFIRM => {
                 let c: PairConfirmParams = serde_json::from_value(p).map_err(bad)?;
                 let tx = {
