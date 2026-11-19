@@ -859,7 +859,8 @@ struct ThoughtRow: View {
     }
 }
 
-/// The user's prompt: a bubble in the tint colour.
+/// The user's prompt: light text on a dark grey bubble (white on the
+/// tint colour was too low-contrast to read on a phone).
 struct PromptBubble: View {
     let text: String
     var pending = false
@@ -867,10 +868,10 @@ struct PromptBubble: View {
     var body: some View {
         Text(text)
             .textSelection(.enabled)
-            .foregroundStyle(.white)
+            .foregroundStyle(pending ? Color.secondary : Color.primary)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color.accentColor.opacity(pending ? 0.5 : 1),
+            .background(Color(uiColor: .systemGray5),
                         in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
