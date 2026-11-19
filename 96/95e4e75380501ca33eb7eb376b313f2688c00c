@@ -1,0 +1,23 @@
+crates/fake-agent/src/main.rs
+  s_8193ed21c9676f::t_b6ed2dc33d0d40 634-645
+crates/host/src/session.rs
+  s_8193ed21c9676f::t_d8d6f170ac8888 35-39,776-777,895,1420,1423-1426,1436,1446-1461,1957,1969
+crates/host/tests/m1_host_core.rs
+  s_8193ed21c9676f::t_93fc98b5c051f8 63-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9695e4e75380501ca33eb7eb376b313f2688c00c",
+  "prompts": {},
+  "sessions": {
+    "s_8193ed21c9676f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8193ed21c9676f",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
