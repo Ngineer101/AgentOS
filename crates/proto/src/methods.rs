@@ -84,6 +84,14 @@ pub const VOICE_STATUS: &str = "voice.status";
 pub const VOICE_DOWNLOAD: &str = "voice.download";
 /// Turn an uploaded recording (WAV) into text. The recording is deleted after.
 pub const VOICE_TRANSCRIBE: &str = "voice.transcribe";
+/// Live dictation: `voice.stream_begin` opens a stream, each
+/// `voice.stream_append` feeds it audio and answers with the text so far,
+/// `voice.stream_finish` ends it with the final text. Only when
+/// [`crate::VoiceStatus::streaming`] is true. Streams left alone for a minute
+/// are dropped.
+pub const VOICE_STREAM_BEGIN: &str = "voice.stream_begin";
+pub const VOICE_STREAM_APPEND: &str = "voice.stream_append";
+pub const VOICE_STREAM_FINISH: &str = "voice.stream_finish";
 
 /// Screen sharing through screen-relay: what can be shown, and the policy.
 pub const SCREEN_STATUS: &str = "screen.status";
@@ -164,7 +172,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
-        | VOICE_TRANSCRIBE
+        | VOICE_TRANSCRIBE | VOICE_STREAM_BEGIN | VOICE_STREAM_APPEND | VOICE_STREAM_FINISH
         // Bounded by the project folders, which only an admin sets.
         | PROJECT_BROWSE | PROJECT_CREATE
         // Bounded by the screen policy, which only an admin sets.
@@ -219,6 +227,9 @@ mod tests {
             VOICE_STATUS,
             VOICE_DOWNLOAD,
             VOICE_TRANSCRIBE,
+            VOICE_STREAM_BEGIN,
+            VOICE_STREAM_APPEND,
+            VOICE_STREAM_FINISH,
             AGENT_PROFILE_LIST,
             PROJECT_BROWSE,
             PROJECT_CREATE,

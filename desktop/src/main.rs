@@ -58,9 +58,12 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     }
     let changed = changed || had != s.toasts.len() || was_searching != s.searching;
     // While recording: the meter and timer move, and a forgotten recording stops.
+    // While dictating live, the words so far go to the host as they are spoken.
     if let model::Mic::Recording(r) = &s.mic {
         s.mic_level = s.mic_level * 0.6 + r.level() * 0.4;
-        if r.seconds() >= audio::MAX_SECONDS {
+        let over = r.seconds() >= audio::MAX_SECONDS;
+        s.pump_dictation();
+        if over {
             s.mic_press();
         }
         tx.wake_after(std::time::Duration::from_millis(100));

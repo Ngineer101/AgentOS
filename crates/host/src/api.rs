@@ -469,6 +469,12 @@ impl Conn {
                 h.ctx.uploads.remove(&vp.attachment_id);
                 to_value(VoiceTranscribeResult { text: r? })
             }
+            m::VOICE_STREAM_BEGIN => {
+                let stream_id = h.ctx.voice.stream_begin(params(p)?).await?;
+                to_value(VoiceStreamBeginResult { stream_id })
+            }
+            m::VOICE_STREAM_APPEND => to_value(VoiceStreamText { text: h.ctx.voice.stream_append(params(p)?).await? }),
+            m::VOICE_STREAM_FINISH => to_value(VoiceStreamText { text: h.ctx.voice.stream_finish(params(p)?).await? }),
 
             m::DEVICE_LIST
             | m::DEVICE_PAIR_START

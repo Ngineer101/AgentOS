@@ -419,7 +419,16 @@ pub enum FileState {
 pub enum Mic {
     Idle,
     Recording(crate::audio::Recorder),
+    /// Stopped: waiting for the final text (live) or the transcription (older hosts).
     Transcribing,
+}
+
+/// A live dictation: the words heard so far sit in the composer from `start`, as `shown`
+/// (with the spaces that separate them from the text around).
+pub struct LiveDictation {
+    pub gen: u64,
+    pub(crate) start: usize,
+    pub(crate) shown: String,
 }
 
 #[derive(Default, Clone)]
@@ -516,6 +525,11 @@ pub struct App {
     pub mic_level: f32,
     /// Asking whether to download the speech model.
     pub ask_voice_download: bool,
+    /// The dictation in progress, when the host takes live dictation.
+    pub live: Option<LiveDictation>,
+    pub next_dictation: u64,
+    /// Return was pressed while dictating: send once the last words are in.
+    pub send_after_dictation: bool,
     /// Subscription id per subscribed session (to replace it on a resync).
     pub sub_ids: HashMap<String, String>,
     /// Sessions the host says are ahead of us: (its last seq, when we heard).
@@ -624,6 +638,9 @@ pub fn init() -> App {
         mic: Mic::Idle,
         mic_level: 0.0,
         ask_voice_download: false,
+        live: None,
+        next_dictation: 0,
+        send_after_dictation: false,
         sub_ids: HashMap::new(),
         behind: HashMap::new(),
         toasts: vec![],
@@ -1011,6 +1028,19 @@ impl App {
 
     pub fn send_prompt(&mut self) {
         let Screen::Session(id) = &self.screen else { return };
+        // While dictating, Return stops the microphone and sends once the last words are in.
+        match self.mic {
+            Mic::Recording(_) => {
+                self.send_after_dictation = true;
+                self.mic_press();
+                return;
+            }
+            Mic::Transcribing => {
+                self.send_after_dictation = true;
+                return;
+            }
+            Mic::Idle => {}
+        }
         let id = id.clone();
         let text = self.prompt.text.trim().to_string();
         let files = self.files.get(&id).map(|f| f.as_slice()).unwrap_or(&[]);
@@ -1162,27 +1192,150 @@ impl App {
                     return;
                 }
                 match crate::audio::Recorder::start() {
-                    Ok(r) => self.mic = Mic::Recording(r),
+                    Ok(r) => {
+                        self.send_after_dictation = false;
+                        if v.streaming {
+                            self.begin_live(r.rate());
+                        }
+                        self.mic = Mic::Recording(r);
+                        self.prompt.focused = true;
+                    }
                     Err(e) => self.error = Some(e),
                 }
             }
-            Mic::Recording(r) => match r.finish() {
-                Some(wav) => {
+            Mic::Recording(r) => {
+                if let Some(gen) = self.live.as_ref().map(|l| l.gen) {
+                    let pcm = r.take_new();
+                    drop(r);
                     self.mic = Mic::Transcribing;
-                    if let Some(b) = &self.bridge {
-                        b.send(crate::bridge::ToHost::Transcribe { wav });
-                    }
+                    self.live_send(crate::bridge::Live::Finish { gen, pcm, cancel: false });
+                    return;
                 }
-                None => self.notice = Some("That was too short to hear anything. Click the microphone, talk, then click it again.".into()),
-            },
+                match r.finish() {
+                    Some(wav) => {
+                        self.mic = Mic::Transcribing;
+                        if let Some(b) = &self.bridge {
+                            b.send(crate::bridge::ToHost::Transcribe { wav });
+                        }
+                    }
+                    None if std::mem::take(&mut self.send_after_dictation) => self.send_prompt(),
+                    None => self.notice = Some("That was too short to hear anything. Click the microphone, talk, then click it again.".into()),
+                }
+            }
             Mic::Transcribing => self.mic = Mic::Transcribing,
         }
     }
 
-    /// Stop recording without using it.
-    pub fn mic_cancel(&mut self) {
-        if let Mic::Recording(_) = self.mic {
+    fn live_send(&self, l: crate::bridge::Live) {
+        if let Some(b) = &self.bridge {
+            b.send(crate::bridge::ToHost::Live(l));
+        }
+    }
+
+    /// Open a live dictation at the caret (replacing a selection).
+    fn begin_live(&mut self, sample_rate: u32) {
+        self.next_dictation += 1;
+        let gen = self.next_dictation;
+        let (a, b) = self.prompt.range();
+        if a != b {
+            self.prompt.insert("");
+        }
+        self.live = Some(LiveDictation { gen, start: self.prompt.range().0, shown: String::new() });
+        self.live_send(crate::bridge::Live::Begin { gen, sample_rate });
+    }
+
+    /// While dictating live: send what the microphone heard since the last call.
+    pub fn pump_dictation(&mut self) {
+        let (Mic::Recording(r), Some(l)) = (&self.mic, &self.live) else { return };
+        let pcm = r.take_new();
+        if !pcm.is_empty() {
+            self.live_send(crate::bridge::Live::Audio { gen: l.gen, pcm });
+        }
+    }
+
+    /// Put the words heard so far in the composer, in place of the last ones shown.
+    pub fn show_live(&mut self, text: &str) {
+        let Some(l) = self.live.as_mut() else { return };
+        let t = &self.prompt.text;
+        // Where the words are: where they were put, unless an edit moved them.
+        let start = if t.get(l.start..l.start + l.shown.len()) == Some(l.shown.as_str()) {
+            l.start
+        } else if let Some(i) = (!l.shown.is_empty()).then(|| t.rfind(&l.shown)).flatten() {
+            i
+        } else if l.shown.is_empty() {
+            let mut i = l.start.min(t.len());
+            while !t.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        } else {
+            // The words were edited away: start again after the text.
+            l.shown.clear();
+            t.len()
+        };
+        let end = start + l.shown.len();
+        let text = text.trim();
+        let mut s = String::new();
+        if !text.is_empty() {
+            if t[..start].chars().last().is_some_and(|c| !c.is_whitespace()) {
+                s.push(' ');
+            }
+            s.push_str(text);
+            if t[end..].chars().next().is_some_and(|c| !c.is_whitespace()) {
+                s.push(' ');
+            }
+        }
+        if s == l.shown && start == l.start {
+            return;
+        }
+        let (ca, cb) = self.prompt.range();
+        self.prompt.set_selection(start, end);
+        self.prompt.insert(&s);
+        let new_end = start + s.len();
+        // The caret follows the words unless it was put somewhere else.
+        if cb < start {
+            self.prompt.set_selection(ca, cb);
+        } else if ca > end {
+            self.prompt.set_selection(ca + new_end - end, cb + new_end - end);
+        } else {
+            self.prompt.set_caret(start + s.trim_end().len());
+        }
+        l.start = start;
+        l.shown = s;
+    }
+
+    /// A live dictation ended (final text, or a failure): maybe send, as Return asked.
+    fn end_live(&mut self, ok: bool) {
+        let heard = self.live.take().is_some_and(|l| !l.shown.is_empty());
+        if !matches!(self.mic, Mic::Idle) {
             self.mic = Mic::Idle;
+        }
+        let send = std::mem::take(&mut self.send_after_dictation);
+        if !ok {
+            return;
+        }
+        if send {
+            self.send_prompt();
+        } else if !heard {
+            self.notice = Some("No speech was recognised. Try again a little closer to the microphone.".into());
+        }
+        self.prompt.focused = true;
+    }
+
+    /// Stop recording without using it: a live dictation's words come back out.
+    pub fn mic_cancel(&mut self) {
+        if !matches!(self.mic, Mic::Recording(_)) {
+            return;
+        }
+        self.mic = Mic::Idle;
+        self.send_after_dictation = false;
+        if let Some(l) = self.live.take() {
+            self.live_send(crate::bridge::Live::Finish { gen: l.gen, pcm: vec![], cancel: true });
+            let t = &self.prompt.text;
+            if !l.shown.is_empty() && t.get(l.start..l.start + l.shown.len()) == Some(l.shown.as_str()) {
+                self.prompt.set_selection(l.start, l.start + l.shown.len());
+                self.prompt.insert("");
+            }
         }
     }
 
@@ -1245,6 +1398,11 @@ impl App {
                 }
             }
             FromHost::Disconnected(e) => {
+                // A live dictation can't finish without the host; keep the words so far.
+                if self.live.take().is_some() {
+                    self.mic = Mic::Idle;
+                    self.send_after_dictation = false;
+                }
                 if self.conn != Conn::StartingHost || self.info.is_some() {
                     self.conn = Conn::Down(e);
                 }
@@ -1436,11 +1594,33 @@ impl App {
             }
             FromHost::Transcribed(r) => {
                 self.mic = Mic::Idle;
+                let send = std::mem::take(&mut self.send_after_dictation);
                 match r {
-                    Ok(text) => self.insert_dictation(&text),
+                    Ok(text) => {
+                        self.insert_dictation(&text);
+                        if send {
+                            self.send_prompt();
+                        }
+                    }
                     Err(e) => self.error = Some(format!("Voice input failed: {e}")),
                 }
             }
+            // Replies for a dictation already discarded or ended are dropped.
+            FromHost::LiveText { gen, done, result } if self.live.as_ref().map(|l| l.gen) == Some(gen) => {
+                match result {
+                    Ok(text) => {
+                        self.show_live(&text);
+                        if done {
+                            self.end_live(true);
+                        }
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("Voice input failed: {e}"));
+                        self.end_live(false);
+                    }
+                }
+            }
+            FromHost::LiveText { .. } => {}
         }
     }
 
@@ -2053,7 +2233,11 @@ impl App {
                 if let Some(v) = parse::<VoiceStatus>(n.params) {
                     let was_ready = self.voice.as_ref().map(|v| v.ready).unwrap_or(false);
                     if v.ready && !was_ready {
-                        self.notice = Some("Voice input is ready. Click the microphone, talk, then click it again.".into());
+                        self.notice = Some(if v.streaming {
+                            "Voice input is ready. Click the microphone and talk; press Return to send.".into()
+                        } else {
+                            "Voice input is ready. Click the microphone, talk, then click it again.".into()
+                        });
                     } else if let (Some(e), None) = (&v.error, &v.progress) {
                         if self.voice.as_ref().is_some_and(|o| o.progress.is_some()) {
                             self.error = Some(format!("Speech model: {e}"));

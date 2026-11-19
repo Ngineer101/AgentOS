@@ -149,7 +149,7 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         .label(format!("Message to {agent}"))
         .w_full()
         .color(t.text)
-        .placeholder(format!("Reply to {agent}…"), if mac { t.text3 } else { t.text2 })
+        .placeholder(if matches!(s.mic, Mic::Recording(_)) { "Listening…".to_string() } else { format!("Reply to {agent}…") }, if mac { t.text3 } else { t.text2 })
         .caret(t.text, t.accent.alpha(0.35))
         .on_edit(|s: &mut App| &mut s.prompt)
         .on_submit(|s: &mut App, _: &mut Tx| s.send_prompt())
@@ -160,6 +160,11 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
             // ↑ in an empty composer brings back your last message to edit.
             if ev.key == rune::Key::Up && ev.mods == rune::Mods::default() && s.prompt.text.is_empty() {
                 return s.recall_last_prompt();
+            }
+            // Escape throws away a dictation in progress.
+            if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && matches!(s.mic, Mic::Recording(_)) {
+                s.mic_cancel();
+                return true;
             }
             // Escape closes the agent panel.
             if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && s.menu.is_none() {
@@ -199,7 +204,15 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
     boxc = boxc.child(col().w_full().px(pad_x).pt(text_top).pb(if mac { 2.0 } else { 4.0 }).child(rune::auto_grow(input, 1, 8)));
     let chip = model_chip(s, sess, t);
     // Without a model chip the shortcut hint has the room.
-    let hint = if chip.is_some() { "" } else if mac { "↩ Send · ⇧↩ New line" } else { "Enter to send · Shift+Enter for a new line" };
+    let hint = if matches!(s.mic, Mic::Recording(_)) {
+        if mac { "↩ Send · esc Discard" } else { "Enter to send · Esc to discard" }
+    } else if chip.is_some() {
+        ""
+    } else if mac {
+        "↩ Send · ⇧↩ New line"
+    } else {
+        "Enter to send · Shift+Enter for a new line"
+    };
     let actions = row()
         .w_full()
         .gap(if mac { 2.0 } else { 4.0 })
@@ -233,7 +246,8 @@ fn send_button(s: &App, sess: &Session, t: &Theme) -> El {
     let id = sess.session_id.as_str();
     let uploading = s.files.get(id).is_some_and(|f| f.iter().any(|f| matches!(f.state, FileState::Uploading)));
     let has_files = s.files.get(id).is_some_and(|f| !f.is_empty());
-    let empty = s.prompt.text.trim().is_empty() && !has_files;
+    // While dictating there is something to send: the words still coming.
+    let empty = s.prompt.text.trim().is_empty() && !has_files && matches!(s.mic, Mic::Idle);
     let working = matches!(sess.state, SessionState::Running | SessionState::WaitingApproval);
     let size = if mac { 28.0 } else { 34.0 };
     let b = row().key("send").size(size, size).radius(size / 2.0).center().role("button").focusable(true);
@@ -560,15 +574,16 @@ fn media_controls(s: &App, t: &Theme) -> El {
                 .key("recording")
                 .gap(8.0)
                 .center_y()
-                .child(t.icon_button(&ic::STOP, 14.0, &format!("Stop and Transcribe ({})", keys(s.look, Cmd::Dictate)), |s, _| s.mic_press()))
+                .child(t.icon_button(&ic::STOP, 14.0, &format!("{} ({})", if s.live.is_some() { "Stop Dictating" } else { "Stop and Transcribe" }, keys(s.look, Cmd::Dictate)), |s, _| s.mic_press()))
                 .child(t.dot(t.danger, 8.0))
                 .child(text(format!("{}:{:02}", secs / 60, secs % 60)).font(TextStyle::new(t.fs, 600.0)).color(t.text))
                 .child(row().w(60.0).h(4.0).radius(2.0).fill(Color::WHITE.alpha(0.12)).child(el().w(60.0 * level).h(4.0).radius(2.0).fill(t.text)))
                 .child(t.small_button("Discard", |s| s.mic_cancel()))
         }
-        Mic::Transcribing => row().key("transcribing").gap(8.0).px(6.0).center_y().child(t.small("Transcribing…")),
+        Mic::Transcribing => row().key("transcribing").gap(8.0).px(6.0).center_y().child(t.small(if s.live.is_some() { "Finishing…" } else { "Transcribing…" })),
         Mic::Idle => {
             let mic_help = match &s.voice {
+                Some(v) if v.ready && v.streaming => format!("Dictate ({}): talk, then press {} to send", keys(s.look, Cmd::Dictate), if mac { "Return" } else { "Enter" }),
                 Some(v) if v.ready => format!("Dictate ({}): click, talk, click again", keys(s.look, Cmd::Dictate)),
                 Some(v) if v.progress.is_some() => "Dictate: the speech model is downloading".to_string(),
                 _ => format!("Dictate ({}; downloads a speech model once)", keys(s.look, Cmd::Dictate)),

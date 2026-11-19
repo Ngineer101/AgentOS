@@ -682,3 +682,86 @@ async fn voice_reports_a_missing_model() {
     let err = c.transcribe_wav(b"RIFF", None).await.unwrap_err();
     assert!(format!("{err:#}").contains("not installed"), "{err:#}");
 }
+
+/// Live dictation without the model says so; with AGENTHOST_TEST_VOICE_MODEL=<folder
+/// with the model files> and AGENTHOST_TEST_VOICE_WAV=<speech.wav> it streams the clip
+/// in 200 ms pieces through the API and gets words back before the end.
+#[tokio::test]
+async fn voice_streams_live_dictation() {
+    use base64::Engine as _;
+    let th = TestHost::start().await;
+    let (c, _n) = th.client().await;
+    let st: VoiceStatus = c.call(methods::VOICE_STATUS, serde_json::json!({})).await.unwrap();
+    assert_eq!(st.streaming, cfg!(feature = "voice"));
+    let err = c
+        .request(methods::VOICE_STREAM_BEGIN, serde_json::json!({"sample_rate": 16000}))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("not installed") || err.message.contains("no voice support"), "{}", err.message);
+    let err = c
+        .request(methods::VOICE_STREAM_APPEND, serde_json::json!({"stream_id": "vs_nope", "data": ""}))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("no such voice stream"), "{}", err.message);
+
+    let (Ok(model), Ok(wav)) = (
+        std::env::var("AGENTHOST_TEST_VOICE_MODEL"),
+        std::env::var("AGENTHOST_TEST_VOICE_WAV"),
+    ) else {
+        eprintln!("skipped the real model: set AGENTHOST_TEST_VOICE_MODEL and AGENTHOST_TEST_VOICE_WAV");
+        return;
+    };
+    let dest = th.host.ctx.voice.model_dir();
+    std::fs::create_dir_all(&dest).unwrap();
+    for f in std::fs::read_dir(&model).unwrap() {
+        let f = f.unwrap();
+        if f.path().is_file() {
+            std::os::unix::fs::symlink(f.path(), dest.join(f.file_name())).unwrap();
+        }
+    }
+    let (rate, samples) = agenthost_host::voice::read_wav(std::path::Path::new(&wav)).unwrap();
+    let pcm = |s: &[f32]| {
+        let b: Vec<u8> = s.iter().flat_map(|v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+        base64::engine::general_purpose::STANDARD.encode(b)
+    };
+    async fn begin(c: &agenthost_cli::Client, rate: u32) -> String {
+        let v: VoiceStreamBeginResult = c.call(methods::VOICE_STREAM_BEGIN, serde_json::json!({"sample_rate": rate})).await.unwrap();
+        v.stream_id
+    }
+    let id = begin(&c, rate).await;
+    let mut first_words = None;
+    let mut slowest = std::time::Duration::ZERO;
+    let pieces: Vec<&[f32]> = samples.chunks(rate as usize / 5).collect();
+    for (i, piece) in pieces.iter().enumerate() {
+        let t = std::time::Instant::now();
+        let r: VoiceStreamText = c
+            .call(methods::VOICE_STREAM_APPEND, serde_json::json!({"stream_id": id, "data": pcm(piece)}))
+            .await
+            .unwrap();
+        slowest = slowest.max(t.elapsed());
+        if first_words.is_none() && !r.text.is_empty() {
+            first_words = Some((i, r.text));
+        }
+    }
+    let fin: VoiceStreamText = c
+        .call(methods::VOICE_STREAM_FINISH, serde_json::json!({"stream_id": id}))
+        .await
+        .unwrap();
+    let (at, words) = first_words.expect("no words before the end");
+    eprintln!(
+        "first words after {:.1} s of {:.1} s ({words:?}); slowest piece {} ms; final: {}",
+        (at + 1) as f32 * 0.2,
+        samples.len() as f32 / rate as f32,
+        slowest.as_millis(),
+        fin.text
+    );
+    assert!(!fin.text.is_empty());
+    // A finished stream is gone; a cancelled one returns nothing.
+    assert!(c.request(methods::VOICE_STREAM_APPEND, serde_json::json!({"stream_id": id, "data": ""})).await.is_err());
+    let id = begin(&c, rate).await;
+    let r: VoiceStreamText = c
+        .call(methods::VOICE_STREAM_FINISH, serde_json::json!({"stream_id": id, "data": pcm(&samples), "cancel": true}))
+        .await
+        .unwrap();
+    assert!(r.text.is_empty());
+}

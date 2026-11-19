@@ -17,7 +17,9 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   Deny ⌥⌘D / Approve ⌥⌘A (Alt+D / Alt+A). The toolbar has a status capsule
   (macOS) or the window an approval banner (GNOME), Stop turn and a session
   menu. The composer attaches files, dictates, and shows its keys; ↑ in an
-  empty composer brings back your last message.
+  empty composer brings back your last message. Dictation (⇧⌘D / Ctrl+Shift+D,
+  or the microphone) writes the words into the composer as you talk; ↩ stops
+  and sends, Esc throws the dictation away.
 - **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):
   workspace and login ("Claude Code · Work"); ⌘↩ starts, and you type the
   first message in the session. Picking a workspace picks its default login
