@@ -74,9 +74,10 @@ struct SessionView: View {
         return model.sessionTitle(s)
     }
 
-    /// "● Your turn · ⑂ fix-flaky-resume" with a worktree, else
-    /// "● Your turn · Claude Code (Personal)". The dot has the status's
-    /// colour, as in the list.
+    /// "● Working · ⑂ fix-flaky-resume" with a worktree, else
+    /// "● Working · Claude Code (Personal)". The dot has the status's
+    /// colour, as in the list. "Your turn" is the resting state, so then
+    /// only the detail shows: "⑂ fix-flaky-resume".
     private var subtitle: Text? {
         guard let s = session else { return nil }
         let status = SessionStatus(state: s.state)
@@ -92,6 +93,7 @@ struct SessionView: View {
         } else {
             detail = Text(model.agentLoginLabel(s))
         }
+        if status == .yourTurn && !s.isArchived { return detail }
         return dot + Text(" \(label) · ") + detail
     }
 
