@@ -123,9 +123,8 @@ struct ArchivedSessionRow: View {
 }
 
 extension View {
-    /// Archive `candidate` when set: at once if it has ended, after a
-    /// confirmation if it is live (archiving ends it). `onArchived` runs
-    /// after the host confirmed.
+    /// Archive `candidate` when set, at once, live or ended (archiving a
+    /// live session ends it). `onArchived` runs after the host confirmed.
     func archiveFlow(_ candidate: Binding<SessionInfo?>, onArchived: @escaping () -> Void = {}) -> some View {
         modifier(ArchiveFlow(candidate: candidate, onArchived: onArchived))
     }
@@ -135,7 +134,6 @@ private struct ArchiveFlow: ViewModifier {
     @EnvironmentObject private var model: AppModel
     @Binding var candidate: SessionInfo?
     var onArchived: () -> Void
-    @State private var confirming: SessionInfo?
     @State private var error: String?
 
     func body(content: Content) -> some View {
@@ -143,22 +141,7 @@ private struct ArchiveFlow: ViewModifier {
             .onChange(of: candidate) { _, s in
                 guard let s else { return }
                 candidate = nil
-                if SessionStateName.isTerminal(s.state) {
-                    archive(s)
-                } else {
-                    confirming = s
-                }
-            }
-            .confirmationDialog(
-                "Archive ends the session",
-                isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
-                titleVisibility: .visible,
-                presenting: confirming
-            ) { s in
-                Button("End and Archive", role: .destructive) { archive(s) }
-                Button("Cancel", role: .cancel) {}
-            } message: { s in
-                Text("“\(s.title ?? model.agentLabel(s))” is still live. The agent stops and the session moves to Settings → Archived Sessions, where its transcript stays available.")
+                archive(s)
             }
             .alert("Couldn't Archive", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK", role: .cancel) {}

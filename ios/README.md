@@ -61,7 +61,7 @@ must be reachable from the phone.
 
 For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
 transcripts and an approval; no pairing, lock or network) and optionally
-`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|archive-confirm|pair`
+`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair`
 (`App/DemoData.swift`; compiled out of Release builds):
 
 ```sh
