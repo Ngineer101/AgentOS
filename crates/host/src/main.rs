@@ -190,15 +190,92 @@ fn build_screen_engine(cfg: &HostConfig) {
     let mut cmd = std::process::Command::new(&bin);
     cmd.arg("install");
     if !cfg!(target_os = "macos") {
-        // X11 for the browser desktop, Wayland to attach to compositors like Hyprland.
-        cmd.args(["--backend", "all"]);
+        // X11 for the browser desktop, Wayland to attach to compositors like
+        // Hyprland. No XFCE: the browser desktop runs the browser alone.
+        cmd.args(["--backend", "all", "--desktop", "none"]);
+        if is_arch() {
+            install_arch_packages(cfg);
+        }
     }
     println!("Building screen-relay's engine (for phone screen sharing):");
     match cmd.status() {
         Ok(s) if s.success() => {}
         _ => println!(
-            "  Skipped. Screen sharing needs it: run `{} install` when you want it.",
-            bin.display()
+            "  Skipped. Screen sharing needs it: run `{} install{}` when you want it.",
+            bin.display(),
+            if cfg!(target_os = "macos") { "" } else { " --backend all --desktop none" }
         ),
+    }
+}
+
+/// Arch and distros built on it (Omarchy, EndeavourOS, CachyOS, …).
+fn is_arch() -> bool {
+    let os = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    os.lines()
+        .filter_map(|l| l.strip_prefix("ID=").or_else(|| l.strip_prefix("ID_LIKE=")))
+        .flat_map(|v| v.trim_matches(|c| c == '"' || c == '\'').split_whitespace().map(str::to_string).collect::<Vec<_>>())
+        .any(|id| id == "arch")
+}
+
+/// screen-relay installs Arch packages with `pacman -Syu`, a full system
+/// upgrade, which Omarchy refuses (it upgrades through `omarchy update`). So
+/// install what is missing with a plain `pacman -S --needed` first; screen-relay
+/// then finds nothing to install and only builds the engine.
+fn install_arch_packages(cfg: &HostConfig) {
+    let tsv = cfg.tools_dir.join("node_modules/screen-relay/packages.tsv");
+    let Ok(table) = std::fs::read_to_string(&tsv) else { return };
+    let wanted = arch_packages(&table, &["core", "x11", "wayland"]);
+    // `pacman -T` prints the ones that aren't installed.
+    let missing = std::process::Command::new("pacman")
+        .arg("-T")
+        .args(&wanted)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if missing.is_empty() {
+        return;
+    }
+    println!("screen-relay needs these packages: {}", missing.join(" "));
+    let ok = std::process::Command::new("sudo")
+        .args(["pacman", "-S", "--needed"])
+        .args(&missing)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        println!("  Not installed. If pacman can't find a package, update first (on Omarchy: omarchy update).");
+    }
+}
+
+/// The pacman column of screen-relay's packages.tsv for these groups.
+fn arch_packages(table: &str, groups: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for row in table.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let cols: Vec<&str> = row.split('\t').collect();
+        if cols.len() < 5 || !groups.contains(&cols[0]) {
+            continue;
+        }
+        for p in cols[4].split(' ').filter(|p| !p.is_empty() && *p != "-") {
+            if !out.iter().any(|o| o == p) {
+                out.push(p.to_string());
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arch_packages_come_from_the_pacman_column() {
+        let tsv = "# group\tname\tapt\tdnf\tpacman\tapk\n\
+core\tcompiler\tbuild-essential\tgcc-c++ make\tbase-devel\tbuild-base\n\
+core\tsetpriv\tutil-linux\tutil-linux\tutil-linux\tsetpriv\n\
+core\tnone\tfoo\tfoo\t-\tfoo\n\
+xfce\tterm\txfce4-terminal\txfce4-terminal\txfce4-terminal\txfce4-terminal\n\
+wayland\twl\tlibwayland-dev\twayland-devel\twayland\twayland-dev\n\
+wayland\twl2\tlibwayland-bin\twayland-devel\twayland\twayland-dev\n";
+        assert_eq!(arch_packages(tsv, &["core", "wayland"]), vec!["base-devel", "util-linux", "wayland"]);
     }
 }
