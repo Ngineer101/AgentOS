@@ -1,0 +1,98 @@
+README.md
+  h_e31f15a7c97762 31
+crates/cli/src/main.rs
+  h_e31f15a7c97762 93-95,157-190,543,545,1842-1963
+crates/cli/src/remote.rs
+  h_e31f15a7c97762 220-221,239-249,320-435
+crates/fake-agent/src/main.rs
+  h_e31f15a7c97762 634-645
+crates/ffi/src/lib.rs
+  h_e31f15a7c97762 555-743
+crates/host/src/api.rs
+  h_e31f15a7c97762 182-184,447-463
+crates/host/src/bus.rs
+  h_e31f15a7c97762 7,27-28
+crates/host/src/config.rs
+  h_e31f15a7c97762 42-53,87-91,114-118
+crates/host/src/host.rs
+  h_e31f15a7c97762 39,102,109
+crates/host/src/lib.rs
+  h_e31f15a7c97762 23
+crates/host/src/main.rs
+  h_e31f15a7c97762 34-40,94-95,97,99,160,179,183-204
+crates/host/src/remote.rs
+  h_e31f15a7c97762 14,385-399,402,447-522
+crates/host/src/screen.rs
+  h_e31f15a7c97762 1-677
+crates/host/src/session.rs
+  h_e31f15a7c97762 35-39,776-777,895,1420,1423-1426,1436,1446-1461,1957,1969
+crates/host/tests/m1_host_core.rs
+  h_e31f15a7c97762 63-86
+crates/host/tests/screen.rs
+  h_e31f15a7c97762 1-291
+crates/proto/src/lib.rs
+  h_e31f15a7c97762 9,20-21
+crates/proto/src/methods.rs
+  h_e31f15a7c97762 96-107,127-129,170-171,177-179,187-189,214,242-244
+crates/proto/src/screen.rs
+  h_e31f15a7c97762 1-290
+crates/proto/src/types.rs
+  h_e31f15a7c97762 1201-1283
+desktop/src/bridge.rs
+  h_e31f15a7c97762 37-38
+desktop/src/demo.rs
+  h_e31f15a7c97762 681-694
+desktop/src/model.rs
+  h_e31f15a7c97762 521-522,637,1395,1430-1436,2227-2231
+desktop/src/session.rs
+  h_e31f15a7c97762 923-924,926-939
+desktop/src/settings.rs
+  h_e31f15a7c97762 1578-1627
+desktop/src/view.rs
+  h_e31f15a7c97762 466-467,589
+docs/relay-protocol.md
+  h_e31f15a7c97762 159-165
+docs/status.md
+  h_e31f15a7c97762 43
+ios/AgentHost/App/AgentHostApp.swift
+  h_e31f15a7c97762 5,19-47
+ios/AgentHost/App/AppModel+Screen.swift
+  h_e31f15a7c97762 1-40
+ios/AgentHost/App/AppModel.swift
+  h_e31f15a7c97762 130-131,701,1054-1055,1261-1262
+ios/AgentHost/App/DemoData.swift
+  h_e31f15a7c97762 10,38-41,54-61,79-83
+ios/AgentHost/Core/ScreenModels.swift
+  h_e31f15a7c97762 1-80
+ios/AgentHost/Core/ScreenStream.swift
+  h_e31f15a7c97762 1-311
+ios/AgentHost/Views/ArchivedSessionsView.swift
+  h_e31f15a7c97762 126-127,144
+ios/AgentHost/Views/HostScreenView.swift
+  h_e31f15a7c97762 1-550
+ios/AgentHost/Views/SessionView.swift
+  h_e31f15a7c97762 77-80,96
+ios/AgentHost/Views/SessionsView.swift
+  h_e31f15a7c97762 16,116-126,163-166,173-181,204
+ios/AgentHost/Views/SettingsView.swift
+  h_e31f15a7c97762 10,15,53-55,105-131
+ios/Generated/agenthost_ffi.swift
+  h_e31f15a7c97762 503-518,535-550,621-638,1386-1916,2257-2337,2513-2537,2706-2735,2739-2741,2745
+ios/Generated/agenthost_ffiFFI.h
+  h_e31f15a7c97762 266-279,299-308,400-479,826-885,892-897
+ios/README.md
+  h_e31f15a7c97762 64,97
+ios/project.yml
+  h_e31f15a7c97762 47,50-51,68-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0d6bed3c41d1b2bd387674654efedd9be3eb86ab",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
