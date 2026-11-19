@@ -332,6 +332,7 @@ struct SessionView: View {
         }
         .onAppear {
             model.open(sessionId)
+            model.sessionShown(sessionId)
             #if DEBUG
             if model.isDemo, DemoData.requestedScreen == .dictating {
                 dictation.showDemo(text: DemoData.dictationText)
@@ -361,7 +362,10 @@ struct SessionView: View {
             }
             #endif
         }
-        .onDisappear { dictation.cancel() }
+        .onDisappear {
+            dictation.cancel()
+            model.sessionHidden(sessionId)
+        }
         .alert("Rename Session", isPresented: $renaming) {
             TextField(session.map { model.isQuickTasks($0.workspaceId) ? "Quick task" : model.workspaceName($0.workspaceId) } ?? "Title",
                       text: $renameText)

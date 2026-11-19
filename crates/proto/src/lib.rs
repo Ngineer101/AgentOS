@@ -18,7 +18,8 @@ pub use types::*;
 /// 2: attachments (`upload.*`, `session.prompt` `attachments`) and voice input
 /// (`voice.*`). Clients show those controls only for hosts on 2 or newer.
 /// 3: screen sharing (`screen.*`).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// 4: push notifications (`push.*`).
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
