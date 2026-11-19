@@ -36,14 +36,19 @@ async fn pair(th: &TestHost, accept: bool) -> anyhow::Result<DeviceState> {
     let start: PairStartResult = desk.call(m::DEVICE_PAIR_START, json!({})).await?;
     let qr = start.qr_payload.clone();
     let (code_tx, code_rx) = tokio::sync::oneshot::channel::<String>();
-    let phone = tokio::spawn(async move {
+    let mut phone = tokio::spawn(async move {
         remote::pair(&qr, "Test phone", |c| {
             let _ = code_tx.send(c.to_string());
         })
         .await
     });
     let pending: PairingPending = loop {
-        let n = tokio::time::timeout(T, dn.recv()).await?.unwrap();
+        // The phone can't finish before the desktop confirms, so if it does,
+        // it failed: report why instead of waiting out the timeout.
+        let n = tokio::select! {
+            n = tokio::time::timeout(T, dn.recv()) => n?.unwrap(),
+            r = &mut phone => anyhow::bail!("phone stopped before the desktop saw the pairing: {:?}", r?.err()),
+        };
         if n.method == m::N_PAIRING_PENDING {
             break serde_json::from_value(n.params)?;
         }
