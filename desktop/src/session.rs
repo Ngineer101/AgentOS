@@ -88,10 +88,20 @@ pub fn screen(s: &App, id: &str, t: &Theme, k: &Kit) -> El {
         }
     }
     lines = flush(lines, &mut agents, &agents_key);
-    if let Some(live) = tr.map(|t| t.live.as_str()).filter(|l| !l.is_empty()) {
+    let live = tr.map(|t| t.live.as_str()).filter(|l| !l.is_empty());
+    if let Some(live) = live {
         lines = lines.child(reply(live, true, t, k).key("live"));
     }
-    if events.is_empty() {
+    let pending = tr.map(|t| t.pending.as_slice()).unwrap_or(&[]);
+    for p in pending {
+        lines = lines.child(row().w_full().key(format!("pending-{}", p.prompt_id)).child(el().grow(1.0)).child(col().max_w(520.0).child(prompt_bubble(&p.payload, t))));
+    }
+    if live.is_none() {
+        if let Some(label) = crate::model::quiet_work(sess.state, events, !pending.is_empty()) {
+            lines = lines.child(working_row(label, t).key("working"));
+        }
+    }
+    if events.is_empty() && pending.is_empty() {
         lines = lines.child(t.small("No messages yet.").pt(20.0));
     }
     let transcript = col().key("transcript").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: true }).child(column(t, lines));
@@ -703,6 +713,22 @@ fn prompt_body(p: &Value, t: &Theme) -> Vec<El> {
     v
 }
 
+/// The user's message, right-aligned in its bubble.
+fn prompt_bubble(p: &Value, t: &Theme) -> El {
+    col().px(13.0).py(9.0).radius(16.0).fill(Color::WHITE.alpha(0.09)).gap(6.0).children(prompt_body(p, t))
+}
+
+/// "Working…" with a spinner, while the agent is quiet.
+fn working_row(label: &'static str, t: &Theme) -> El {
+    row()
+        .gap(if t.mac() { 6.0 } else { 8.0 })
+        .center_y()
+        .role("status")
+        .label(label)
+        .child(icon(&ic::SPINNER, 13.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9)))
+        .child(text(label).font(TextStyle::new(if t.mac() { 12.0 } else { 13.5 }, 400.0)).color(t.text2))
+}
+
 /// Seconds between two event times, "8.4 s" style.
 pub(crate) fn secs(from: i64, to: i64) -> Option<String> {
     let ms = to - from;
@@ -740,15 +766,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
     Some(match e.kind {
         EventType::Prompt => {
             let device = agenthost_proto::device_display_name(&str_of(&p["device"])).to_string();
-            let mut c = col().items_end().gap(4.0).max_w(520.0).child(
-                col()
-                    .px(13.0)
-                    .py(9.0)
-                    .radius(16.0)
-                    .fill(Color::WHITE.alpha(0.09))
-                    .gap(6.0)
-                    .children(prompt_body(p, t)),
-            );
+            let mut c = col().items_end().gap(4.0).max_w(520.0).child(prompt_bubble(p, t));
             if !device.is_empty() && device != "local" {
                 c = c.child(text(format!("From {device} · {}", crate::view::short_age(e.ts, s.look))).font(TextStyle::new(t.fs_small, 400.0)).color(t.text3));
             }

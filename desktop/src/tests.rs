@@ -67,14 +67,44 @@ fn desktop_model_runs_a_session_against_a_real_host() {
     let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
     app.prompt.replace_text("hello desktop");
     app.send_prompt();
+    // Shown before the host has answered: the message, and that the agent is on it.
+    let pending = &app.transcripts[&sid].pending;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].payload["text"], "hello desktop");
+    assert_eq!(model::quiet_work(SessionState::Idle, &app.transcripts[&sid].events, true), Some("Working…"));
     pump(&mut app, |a| {
         a.transcripts.get(&sid).map(|t| t.events.iter().any(|e| e.kind == EventType::AgentMessage && e.payload["text"] == "echo: hello desktop")).unwrap_or(false)
     });
+    // The host's copy replaced it: one bubble, not two.
+    assert!(app.transcripts[&sid].pending.is_empty());
+    assert_eq!(app.transcripts[&sid].events.iter().filter(|e| e.kind == EventType::Prompt).count(), 1);
     // Seqs are contiguous: nothing missed, nothing doubled.
     let seqs: Vec<i64> = app.transcripts[&sid].events.iter().map(|e| e.seq).collect();
     assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "{seqs:?}");
     assert!(app.prompt.text.is_empty());
     assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+fn working_shows_while_the_agent_is_quiet() {
+    use model::quiet_work;
+    let ev = |seq: i64, kind: EventType, payload: serde_json::Value| Event { session_id: "s".into(), seq, kind, payload, ts: 0 };
+    let prompt = ev(1, EventType::Prompt, serde_json::json!({"text": "hi"}));
+    let running = ev(2, EventType::SessionState, serde_json::json!({"state": "running"}));
+    let call = ev(3, EventType::ToolCall, serde_json::json!({"tool_call_id": "c1", "name": "Bash"}));
+    let done = ev(4, EventType::ToolResult, serde_json::json!({"tool_call_id": "c1", "status": "completed"}));
+    let end = ev(5, EventType::TurnEnd, serde_json::json!({"stop_reason": "end_turn"}));
+    // Sent, not yet recorded; recorded, the turn not yet started; started.
+    assert_eq!(quiet_work(SessionState::Idle, &[], true), Some("Working…"));
+    assert_eq!(quiet_work(SessionState::Idle, &[prompt.clone()], false), Some("Working…"));
+    assert_eq!(quiet_work(SessionState::Running, &[prompt.clone(), running.clone()], false), Some("Working…"));
+    assert_eq!(quiet_work(SessionState::Starting, &[], true), Some("Starting…"));
+    // A running tool shows its own spinner; once it's done the agent is quiet again.
+    assert_eq!(quiet_work(SessionState::Running, &[prompt.clone(), running.clone(), call.clone()], false), None);
+    assert_eq!(quiet_work(SessionState::Running, &[prompt.clone(), running.clone(), call.clone(), done.clone()], false), Some("Working…"));
+    // Waiting for you, or done: nothing.
+    assert_eq!(quiet_work(SessionState::WaitingApproval, &[prompt.clone()], false), None);
+    assert_eq!(quiet_work(SessionState::Idle, &[prompt, running, call, done, end], false), None);
 }
 
 #[test]
@@ -187,6 +217,9 @@ fn replies_show_live_in_the_window() {
         s.prompt.replace_text(&prompt);
         s.send_prompt();
     });
+    // The very next frame, before any reply from the host: "Working…".
+    ui.frame(0.016);
+    assert!(ui.find("working").is_some(), "nothing on screen says the agent is working");
     let mut saw_live = false;
     let t0 = Instant::now();
     loop {

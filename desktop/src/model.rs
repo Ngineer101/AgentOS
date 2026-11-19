@@ -108,6 +108,16 @@ pub struct Transcript {
     pub live: String,
     /// Side answers streaming in, by side conversation.
     pub side_live: HashMap<String, String>,
+    /// Prompts sent from here that the host hasn't recorded yet: shown at once, so a
+    /// message never seems to vanish between Send and the host's copy of it.
+    pub pending: Vec<PendingPrompt>,
+}
+
+/// A prompt on its way to the host: its id, and a `prompt` event payload to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingPrompt {
+    pub prompt_id: String,
+    pub payload: Value,
 }
 
 /// One side conversation (`/btw`), as the session's events tell it.
@@ -171,6 +181,31 @@ pub fn is_subagent_call(p: &Value) -> bool {
 }
 
 /// An event that belongs to a subagent, not the main transcript.
+/// What to say under the transcript while the agent is quiet: from Send until its first
+/// word or tool call, and between steps of a turn. `None` while something else shows the
+/// work (a running tool call, a subagent's card, an approval) or there's no work.
+pub fn quiet_work(state: SessionState, events: &[Event], pending: bool) -> Option<&'static str> {
+    let label = match state {
+        SessionState::Created | SessionState::Starting => "Starting…",
+        _ => "Working…",
+    };
+    let last = events.iter().rev().find(|e| !matches!(e.kind, EventType::SideQuestion | EventType::SideMessage | EventType::SideEnd));
+    // Sent between turns: the host starts one as soon as it has the prompt (recorded
+    // just before the session says it's running).
+    if state == SessionState::Idle && (pending || last.is_some_and(|e| e.kind == EventType::Prompt)) {
+        return Some(label);
+    }
+    if !matches!(state, SessionState::Created | SessionState::Starting | SessionState::Running) {
+        return None;
+    }
+    match last {
+        Some(e) if is_child_event(e) => None,
+        Some(e) if matches!(e.kind, EventType::ToolCall | EventType::ApprovalRequested) => None,
+        Some(e) if e.kind == EventType::ToolResult && matches!(e.payload["status"].as_str(), Some("running" | "pending" | "in_progress")) => None,
+        _ => Some(label),
+    }
+}
+
 pub fn is_child_event(e: &Event) -> bool {
     e.kind == EventType::SubagentMessage || (matches!(e.kind, EventType::ToolCall | EventType::ToolResult) && e.payload["parent_tool_call_id"].as_str().is_some_and(|p| !p.is_empty()))
 }
@@ -1074,13 +1109,15 @@ impl App {
             self.notice = Some("Wait a moment: files are still uploading.".into());
             return;
         }
-        let ids: Vec<String> = files
+        let ready: Vec<&Attachment> = files
             .iter()
             .filter_map(|f| match &f.state {
-                FileState::Ready(a) => Some(a.attachment_id.clone()),
+                FileState::Ready(a) => Some(a),
                 _ => None,
             })
             .collect();
+        let ids: Vec<String> = ready.iter().map(|a| a.attachment_id.clone()).collect();
+        let shown = json!(ready);
         if text.is_empty() && ids.is_empty() {
             return;
         }
@@ -1096,11 +1133,16 @@ impl App {
             self.prompt.clear();
             return;
         }
-        let mut params = json!({"session_id": id, "prompt_id": uuid::Uuid::new_v4().to_string(), "text": text});
+        let prompt_id = uuid::Uuid::new_v4().to_string();
+        let mut params = json!({"session_id": id, "prompt_id": prompt_id, "text": text});
+        let mut payload = json!({"text": text, "prompt_id": prompt_id});
         if !ids.is_empty() {
             params["attachments"] = json!(ids);
+            payload["attachments"] = shown;
         }
-        self.act("Send prompt", m::SESSION_PROMPT, params, Refresh::None);
+        // Shown now, not after the round trip: the bubble, and "Working…" under it.
+        self.transcripts.entry(id.clone()).or_default().pending.push(PendingPrompt { prompt_id: prompt_id.clone(), payload });
+        self.call(Tag::Prompt { session: id.clone(), prompt_id }, m::SESSION_PROMPT, params);
         self.prompt.clear();
         self.files.remove(&id);
     }
@@ -1603,6 +1645,23 @@ impl App {
                 (Tag::BuiltinSet { .. } | Tag::CommandSet { .. }, Err(e)) => {
                     self.error = Some(format!("Could not change the setting: {}", e.message));
                     self.call(Tag::Builtins, m::BUILTIN_LIST, json!({}));
+                }
+                // Accepted: the `prompt` event replaces the bubble. Already recorded
+                // (a resend): that event is in the transcript, so drop the copy.
+                (Tag::Prompt { session, prompt_id }, Ok(v)) => {
+                    if v["accepted"] == false {
+                        self.drop_pending(&session, &prompt_id);
+                    }
+                }
+                // Not sent: the words go back in an empty composer, to fix or resend.
+                (Tag::Prompt { session, prompt_id }, Err(e)) => {
+                    if let Some(p) = self.drop_pending(&session, &prompt_id) {
+                        let back = p.payload["text"].as_str().unwrap_or("");
+                        if self.prompt.text.is_empty() && self.screen == Screen::Session(session.clone()) && !back.is_empty() {
+                            self.prompt.replace_text(back);
+                        }
+                    }
+                    self.error = Some(format!("Send prompt failed: {}", e.message));
                 }
                 (Tag::Quiet, _) => {}
                 (Tag::Action { refresh, .. }, Ok(_)) => self.refresh(refresh),
@@ -2185,6 +2244,13 @@ impl App {
         }
     }
 
+    /// Take a sent prompt off the transcript (the host refused it, or already has it).
+    fn drop_pending(&mut self, session: &str, prompt_id: &str) -> Option<PendingPrompt> {
+        let t = self.transcripts.get_mut(session)?;
+        let i = t.pending.iter().position(|p| p.prompt_id == prompt_id)?;
+        Some(t.pending.remove(i))
+    }
+
     fn upsert_session(&mut self, s: Session) {
         match self.sessions.iter_mut().find(|x| x.session_id == s.session_id) {
             Some(x) => *x = s,
@@ -2204,6 +2270,10 @@ impl App {
                 t.last_seq = e.seq;
                 if matches!(kind, EventType::AgentMessage | EventType::TurnEnd) {
                     t.live.clear();
+                }
+                if kind == EventType::Prompt {
+                    let pid = e.payload["prompt_id"].as_str().unwrap_or("");
+                    t.pending.retain(|p| p.prompt_id != pid);
                 }
                 if matches!(kind, EventType::SideMessage | EventType::SideEnd) {
                     if let Some(sid) = e.payload["side_id"].as_str() {

@@ -362,6 +362,31 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
     return rows
 }
 
+/// What to say at the end of the transcript while the agent is quiet: from
+/// Send until its first word or tool call, and between steps of a turn.
+/// `nil` while something else shows the work (a running tool, a subagent,
+/// an approval) or there is no work. `pending`: a prompt from this device
+/// is on its way to the host.
+func quietWork(state: String, rows: [TranscriptRow], pending: Bool) -> String? {
+    let starting = state == SessionStateName.created || state == SessionStateName.starting
+    let label = starting ? "Starting…" : "Working…"
+    let last = rows.last
+    // Sent between turns: the host starts one as soon as it has the prompt
+    // (recorded just before the session says it's running).
+    if state == SessionStateName.idle {
+        if pending { return label }
+        if case .prompt? = last { return label }
+        return nil
+    }
+    guard starting || state == SessionStateName.running else { return nil }
+    switch last {
+    case let .tool(t)? where t.status == nil: return nil
+    case let .subagent(a)? where a.isRunning: return nil
+    case .approvalRequested?: return nil
+    default: return label
+    }
+}
+
 /// The subagents still running in these events.
 func runningSubagents(_ events: [HostEvent]) -> [SubagentRun] {
     buildRows(events).compactMap { if case let .subagent(a) = $0, a.isRunning { return a }; return nil }

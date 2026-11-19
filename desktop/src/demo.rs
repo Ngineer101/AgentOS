@@ -775,6 +775,16 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
             x.state = SessionState::Running;
         }
     }),
+    // Just sent, the host not yet answered: the message shows at once, "Working…" under it.
+    ("session-sent", |s| {
+        session(s);
+        s.approvals.clear();
+        idle(s, "ses_1");
+        s.transcripts.entry("ses_1".into()).or_default().pending.push(crate::model::PendingPrompt {
+            prompt_id: "p_demo".into(),
+            payload: json!({"text": "Now make the timeout configurable"}),
+        });
+    }),
     // A session without model settings: no chip, the shortcut hint instead.
     ("composer-no-model", |s| {
         session(s);
