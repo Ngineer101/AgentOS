@@ -631,6 +631,18 @@ async fn run_prompt(
             tokio::time::sleep(Duration::from_millis(50)).await;
         },
         "subagents" => subagents(agent, sid).await,
+        "later" => {
+            // Ends the turn now, then speaks again on its own, as an agent
+            // does when a background task it started finishes.
+            let (secs, msg) = rest.split_once(' ').unwrap_or((rest, "done later"));
+            let ms = (secs.trim().parse::<f64>().unwrap_or(0.5) * 1000.0) as u64;
+            let (a, s, msg) = (agent.clone(), sid.to_string(), msg.to_string());
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                say(&a, &s, &msg).await;
+            });
+            say(agent, sid, "started it").await;
+        }
         "crash" => {
             say(agent, sid, "about to crash").await;
             tokio::time::sleep(Duration::from_millis(50)).await;
