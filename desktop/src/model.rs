@@ -509,6 +509,8 @@ pub struct App {
     pub files: HashMap<String, Vec<PendingFile>>,
     pub next_local_id: u64,
     pub voice: Option<VoiceStatus>,
+    /// Phone screen sharing (protocol 3); `None` on older hosts.
+    pub screen_share: Option<ScreenStatus>,
     pub mic: Mic,
     /// Recent microphone level, 0..1, for the meter.
     pub mic_level: f32,
@@ -618,6 +620,7 @@ pub fn init() -> App {
         files: HashMap::new(),
         next_local_id: 1,
         voice: None,
+        screen_share: None,
         mic: Mic::Idle,
         mic_level: 0.0,
         ask_voice_download: false,
@@ -1236,6 +1239,7 @@ impl App {
                 self.error = None;
                 self.refresh_all();
                 self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
+                self.call(Tag::Screen, m::SCREEN_STATUS, json!({}));
                 if let Screen::Session(id) = self.screen.clone() {
                     self.ensure_subscribed(&id);
                 }
@@ -1265,6 +1269,13 @@ impl App {
                 }
                 // An older host without projects.
                 (Tag::ProjectRoots, Err(_)) => self.project_roots = vec![],
+                (Tag::Screen, Ok(v)) => self.screen_share = parse(v),
+                (Tag::Screen, Err(e)) => {
+                    // An older host has no screen sharing; anything else is worth saying.
+                    if e.code != agenthost_proto::jsonrpc::codes::METHOD_NOT_FOUND {
+                        self.error = Some(format!("Screen sharing: {}", e.message));
+                    }
+                }
                 (Tag::Sessions, Ok(v)) => {
                     let all: Vec<Session> = parse(v).unwrap_or_default();
                     self.sessions = all.into_iter().filter(|s| s.archived_at.is_none()).collect();
@@ -2033,6 +2044,11 @@ impl App {
                 }
             }
             m::N_CONNECTOR_CHANGED => self.refresh(Refresh::Connectors),
+            m::N_SCREEN_CHANGED => {
+                if let Some(st) = parse::<ScreenStatus>(n.params) {
+                    self.screen_share = Some(st);
+                }
+            }
             m::N_VOICE_CHANGED => {
                 if let Some(v) = parse::<VoiceStatus>(n.params) {
                     let was_ready = self.voice.as_ref().map(|v| v.ready).unwrap_or(false);
