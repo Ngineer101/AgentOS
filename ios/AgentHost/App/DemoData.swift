@@ -7,7 +7,7 @@ import UIKit
 ///     -AgentHostDemo                      sessions list, no pairing, no network
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
-///                                         archive-confirm | pair | side | config | paste |
+///                                         pair | side | config | paste |
 ///                                         quick | plain | btw | subagents
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
@@ -21,8 +21,6 @@ struct DemoData {
         case newLogin = "new-login"
         /// An archived session's transcript (read only, Unarchive).
         case archivedSession = "archived-session"
-        /// The list, asking before archiving a live session.
-        case archiveConfirm = "archive-confirm"
         /// The side questions sheet (`/btw`) with two conversations.
         case side
         /// A session with model, effort and fast mode in the composer.
