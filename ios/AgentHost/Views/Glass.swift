@@ -177,38 +177,24 @@ struct AgentBadge: View {
     }
 }
 
-/// The status icon of a session row (`SessionStatus`): spinner = working,
-/// orange dot = needs you, red = failed, tint dot = your turn, grey check =
-/// ended.
-struct SessionStatusIcon: View {
-    let state: String
+/// The small mark before a session's status (`SessionStatus`): spinner =
+/// working, orange dot = needs you, red = failed, tint dot = your turn,
+/// grey dot = ended.
+struct SessionStatusMark: View {
+    let status: SessionStatus
 
     var body: some View {
-        let status = SessionStatus(state: state)
-        ZStack {
-            Circle().fill(status.color.opacity(status == .ended ? 0.12 : 0.2))
-            glyph(status)
+        Group {
+            if status == .working {
+                Spinner(size: 12)
+            } else {
+                Circle()
+                    .fill(status == .ended ? Color(uiColor: .tertiaryLabel) : status.color)
+                    .frame(width: 7, height: 7)
+            }
         }
-        .frame(width: 30, height: 30)
+        .frame(width: 11, height: 11)
         .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func glyph(_ status: SessionStatus) -> some View {
-        switch status {
-        case .working:
-            Spinner()
-        case .needsYou, .yourTurn:
-            Circle().fill(status.color).frame(width: 10, height: 10)
-        case .failed:
-            Image(systemName: "exclamationmark")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(status.color)
-        case .ended:
-            Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
