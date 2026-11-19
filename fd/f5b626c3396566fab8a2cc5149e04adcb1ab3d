@@ -1,0 +1,45 @@
+crates/host/src/api.rs
+  s_ee6afcf89a0150::t_e08eee6abd240a 452-457
+crates/host/src/voice.rs
+  s_ee6afcf89a0150::t_44cf739a0bdcec 7-9,17,20,49-61,76-77,92,118,219-232,246-266,268,270,274-316,331-365,437,467-472,477-507,509-512,514-518,536-550,598,602-668
+crates/host/tests/m1_host_core.rs
+  s_ee6afcf89a0150::t_2000806efd896c 661-743
+crates/proto/src/methods.rs
+  s_ee6afcf89a0150::t_1a8a007c83bc8d 87-94,159,209-211
+crates/proto/src/types.rs
+  s_ee6afcf89a0150::t_2aaabc7e71911a 1133-1174,1184-1186
+desktop/README.md
+  s_ee6afcf89a0150::t_15b54417ebd568 20-22
+desktop/src/audio.rs
+  s_ee6afcf89a0150::t_d9579a1e5a7167 2-3,83-101
+desktop/src/bridge.rs
+  s_ee6afcf89a0150::t_d5338832d8b66d 79-95,107-108,169-244,288,293-299,309
+desktop/src/demo.rs
+  s_ee6afcf89a0150::t_ac0ceb255e44f2 229
+desktop/src/main.rs
+  s_ee6afcf89a0150::t_8784a65fe9a393 61,64-66
+desktop/src/model.rs
+  s_ee6afcf89a0150::t_64814203d37711 422,426-433,526-530,638-640,1028-1040,1192-1199,1203-1206,1208-1216,1218-1219,1221,1226-1307,1310-1336,1397-1401,1586,1588-1593,1597-1612,2220-2224
+desktop/src/session.rs
+  s_ee6afcf89a0150::t_2d882cdb3d5375 152,164-168,207-215,249-250,577,583,586
+desktop/src/tests.rs
+  s_ee6afcf89a0150::t_0ae4fec63f1577 586-632
+docs/status.md
+  s_ee6afcf89a0150::t_b82a9c2124d54d 43,214-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdf5b626c3396566fab8a2cc5149e04adcb1ab3d",
+  "prompts": {},
+  "sessions": {
+    "s_ee6afcf89a0150": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ee6afcf89a0150",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
