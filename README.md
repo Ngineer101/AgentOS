@@ -114,11 +114,18 @@ sandbox can't read your git credentials, so `agenthost__git_push` asks you
 to approve the exact `git push` and the host runs it with your credentials
 (fetching runs without asking), and `agenthost__create_pull_request` opens
 a pull request with your GitHub CLI after you approve its title and
-description; nothing from the repository, such as its hooks, runs outside
-the sandbox. Push notifications go from the host straight to Apple's APNs
-(the relay is not involved); their content is sealed with a key each phone
-gives the host (ChaCha20-Poly1305) and opened on the phone, so Apple sees
-only a generic alert. The host listens on no network port. See
+description. Any other command that needs your logins (`gh pr edit`, `gh
+issue create`, a deploy CLI) goes through `agenthost__run_command`: you see
+the exact argument list and its input, and the host runs it as you in the
+session's folder after you approve, never through a shell and never a
+program from a folder a session can write. "Always Allow" lets a prefix such
+as `gh pr edit` run without asking from then on (listed, and undone, under
+Settings → Connectors); shells, interpreters and build tools always ask.
+Nothing from the repository, such as its hooks, runs outside the sandbox.
+Push notifications go from the host straight to Apple's APNs (the relay is
+not involved); their content is sealed with a key each phone gives the host
+(ChaCha20-Poly1305) and opened on the phone, so Apple sees only a generic
+alert. The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development

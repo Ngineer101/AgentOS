@@ -1053,11 +1053,18 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     // primary at the leading end, as a plain button (a flat one on GNOME).
     if s.can_stop_asking(pending) {
         let a3 = pending.approval_id.clone();
-        let label = "Approve and Don't Ask Again";
-        let help = match pending.tool.as_str() {
-            "create_pull_request" => "Open this pull request, and let agents open pull requests without asking",
-            "git_push" => "Push this branch, and let agents push without asking (a force-push still asks)",
-            _ => "Approve this, and don't ask again",
+        // A command names what it stops asking for ("gh pr edit"): that prefix, not every command.
+        let rule = crate::model::allow_rule(pending).filter(|_| pending.tool == "run_command").map(|r| r.join(" "));
+        let label = match &rule {
+            Some(r) => format!("Always Allow \u{201c}{r}\u{201d}"),
+            None => "Approve and Don't Ask Again".to_string(),
+        };
+        let label = label.as_str();
+        let help = match (pending.tool.as_str(), &rule) {
+            ("run_command", Some(r)) => format!("Run this, and let agents run {r} commands without asking"),
+            ("create_pull_request", _) => "Open this pull request, and let agents open pull requests without asking".into(),
+            ("git_push", _) => "Push this branch, and let agents push without asking (a force-push still asks)".into(),
+            _ => "Approve this, and don't ask again".into(),
         };
         let b = if mac {
             t.button(label, Btn::Default, None, move |s| s.approve_and_stop_asking(&a3))

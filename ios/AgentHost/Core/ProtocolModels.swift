@@ -498,6 +498,8 @@ struct PendingApprovalModel: Codable, Identifiable, Hashable {
     }
     /// What will be posted, e.g. a pull request's description.
     var details: String? { argument("details").flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
+    /// What the details are ("Description" of a pull request, "Input" a command reads).
+    var detailsLabel: String { argument("details_label") ?? "Description" }
     /// The sheet's title ("Install a Tool?", "Push to GitHub?").
     var askTitle: String { argument("ask_title") ?? "Install a Tool?" }
 

@@ -54,6 +54,9 @@ pub enum Tag {
     /// `builtin.set_policy`, answered with the updated list. `announce` names the tool
     /// "Approve and Don't Ask Again" just set, for its toast.
     BuiltinSet { announce: Option<String> },
+    /// `builtin.set_policy` for one of `run_command`'s prefixes ("gh pr edit"). `announce`
+    /// names the prefix when a toast should say it now runs without asking.
+    CommandSet { announce: Option<Vec<String>> },
     /// `session.prompt` of this prompt in this session: the pending bubble goes when the
     /// host records it, or back into the composer if it refuses.
     Prompt { session: String, prompt_id: String },

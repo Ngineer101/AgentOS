@@ -912,19 +912,45 @@ impl App {
     }
 
     /// Whether an approval's card offers "Approve and Don't Ask Again": one of the host's
-    /// own tools that Settings can let run without asking, but never a force-push.
+    /// own tools that Settings can let run without asking, but never a force-push; for a
+    /// command, the prefix the host offers ("gh pr edit"), never for a shell or a build tool.
     pub fn can_stop_asking(&self, a: &PendingApproval) -> bool {
-        a.connector_id == BUILTIN_CONNECTOR_ID && a.arguments["force"] != json!(true) && self.builtin(&a.tool).is_some_and(|b| b.can_auto && b.policy == ToolPolicy::Ask)
+        if a.connector_id != BUILTIN_CONNECTOR_ID {
+            return false;
+        }
+        if a.tool == "run_command" {
+            return match (allow_rule(a), self.builtin("run_command")) {
+                (Some(rule), Some(b)) => !b.allowed.contains(&rule),
+                _ => false,
+            };
+        }
+        a.arguments["force"] != json!(true) && self.builtin(&a.tool).is_some_and(|b| b.can_auto && b.policy == ToolPolicy::Ask)
     }
 
-    /// "Approve and Don't Ask Again": stop asking for this tool, and approve this request.
+    /// "Approve and Don't Ask Again": stop asking for this tool (or this command), and
+    /// approve this request.
     pub fn approve_and_stop_asking(&self, approval_id: &str) {
         let Some(a) = self.approvals.iter().find(|a| a.approval_id == approval_id) else { return };
         if !self.can_stop_asking(a) {
             return self.respond(approval_id, true);
         }
-        self.call(Tag::BuiltinSet { announce: Some(a.tool.clone()) }, m::BUILTIN_SET_POLICY, json!({"name": a.tool, "policy": ToolPolicy::Auto}));
+        if let Some(rule) = allow_rule(a).filter(|_| a.tool == "run_command") {
+            self.call(Tag::CommandSet { announce: Some(rule.clone()) }, m::BUILTIN_SET_POLICY, json!({"name": "run_command", "policy": ToolPolicy::Auto, "command": rule}));
+        } else {
+            self.call(Tag::BuiltinSet { announce: Some(a.tool.clone()) }, m::BUILTIN_SET_POLICY, json!({"name": a.tool, "policy": ToolPolicy::Auto}));
+        }
         self.respond(approval_id, true);
+    }
+
+    /// Ask again before a command prefix runs ("gh pr edit"), from Settings.
+    pub fn forget_command(&self, rule: &[String]) {
+        self.call(Tag::CommandSet { announce: None }, m::BUILTIN_SET_POLICY, json!({"name": "run_command", "policy": ToolPolicy::Ask, "command": rule}));
+    }
+
+    /// The toast after "Always Allow" on a command: which commands and where to undo it.
+    pub fn command_no_ask_line(&self, rule: &[String]) -> String {
+        let place = if self.look.mac() { "Settings → Connectors" } else { "Preferences → Connectors" };
+        format!("\u{201c}{}\u{201d} commands now run without asking — change this in {place}", rule.join(" "))
     }
 
     /// The toast after "Approve and Don't Ask Again": what changed and where to undo it.
@@ -1607,7 +1633,16 @@ impl App {
                         self.push_toast(ToastKind::Info, text, Some(ToastAction::OpenSettings(Tab::Connectors)), std::time::Instant::now());
                     }
                 }
-                (Tag::BuiltinSet { .. }, Err(e)) => {
+                (Tag::CommandSet { announce }, Ok(v)) => {
+                    if let Some(list) = parse::<Vec<BuiltinTool>>(v) {
+                        self.builtins = list;
+                    }
+                    if let Some(rule) = announce.filter(|r| self.builtin("run_command").is_some_and(|b| b.allowed.contains(r))) {
+                        let text = self.command_no_ask_line(&rule);
+                        self.push_toast(ToastKind::Info, text, Some(ToastAction::OpenSettings(Tab::Connectors)), std::time::Instant::now());
+                    }
+                }
+                (Tag::BuiltinSet { .. } | Tag::CommandSet { .. }, Err(e)) => {
                     self.error = Some(format!("Could not change the setting: {}", e.message));
                     self.call(Tag::Builtins, m::BUILTIN_LIST, json!({}));
                 }
@@ -2351,4 +2386,10 @@ pub fn stop_at(n: usize, x: f32, span: f32) -> usize {
         return 0;
     }
     ((x / span).clamp(0.0, 1.0) * (n - 1) as f32).round() as usize
+}
+
+/// The command prefix a `run_command` approval offers to stop asking for ("gh pr edit").
+pub fn allow_rule(a: &PendingApproval) -> Option<Vec<String>> {
+    let rule: Vec<String> = a.arguments["allow_rule"].as_array()?.iter().map(|x| x.as_str().map(str::to_string)).collect::<Option<_>>()?;
+    (!rule.is_empty()).then_some(rule)
 }

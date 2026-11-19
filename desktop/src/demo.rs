@@ -180,9 +180,17 @@ fn base(s: &mut App) {
         icon: None,
     });
     s.builtins = vec![
-        BuiltinTool { name: "create_pull_request".into(), title: "Open pull requests".into(), description: "Opens a GitHub pull request with your GitHub CLI login.".into(), policy: ToolPolicy::Ask, can_auto: true },
-        BuiltinTool { name: "git_push".into(), title: "Push branches".into(), description: "Pushes with your git credentials. A force-push always asks.".into(), policy: ToolPolicy::Auto, can_auto: true },
-        BuiltinTool { name: "install_tool".into(), title: "Install tools on this computer".into(), description: "Runs a package manager as you, outside the sandbox. Always asks.".into(), policy: ToolPolicy::Ask, can_auto: false },
+        BuiltinTool { name: "create_pull_request".into(), title: "Open pull requests".into(), description: "Opens a GitHub pull request with your GitHub CLI login.".into(), policy: ToolPolicy::Ask, can_auto: true, allowed: vec![] },
+        BuiltinTool { name: "git_push".into(), title: "Push branches".into(), description: "Pushes with your git credentials. A force-push always asks.".into(), policy: ToolPolicy::Auto, can_auto: true, allowed: vec![] },
+        BuiltinTool { name: "install_tool".into(), title: "Install tools on this computer".into(), description: "Runs a package manager as you, outside the sandbox. Always asks.".into(), policy: ToolPolicy::Ask, can_auto: false, allowed: vec![] },
+        BuiltinTool {
+            name: "run_command".into(),
+            title: "Run commands as you".into(),
+            description: "Runs a program as you, outside the sandbox, with your logins. Asks, except for the commands you let run.".into(),
+            policy: ToolPolicy::Ask,
+            can_auto: false,
+            allowed: vec![vec!["gh".into(), "pr".into(), "comment".into()]],
+        },
     ];
     s.devices = vec![Device {
         device_id: "dev_1".into(),
@@ -386,7 +394,19 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
     a.connector_id = BUILTIN_CONNECTOR_ID.into();
     a.connector_name = "AgentHost".into();
     a.tool = tool.into();
-    if tool == "create_pull_request" {
+    if tool == "run_command" {
+        a.summary = Some("Run gh pr edit on this computer".into());
+        a.arguments = json!({
+            "command": "gh pr edit 6 --body-file -",
+            "argv": ["gh", "pr", "edit", "6", "--body-file", "-"],
+            "details": "Archiving a session no longer asks first; an Undo toast brings it back for five seconds.",
+            "details_label": "Input",
+            "reason": "You asked me to update the pull request's description to match the change.",
+            "approve_label": "Run", "ask_title": "Run a Command?",
+            "note": "Runs with your logins and your access to files, in this session's folder. Run only what you expected.",
+            "allow_rule": ["gh", "pr", "edit"], "allow_rule_text": "gh pr edit",
+        });
+    } else if tool == "create_pull_request" {
         a.summary = Some("Open a pull request \u{201c}Fix the flaky resume test\u{201d} from agenthost/fix-flaky-resume into main".into());
         a.arguments = json!({
             "command": "gh pr create --base main --head agenthost/fix-flaky-resume --title 'Fix the flaky resume test'",
@@ -641,6 +661,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         }
     }),
     ("pr-approval", |s| builtin_approval(s, "create_pull_request", false)),
+    ("command-approval", |s| builtin_approval(s, "run_command", false)),
     ("push-approval", |s| {
         builtin_approval(s, "git_push", false);
         // Pushes ask in this one, to show the card's offer.

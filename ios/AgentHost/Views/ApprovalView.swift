@@ -28,7 +28,7 @@ struct ApprovalView: View {
                         }
                     }
                     if let details = initial.details {
-                        Section(caps: "Description") {
+                        Section(caps: initial.detailsLabel) {
                             MarkdownView(text: details)
                         }
                     }

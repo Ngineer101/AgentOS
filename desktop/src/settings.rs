@@ -8,6 +8,7 @@ use crate::bridge::{Refresh, Tag};
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
 use crate::model::{login_key, App, Tab};
+use crate::session::pre;
 use crate::sheet::{scrim, tilde};
 use crate::view::{clip, short_age};
 use agenthost_proto::methods as m;
@@ -1074,48 +1075,67 @@ fn builtin_policy_name(_t: &Theme, p: ToolPolicy) -> &'static str {
     }
 }
 
-/// The host's own tools (opening pull requests, pushing, installing): whether each asks
-/// before it runs. Installing always asks; so does a force-push, whatever Push says.
+/// The host's own tools (opening pull requests, pushing, installing, running commands):
+/// whether each asks before it runs. Installing always asks; so does a force-push, whatever
+/// Push says; commands ask unless listed under Run commands (each with Ask First to undo).
 fn builtin_tools(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let rows = s
         .builtins
         .iter()
-        .map(|b| {
-            let trailing = if b.can_auto {
-                let key = format!("builtin-{}", b.name);
-                let (k2, name, current) = (key.clone(), b.name.clone(), b.policy);
-                let label = builtin_policy_name(t, b.policy);
-                let names = [builtin_policy_name(t, ToolPolicy::Ask), builtin_policy_name(t, ToolPolicy::Auto)];
-                popup_button(t, key, label).label(format!("{}: {label}", b.title)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
-                    if rune::popup_menu_supported() {
-                        let menu = [ToolPolicy::Ask, ToolPolicy::Auto]
-                            .into_iter()
-                            .zip(names)
-                            .fold(rune::PopupMenu::new(), |m, (p, n)| m.item(rune::PopupItem::new(policy_id(p), n).checked(p == current)));
-                        let name = name.clone();
-                        tx.popup_menu(menu, k2.clone(), move |s: &mut App, picked, _| {
-                            if let Some(p) = picked.and_then(policy_of).filter(|p| *p != current) {
-                                s.set_builtin_policy(&name, p);
-                            }
-                        });
-                    } else {
-                        s.set_builtin_policy(&name, if current == ToolPolicy::Auto { ToolPolicy::Ask } else { ToolPolicy::Auto });
-                    }
-                })
-            } else {
-                t.small("Always Asks").key(format!("builtin-{}", b.name))
-            };
-            form_row(t, &b.title, Some(b.description.clone()), trailing).key(format!("builtin-row-{}", b.name))
+        .flat_map(|b| {
+            let mut rows = vec![builtin_row(t, b)];
+            for rule in &b.allowed {
+                let shown = format!("{} \u{2026}", rule.join(" "));
+                let (r, key) = (rule.clone(), format!("allowed-{}", rule.join("-")));
+                let undo = t.button("Ask First", Btn::Default, None, move |s| s.forget_command(&r)).key(key.clone()).label(format!("Ask first before {shown}"));
+                let names = col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(1.0)
+                    .child(pre(t, shown))
+                    .child(t.small("Runs without asking"));
+                rows.push(row().w_full().gap(10.0).pl(if mac { 28.0 } else { 30.0 }).pr(if mac { 12.0 } else { 14.0 }).py(if mac { 6.0 } else { 10.0 }).center_y().child(names).child(undo).key(format!("row-{key}")));
+            }
+            rows
         })
         .collect();
     section(
         t,
         if mac { "Built-in tools" } else { "Built-in Tools" },
         None,
-        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentHost's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins.")),
+        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentHost's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins. Shells, interpreters and build tools always ask.")),
     )
     .key("builtin-tools")
+}
+
+/// One built-in tool: its title, what it does, and Ask First / Don't Ask (or Always Asks).
+fn builtin_row(t: &Theme, b: &BuiltinTool) -> El {
+    let trailing = if b.can_auto {
+        let key = format!("builtin-{}", b.name);
+        let (k2, name, current) = (key.clone(), b.name.clone(), b.policy);
+        let label = builtin_policy_name(t, b.policy);
+        let names = [builtin_policy_name(t, ToolPolicy::Ask), builtin_policy_name(t, ToolPolicy::Auto)];
+        popup_button(t, key, label).label(format!("{}: {label}", b.title)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
+            if rune::popup_menu_supported() {
+                let menu = [ToolPolicy::Ask, ToolPolicy::Auto]
+                    .into_iter()
+                    .zip(names)
+                    .fold(rune::PopupMenu::new(), |m, (p, n)| m.item(rune::PopupItem::new(policy_id(p), n).checked(p == current)));
+                let name = name.clone();
+                tx.popup_menu(menu, k2.clone(), move |s: &mut App, picked, _| {
+                    if let Some(p) = picked.and_then(policy_of).filter(|p| *p != current) {
+                        s.set_builtin_policy(&name, p);
+                    }
+                });
+            } else {
+                s.set_builtin_policy(&name, if current == ToolPolicy::Auto { ToolPolicy::Ask } else { ToolPolicy::Auto });
+            }
+        })
+    } else {
+        t.small("Always Asks").key(format!("builtin-{}", b.name))
+    };
+    form_row(t, &b.title, Some(b.description.clone()), trailing).key(format!("builtin-row-{}", b.name))
 }
 
 fn add_connector(s: &App, t: &Theme) -> El {
