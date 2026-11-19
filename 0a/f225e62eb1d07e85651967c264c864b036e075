@@ -1,0 +1,49 @@
+Cargo.lock
+  s_0944018e1c19c0::t_2319300debb4ff 114,124,315-320,664-675,683,760,777,806-819,845-864,899-908,942-947,1062,1131-1160,1197-1205,1283,1285,1678-1689,1720-1729,1819-1827,2011,2041-2050,2181-2194,2399,2709-2722,3576
+README.md
+  s_0944018e1c19c0::t_e8a09c99e1b71b 85-94,118-121
+crates/cli/src/main.rs
+  s_0944018e1c19c0::t_08faed0071b3fb 96-98,194-288,644
+crates/host/Cargo.toml
+  s_0944018e1c19c0::t_3a64206cd833c4 37,41-44
+crates/host/src/api.rs
+  s_0944018e1c19c0::t_580faffca99be0 464-494
+crates/host/src/config.rs
+  s_0944018e1c19c0::t_cd2be25423d5ef 54-56,95,123
+crates/host/src/host.rs
+  s_0944018e1c19c0::t_bd3fec2b99e8a1 40,104,112
+crates/host/src/lib.rs
+  s_0944018e1c19c0::t_7f84d557bdd20f 20,48
+crates/host/src/push.rs
+  s_0944018e1c19c0::t_a2d405ef62e7fa 1-870
+crates/host/src/store.rs
+  s_0944018e1c19c0::t_d6bf09b5fea9b0 104-113,147-193,931,933-934,937-983,987-1027
+crates/host/tests/push.rs
+  s_0944018e1c19c0::t_550ec499abab37 1-328
+crates/proto/src/lib.rs
+  s_0944018e1c19c0::t_7ab5dbe252fb20 21-22
+crates/proto/src/methods.rs
+  s_0944018e1c19c0::t_bcb81663bb83f4 108-119,183,191-193,203-204,230,261-266
+crates/proto/src/types.rs
+  s_0944018e1c19c0::t_2ce9eb66a24e0e 1284-1442
+desktop/Cargo.lock
+  s_0944018e1c19c0::t_446cce35a11176 188,198,603-608,1186-1197,1205,1300,1317,1394-1407,1433-1452,1578-1587,1633-1638,1827,1913-1942,2032-2040,2118,2120,3320-3331,3423-3432,3682-3690,3980,4024-4033,4371-4384,4587,5164-5177,6781
+docs/status.md
+  s_0944018e1c19c0::t_bcdd405cb9d9ed 44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0af225e62eb1d07e85651967c264c864b036e075",
+  "prompts": {},
+  "sessions": {
+    "s_0944018e1c19c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_0944018e1c19c0",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
