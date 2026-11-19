@@ -106,7 +106,8 @@ Host → relay:
 | `{"type":"pairing.open","token_hash":"<sha256 of token>","expires_at":<unix ms>}` | Open a single-use pairing slot (memory only) |
 | `{"type":"pairing.close","token_hash":"…"}` | Close a slot early |
 | `{"type":"close","conn_id":"…","code":4000}` | Close one device connection |
-| `{"type":"ping"}` | Relay answers `{"type":"pong"}` |
+| `{"type":"ping"}` | Relay answers `{"type":"pong"}` (keepalive, answered at once) |
+| `{"type":"ping","id":7}` | Relay answers `{"type":"pong","id":7}` after every control message sent before it (the host waits for this before showing a pairing code) |
 
 Relay → host:
 
@@ -114,7 +115,7 @@ Relay → host:
 | --- | --- |
 | `{"type":"open",…}` | See above |
 | `{"type":"closed","conn_id":"…"}` | A device socket closed |
-| `{"type":"pong"}` | Answer to ping |
+| `{"type":"pong"}` | Answer to ping, with its `id` if it had one |
 | `{"type":"error","message":"…"}` | A control message was rejected (socket stays open) |
 
 When the host socket closes, the relay closes every device and pair socket

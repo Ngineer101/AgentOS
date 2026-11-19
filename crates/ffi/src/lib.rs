@@ -358,7 +358,8 @@ pub struct RemoteClient {
     hello: HelloInfo,
     /// Set by `disconnect()` so `on_closed` is not reported for it.
     closed_by_app: Arc<AtomicBool>,
-    pump: Mutex<Option<JoinHandle<()>>>,
+    /// Cleared by the pump when the tunnel closes, before `on_closed`.
+    tunnel_open: Arc<AtomicBool>,
 }
 
 #[uniffi::export]
@@ -396,7 +397,9 @@ impl RemoteClient {
             };
             let closed_by_app = Arc::new(AtomicBool::new(false));
             let by_app = closed_by_app.clone();
-            let pump = tokio::spawn(async move {
+            let tunnel_open = Arc::new(AtomicBool::new(true));
+            let open = tunnel_open.clone();
+            tokio::spawn(async move {
                 let mut revoked = false;
                 while let Some(n) = notes.recv().await {
                     if n.method == methods::N_DEVICE_REVOKED {
@@ -413,6 +416,8 @@ impl RemoteClient {
                     .borrow()
                     .clone()
                     .unwrap_or_else(|| "connection closed".to_string());
+                // Before `on_closed`, so the listener sees `is_connected()` false.
+                open.store(false, Ordering::SeqCst);
                 if by_app.load(Ordering::SeqCst) {
                     return;
                 }
@@ -427,7 +432,7 @@ impl RemoteClient {
                 client: Mutex::new(Some(Arc::new(client))),
                 hello,
                 closed_by_app,
-                pump: Mutex::new(Some(pump)),
+                tunnel_open,
             }))
         })
         .await
@@ -440,15 +445,7 @@ impl RemoteClient {
 
     /// Whether `disconnect()` has not been called and the tunnel is believed open.
     pub fn is_connected(&self) -> bool {
-        let open = self.client.lock().unwrap().is_some();
-        let pumping = self
-            .pump
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|p| !p.is_finished())
-            .unwrap_or(false);
-        open && pumping
+        self.client.lock().unwrap().is_some() && self.tunnel_open.load(Ordering::SeqCst)
     }
 
     /// Send one request. `params_json` is a JSON object (or `""` for none);

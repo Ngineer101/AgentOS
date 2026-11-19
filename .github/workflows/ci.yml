@@ -6,7 +6,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +16,8 @@ jobs:
       - name: Linux sandbox prerequisites
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y bubblewrap socat ripgrep
           # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Build
@@ -27,7 +27,7 @@ jobs:
       - name: Test (including the sandbox escape suite)
         env:
           AGENTHOST_TEST_TOOLS: ${{ runner.temp }}/ah/tools
-        run: cargo test --workspace -- --test-threads 4
+        run: cargo test --workspace --no-fail-fast -- --test-threads 4
 
   relay:
     runs-on: ubuntu-24.04
@@ -47,6 +47,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Linux libraries Rune links against
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y pkg-config libasound2-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev
       - name: Test the desktop app (Rune)
         working-directory: desktop
         run: cargo test

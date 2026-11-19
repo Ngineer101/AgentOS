@@ -143,6 +143,15 @@ describe("host auth", () => {
     await ping(c);
   });
 
+  it("echoes a ping's id once the control messages before it are handled", async () => {
+    const host = await newIdentity();
+    const { c } = await connectHost(host);
+    c.send({ type: "device.allow", public_key: "short" });
+    c.send({ type: "ping", id: 7 });
+    expect((await c.json()).type).toBe("error");
+    expect(await c.json()).toEqual({ type: "pong", id: 7 });
+  });
+
   it("answers bad control messages with error and stays open", async () => {
     const host = await newIdentity();
     const { c } = await connectHost(host);
