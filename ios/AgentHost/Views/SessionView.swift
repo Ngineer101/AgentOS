@@ -1015,9 +1015,10 @@ struct ToolStatusIcon: View {
         case "denied"?:
             Image(systemName: "hand.raised.slash").font(.caption2).foregroundStyle(.orange)
         default:
+            // Muted, not red: most failed calls don't change the outcome.
             Image(systemName: tool.sandboxDenied ? "lock.trianglebadge.exclamationmark" : "xmark")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.red)
+                .foregroundStyle(tool.sandboxDenied ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
         }
     }
 }
@@ -1086,15 +1087,12 @@ struct ActivityGroupRow: View {
                         Image(systemName: "checklist")
                             .font(.caption)
                             .frame(width: 16)
+                        // No failure count here: a failed call (a grep with
+                        // no match, a missing file) is routine and the agent
+                        // carries on. Each call still shows its own status.
                         Text(title)
                             .font(.footnote)
                             .lineLimit(1)
-                        let failed = tools.filter(\.failed).count
-                        if failed > 0 {
-                            Text("\(failed) failed")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.red)
-                        }
                     }
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
