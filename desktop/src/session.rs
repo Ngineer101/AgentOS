@@ -920,15 +920,23 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
             Some(d) => format!("{word} · {d}"),
             None => word.to_string(),
         };
+        // A quiet line, not a card: a long session reads as prompts and replies at a glance.
+        let bad = word == "Failed" || word == "Denied";
         head = head
-            .gap(12.0)
-            .px(14.0)
-            .py(if open { 12.0 } else { 10.0 })
-            .child(icon(kind_icon, 16.0).color(t.text))
-            .child(col().grow(1.0).min_w(0.0).child(mono_name).child(text(sub).font(t.font_small()).color(if word == "Failed" || word == "Denied" { t.danger } else { t.text2 })))
-            .child(icon(if open { &ic::CHEVRON_UP } else { &ic::CHEVRON_DOWN }, 14.0).color(t.text));
+            .gap(8.0)
+            .px(10.0)
+            .py(if open { 8.0 } else { 4.0 })
+            .radius(t.row_radius)
+            .child(icon(kind_icon, 13.0).color(t.text3))
+            .child(mono_name.font(TextStyle::new(t.fs_mono * 0.9, 400.0).mono()).color(t.text2).shrink().min_w(0.0))
+            .child(text(sub).font(t.font_small()).color(if bad { t.danger } else { t.text3 }))
+            .child(el().grow(1.0))
+            .child(icon(if open { &ic::CHEVRON_UP } else { &ic::CHEVRON_DOWN }, 11.0).color(t.text3));
     }
-    let mut c = col().w_full().radius(t.card_radius).fill(t.card).clip_rounded(t.card_radius).child(head);
+    let mut c = col().w_full().radius(t.card_radius).clip_rounded(t.card_radius).child(head);
+    if mac || open {
+        c = c.fill(t.card);
+    }
     if mac {
         c = c.border(0.5, t.card_border);
     }

@@ -36,6 +36,7 @@ pub struct Host {
     pub secrets: Arc<dyn SecretStore>,
     pub connectors: OnceLock<Arc<dyn ConnectorAdmin>>,
     pub devices: OnceLock<Arc<dyn DeviceAdmin>>,
+    pub screen: Arc<crate::screen::Screen>,
 }
 
 pub fn os_name() -> &'static str {
@@ -98,12 +99,14 @@ impl Host {
             voice,
         });
         let sessions = SessionManager::new(ctx.clone());
+        let screen = crate::screen::Screen::new(ctx.clone());
         Ok(Arc::new(Host {
             ctx,
             sessions,
             secrets,
             connectors: OnceLock::new(),
             devices: OnceLock::new(),
+            screen,
         }))
     }
 

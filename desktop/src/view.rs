@@ -463,7 +463,8 @@ fn toolbar(s: &App, t: &Theme) -> El {
     let subtitle = if branch.is_some() && mac { format!("{subtitle} ·") } else { subtitle };
     let sub_text = text(subtitle).font(TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round())).color(t.text2).truncate();
     // GNOME has no capsule: the status leads the header's subtitle.
-    let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none()) {
+    // "Your turn" is the resting state: the header says nothing then.
+    let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none() && Status::of(x.state) != Status::YourTurn) {
         Some(x) => {
             let st = Status::of(x.state);
             let word = text(format!("{} · ", st.word())).font(TextStyle::new(t.fs_small, 700.0).lh((t.fs_small * 1.2).round())).color(if st == Status::Working { t.text2 } else { status_color(t, st) });
@@ -585,7 +586,7 @@ fn capsule(s: &App, t: &Theme) -> Option<El> {
     let mut r = row().gap(6.0).center_y();
     let mut any = false;
     let sess = s.current();
-    if let Some(x) = sess.filter(|x| x.archived_at.is_none()) {
+    if let Some(x) = sess.filter(|x| x.archived_at.is_none() && Status::of(x.state) != Status::YourTurn) {
         let st = Status::of(x.state);
         let c = status_color(t, st);
         let glyph = if st == Status::Working { icon(&ic::SPINNER, 10.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9)) } else { t.dot(c, 6.0) };

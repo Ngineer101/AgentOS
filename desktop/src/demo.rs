@@ -678,6 +678,20 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         base(s);
         s.settings = Some(Tab::Devices);
     }),
+    ("settings-screen", |s| {
+        base(s);
+        s.settings = Some(Tab::Devices);
+        s.screen_share = Some(ScreenStatus {
+            policy: ScreenPolicy { enabled: true, allow_control: true },
+            installed: true,
+            modes: vec![
+                ScreenModeInfo { mode: ScreenMode::Desktop, available: true, detail: "Hyprland (wayland-1)".into() },
+                ScreenModeInfo { mode: ScreenMode::Browser, available: true, detail: "chromium in a separate 1280x800 desktop".into() },
+            ],
+            running: Some(ScreenRunning { mode: ScreenMode::Browser, control: true, started_at: now() - 90_000, started_by: "Nico's iPhone".into(), viewers: 1 }),
+            error: None,
+        });
+    }),
     ("pairing", |s| pairing(s, false)),
     ("pairing-confirm", |s| pairing(s, true)),
     ("shortcuts", |s| {

@@ -44,8 +44,11 @@ targets:
         # The app is dark only.
         UIUserInterfaceStyle: Dark
         UIApplicationSupportsIndirectInputEvents: true
+        # Portrait, except the host screen viewer (see OrientationLock).
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: AgentHost uses the camera to scan the pairing QR code shown on your computer.
         NSMicrophoneUsageDescription: AgentHost listens to your voice to turn it into text for your prompts.
         NSSpeechRecognitionUsageDescription: AgentHost uses iOS dictation to turn your voice into text, on this iPhone where it can.
@@ -62,3 +65,7 @@ targets:
         # Set your team here or in Xcode (Signing & Capabilities).
         DEVELOPMENT_TEAM: ""
         DEAD_CODE_STRIPPING: true
+      configs:
+        # The screen viewer's demo clip (DemoData, DEBUG only) stays out of releases.
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: DemoScreen.h264

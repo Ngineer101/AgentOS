@@ -7,7 +7,7 @@ import UIKit
 ///     -AgentHostDemo                      sessions list, no pairing, no network
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
-///                                         archive-confirm | pair | side | config | paste |
+///                                         pair | side | config | paste |
 ///                                         quick | plain | btw | subagents
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
@@ -21,8 +21,6 @@ struct DemoData {
         case newLogin = "new-login"
         /// An archived session's transcript (read only, Unarchive).
         case archivedSession = "archived-session"
-        /// The list, asking before archiving a live session.
-        case archiveConfirm = "archive-confirm"
         /// The side questions sheet (`/btw`) with two conversations.
         case side
         /// A session with model, effort and fast mode in the composer.
@@ -37,6 +35,10 @@ struct DemoData {
         case btw
         /// A turn with two subagents in parallel: one done, one running.
         case subagents
+        /// The host's screen, streaming (plays `DemoScreen.h264`).
+        case screen
+        /// Choosing what to show before the stream starts.
+        case screenPicker = "screen-picker"
     }
 
     var screen: Screen
@@ -49,6 +51,14 @@ struct DemoData {
     var approvals: [PendingApprovalModel]
     var transcripts: [String: Transcript]
     var connectors: [ConnectorInfo] = []
+    var screenStatus = ScreenStatusModel(
+        policy: ScreenPolicyModel(enabled: true, allowControl: true),
+        installed: true,
+        modes: [
+            ScreenModeInfoModel(mode: ScreenModeName.desktop, available: true, detail: "Hyprland (wayland-1)"),
+            ScreenModeInfoModel(mode: ScreenModeName.browser, available: true, detail: "chromium in a separate 1280x800 desktop"),
+        ]
+    )
 
     static let flakySession = "demo-flaky"
     static let quickSession = "demo-rust"
@@ -64,6 +74,11 @@ struct DemoData {
             return Screen(rawValue: args[i + 1]) ?? .sessions
         }
         return .sessions
+    }
+
+    /// `-AgentHostDemoLandscape`: the screen viewer turns landscape.
+    static var landscape: Bool {
+        requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoLandscape")
     }
 
     /// `-AgentHostDemoModelSheet`: the session screen opens the model sheet.

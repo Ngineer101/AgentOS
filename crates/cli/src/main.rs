@@ -90,6 +90,9 @@ enum Cmd {
     /// Voice input: the local speech model.
     #[command(subcommand)]
     Voice(VoiceCmd),
+    /// Screen sharing with paired phones (through screen-relay).
+    #[command(subcommand)]
+    Screen(ScreenCmd),
     /// Send any protocol method.
     Raw {
         method: String,
@@ -148,6 +151,40 @@ enum VoiceCmd {
         /// Language hint, e.g. en (detected when absent).
         #[arg(long)]
         language: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScreenCmd {
+    /// What phones can see, whether it is allowed, and what is running.
+    Status,
+    /// Let paired phones watch the screen (desktop only).
+    Allow {
+        /// Let them click and type too.
+        #[arg(long)]
+        control: bool,
+    },
+    /// Stop letting phones see the screen; ends any stream (desktop only).
+    Off,
+    /// Stop screen sharing now.
+    Stop,
+    /// Watch as a phone would and save the H.264 stream (needs --remote).
+    /// Play it with `ffplay out.h264`.
+    Record {
+        out: PathBuf,
+        /// desktop or browser.
+        #[arg(long, default_value = "desktop")]
+        mode: String,
+        /// Stop after this many seconds.
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+        /// Click at x,y (fractions of the screen, e.g. 0.5,0.5) after the
+        /// first frame; needs control to be allowed.
+        #[arg(long, value_parser = parse_point)]
+        click: Option<(f64, f64)>,
+        /// Type this text after the first frame; needs control.
+        #[arg(long)]
+        r#type: Option<String>,
     },
 }
 
@@ -503,7 +540,9 @@ async fn run(cli: Cli) -> Result<()> {
         None => Client::connect(&socket_path(&cli)).await?,
     };
     let json_out = cli.json;
+    let remote_state = cli.remote.clone();
     match cli.cmd {
+        Cmd::Screen(cmd) => screen_cmd(&c, cmd, remote_state.as_deref(), json_out).await?,
         Cmd::Status => {
             let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
             if json_out {
@@ -1798,6 +1837,128 @@ fn truncate_str(s: &str, max: usize) -> String {
         end -= 1;
     }
     format!("{}…", &s[..end])
+}
+
+/// `x,y` as fractions of the screen.
+fn parse_point(s: &str) -> Result<(f64, f64), String> {
+    let (x, y) = s.split_once(',').ok_or("expected x,y, e.g. 0.5,0.5")?;
+    let f = |v: &str| v.trim().parse::<f64>().map_err(|_| format!("{v:?} is not a number"));
+    Ok((f(x)?, f(y)?))
+}
+
+async fn screen_cmd(
+    c: &Client,
+    cmd: ScreenCmd,
+    remote: Option<&std::path::Path>,
+    json_out: bool,
+) -> Result<()> {
+    use agenthost_proto::screen::{self as wire, Input, ServerMessage};
+    let st: ScreenStatus = match cmd {
+        ScreenCmd::Status => c.call(m::SCREEN_STATUS, json!({})).await?,
+        ScreenCmd::Allow { control } => {
+            c.call(m::SCREEN_SET_POLICY, json!({"enabled": true, "allow_control": control}))
+                .await?
+        }
+        ScreenCmd::Off => c.call(m::SCREEN_SET_POLICY, json!({"enabled": false})).await?,
+        ScreenCmd::Stop => c.call(m::SCREEN_STOP, json!({})).await?,
+        ScreenCmd::Record { out, mode, seconds, click, r#type } => {
+            let Some(state) = remote else {
+                bail!("record watches as a paired device would: add --remote <state file>");
+            };
+            let state = agenthost_cli::remote::DeviceState::load(state)?;
+            let control = click.is_some() || r#type.is_some();
+            let start: ScreenStartResult = c
+                .call(m::SCREEN_START, json!({"mode": mode, "control": control}))
+                .await?;
+            let mut s = agenthost_cli::remote::open_screen(&state, &start.ticket).await?;
+            let mut file = std::fs::File::create(&out)?;
+            let t0 = std::time::Instant::now();
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(seconds);
+            let (mut frames, mut bytes, mut size, mut acted) = (0u64, 0u64, (0, 0), !control);
+            loop {
+                let msg = tokio::select! {
+                    m = s.incoming.recv() => m,
+                    _ = tokio::time::sleep_until(deadline) => break,
+                };
+                let Some(msg) = msg else {
+                    bail!("the stream ended: {}", s.closed.borrow().clone().unwrap_or_default());
+                };
+                let ServerMessage::Frame(f) = wire::decode(&msg)? else { continue };
+                use std::io::Write;
+                file.write_all(&f.data)?;
+                s.send(wire::ack(f.generation, f.sequence, 0)).await?;
+                frames += 1;
+                bytes += f.data.len() as u64;
+                size = (f.width, f.height);
+                if !acted {
+                    acted = true;
+                    let frac = |v: f64| (v.clamp(0.0, 1.0) * wire::COORD_MAX as f64) as u16;
+                    if let Some((px, py)) = click {
+                        let (x, y) = (frac(px), frac(py));
+                        for i in [
+                            Input::PointerMove { x, y },
+                            Input::Button { button: 1, down: true, x, y },
+                            Input::Button { button: 1, down: false, x, y },
+                        ] {
+                            s.send(i.message(f.generation)).await?;
+                        }
+                    }
+                    for ch in r#type.iter().flat_map(|t| t.chars()) {
+                        s.send(Input::Text(ch).message(f.generation)).await?;
+                    }
+                }
+            }
+            let secs = t0.elapsed().as_secs_f64();
+            let summary = json!({
+                "file": out.display().to_string(), "frames": frames, "width": size.0, "height": size.1,
+                "seconds": secs, "kbps": (bytes as f64 * 8.0 / 1000.0 / secs).round(), "control": start.control,
+            });
+            if json_out {
+                print_json(&summary);
+            } else {
+                println!(
+                    "Saved {frames} frames ({}x{}, {} kbps average) to {}. Play it with: ffplay {}",
+                    size.0, size.1, summary["kbps"], out.display(), out.display()
+                );
+            }
+            return Ok(());
+        }
+    };
+    if json_out {
+        print_json(&serde_json::to_value(&st)?);
+        return Ok(());
+    }
+    let p = st.policy;
+    println!(
+        "Phones: {}",
+        match (p.enabled, p.allow_control) {
+            (false, _) => "not allowed (agenthost screen allow)",
+            (true, false) => "may watch",
+            (true, true) => "may watch, click and type",
+        }
+    );
+    for mode in &st.modes {
+        let name = match mode.mode {
+            ScreenMode::Desktop => "Your desktop",
+            ScreenMode::Browser => "Browser on host",
+        };
+        println!("  {} {name}: {}", if mode.available { "✓" } else { "✗" }, mode.detail);
+    }
+    match &st.running {
+        Some(r) => println!(
+            "Running: {:?}{}, started by {} {}, {} viewer(s)",
+            r.mode,
+            if r.control { " with control" } else { ", view only" },
+            r.started_by,
+            ago(r.started_at),
+            r.viewers
+        ),
+        None => println!("Not running."),
+    }
+    if let Some(e) = &st.error {
+        println!("Last error: {e}");
+    }
+    Ok(())
 }
 
 fn print_voice(st: &VoiceStatus) {

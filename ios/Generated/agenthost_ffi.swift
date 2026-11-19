@@ -503,6 +503,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
@@ -513,6 +529,22 @@ fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
 
     public static func write(_ value: Int64, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
+    typealias FfiType = Double
+    typealias SwiftType = Double
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
+        return try lift(readDouble(&buf))
+    }
+
+    public static func write(_ value: Double, into buf: inout [UInt8]) {
+        writeDouble(&buf, lower(value))
     }
 }
 
@@ -583,6 +615,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -1333,6 +1383,537 @@ public func FfiConverterTypeRemoteClient_lower(_ value: RemoteClient) -> UInt64 
 
 
 
+
+
+/**
+ * Receives one screen stream.
+ */
+public protocol ScreenListener: AnyObject, Sendable {
+    
+    /**
+     * A frame, in order. Called on a background thread.
+     */
+    func onFrame(frame: ScreenFrame) 
+    
+    /**
+     * The stream ended (host stopped sharing, another viewer took over, the
+     * network dropped). Called once, unless the app called `close()`.
+     */
+    func onClosed(reason: String) 
+    
+}
+/**
+ * Receives one screen stream.
+ */
+open class ScreenListenerImpl: ScreenListener, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_agenthost_ffi_fn_clone_screenlistener(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_agenthost_ffi_fn_free_screenlistener(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * A frame, in order. Called on a background thread.
+     */
+open func onFrame(frame: ScreenFrame)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screenlistener_on_frame(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeScreenFrame_lower(frame),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * The stream ended (host stopped sharing, another viewer took over, the
+     * network dropped). Called once, unless the app called `close()`.
+     */
+open func onClosed(reason: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screenlistener_on_closed(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(reason),uniffiCallStatus
+    )
+}
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceScreenListener {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceScreenListener = UniffiVTableCallbackInterfaceScreenListener(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeScreenListener.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface ScreenListener: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeScreenListener.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface ScreenListener: handle missing in uniffiClone")
+            }
+        },
+        onFrame: { (
+            uniffiHandle: UInt64,
+            frame: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeScreenListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onFrame(
+                     frame: try FfiConverterTypeScreenFrame_lift(frame)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onClosed: { (
+            uniffiHandle: UInt64,
+            reason: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeScreenListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onClosed(
+                     reason: try FfiConverterString.lift(reason)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceScreenListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceScreenListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitScreenListener() {
+    uniffi_agenthost_ffi_fn_init_callback_vtable_screenlistener(UniffiCallbackInterfaceScreenListener.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeScreenListener: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<ScreenListener>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = ScreenListener
+
+    public static func lift(_ handle: UInt64) throws -> ScreenListener {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return ScreenListenerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: ScreenListener) -> UInt64 {
+         if let rustImpl = value as? ScreenListenerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScreenListener {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ScreenListener, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenListener_lift(_ handle: UInt64) throws -> ScreenListener {
+    return try FfiConverterTypeScreenListener.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenListener_lower(_ value: ScreenListener) -> UInt64 {
+    return FfiConverterTypeScreenListener.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A screen stream on a tunnel of its own. Get a ticket with `screen.start`
+ * on the normal connection first. Input methods take positions as fractions
+ * of the desktop (0…1) and do nothing unless the ticket allows control.
+ */
+public protocol ScreenSessionProtocol: AnyObject, Sendable {
+    
+    /**
+     * Acknowledge a frame. `wait_us`: how long it waited between arriving
+     * and being drawn, so a busy phone isn't mistaken for a slow network.
+     */
+    func ack(generation: UInt32, sequence: UInt32, waitUs: UInt32) 
+    
+    /**
+     * Hold or release a button, for drags.
+     */
+    func button(x: Double, y: Double, button: UInt16, down: Bool) 
+    
+    /**
+     * Press and release a button (1 left, 2 middle, 3 right) at a point.
+     */
+    func click(x: Double, y: Double, button: UInt16) 
+    
+    /**
+     * Close the stream. `on_closed` is not called for it.
+     */
+    func close() 
+    
+    /**
+     * Press and release one key by HID usage (Enter 40, Escape 41,
+     * Backspace 42, Tab 43, arrows 79–82), with modifiers held around it
+     * (HID 224–231: left Ctrl, Shift, Alt, GUI/⌘, then the right ones).
+     */
+    func key(hid: UInt16, modifiers: [UInt16]) 
+    
+    func pointerMove(x: Double, y: Double) 
+    
+    /**
+     * Scroll by notches at a point (positive `dy` scrolls down).
+     */
+    func scroll(x: Double, y: Double, dx: Int32, dy: Int32) 
+    
+    /**
+     * Type text as characters (layout independent).
+     */
+    func typeText(text: String) 
+    
+}
+/**
+ * A screen stream on a tunnel of its own. Get a ticket with `screen.start`
+ * on the normal connection first. Input methods take positions as fractions
+ * of the desktop (0…1) and do nothing unless the ticket allows control.
+ */
+open class ScreenSession: ScreenSessionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_agenthost_ffi_fn_clone_screensession(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_agenthost_ffi_fn_free_screensession(handle, $0) }
+    }
+
+    
+public static func `open`(credentials: DeviceCredentials, ticket: String, listener: ScreenListener)async throws  -> ScreenSession  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_agenthost_ffi_fn_constructor_screensession_open(FfiConverterTypeDeviceCredentials_lower(credentials),FfiConverterString.lower(ticket),FfiConverterTypeScreenListener_lower(listener)
+                )
+            },
+            pollFunc: ffi_agenthost_ffi_rust_future_poll_u64,
+            completeFunc: ffi_agenthost_ffi_rust_future_complete_u64,
+            freeFunc: ffi_agenthost_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeScreenSession_lift,
+            errorHandler: FfiConverterTypeAgentHostError_lift
+        )
+}
+    
+
+    
+    /**
+     * Acknowledge a frame. `wait_us`: how long it waited between arriving
+     * and being drawn, so a busy phone isn't mistaken for a slow network.
+     */
+open func ack(generation: UInt32, sequence: UInt32, waitUs: UInt32)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_ack(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(generation),
+        FfiConverterUInt32.lower(sequence),
+        FfiConverterUInt32.lower(waitUs),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Hold or release a button, for drags.
+     */
+open func button(x: Double, y: Double, button: UInt16, down: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_button(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(x),
+        FfiConverterDouble.lower(y),
+        FfiConverterUInt16.lower(button),
+        FfiConverterBool.lower(down),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Press and release a button (1 left, 2 middle, 3 right) at a point.
+     */
+open func click(x: Double, y: Double, button: UInt16)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_click(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(x),
+        FfiConverterDouble.lower(y),
+        FfiConverterUInt16.lower(button),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Close the stream. `on_closed` is not called for it.
+     */
+open func close()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_close(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Press and release one key by HID usage (Enter 40, Escape 41,
+     * Backspace 42, Tab 43, arrows 79–82), with modifiers held around it
+     * (HID 224–231: left Ctrl, Shift, Alt, GUI/⌘, then the right ones).
+     */
+open func key(hid: UInt16, modifiers: [UInt16])  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_key(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt16.lower(hid),
+        FfiConverterSequenceUInt16.lower(modifiers),uniffiCallStatus
+    )
+}
+}
+    
+open func pointerMove(x: Double, y: Double)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_pointer_move(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(x),
+        FfiConverterDouble.lower(y),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Scroll by notches at a point (positive `dy` scrolls down).
+     */
+open func scroll(x: Double, y: Double, dx: Int32, dy: Int32)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_scroll(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(x),
+        FfiConverterDouble.lower(y),
+        FfiConverterInt32.lower(dx),
+        FfiConverterInt32.lower(dy),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Type text as characters (layout independent).
+     */
+open func typeText(text: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_agenthost_ffi_fn_method_screensession_type_text(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(text),uniffiCallStatus
+    )
+}
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeScreenSession: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = ScreenSession
+
+    public static func lift(_ handle: UInt64) throws -> ScreenSession {
+        return ScreenSession(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: ScreenSession) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScreenSession {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ScreenSession, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenSession_lift(_ handle: UInt64) throws -> ScreenSession {
+    return try FfiConverterTypeScreenSession.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenSession_lower(_ value: ScreenSession) -> UInt64 {
+    return FfiConverterTypeScreenSession.lower(value)
+}
+
+
+
+
 /**
  * What a paired device must keep, and nothing else. Same fields as the
  * CLI's `DeviceState`; binary values are base64url without padding.
@@ -1674,6 +2255,87 @@ public func FfiConverterTypeProtocolConstants_lower(_ value: ProtocolConstants) 
 
 
 /**
+ * One H.264 access unit from screen-relay: Annex B NAL units, with SPS and
+ * PPS on keyframes. Decode in order; ACK each with [`ScreenSession::ack`]
+ * once it was drawn (or dropped for a newer one).
+ */
+public struct ScreenFrame: Equatable, Hashable {
+    public var generation: UInt32
+    public var sequence: UInt32
+    public var keyframe: Bool
+    /**
+     * Desktop size in pixels.
+     */
+    public var width: UInt16
+    public var height: UInt16
+    public var data: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt32, sequence: UInt32, keyframe: Bool, 
+        /**
+         * Desktop size in pixels.
+         */width: UInt16, height: UInt16, data: Data) {
+        self.generation = generation
+        self.sequence = sequence
+        self.keyframe = keyframe
+        self.width = width
+        self.height = height
+        self.data = data
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ScreenFrame: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeScreenFrame: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScreenFrame {
+        return
+            try ScreenFrame(
+                generation: FfiConverterUInt32.read(from: &buf), 
+                sequence: FfiConverterUInt32.read(from: &buf), 
+                keyframe: FfiConverterBool.read(from: &buf), 
+                width: FfiConverterUInt16.read(from: &buf), 
+                height: FfiConverterUInt16.read(from: &buf), 
+                data: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ScreenFrame, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.generation, into: &buf)
+        FfiConverterUInt32.write(value.sequence, into: &buf)
+        FfiConverterBool.write(value.keyframe, into: &buf)
+        FfiConverterUInt16.write(value.width, into: &buf)
+        FfiConverterUInt16.write(value.height, into: &buf)
+        FfiConverterData.write(value.data, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenFrame_lift(_ buf: RustBuffer) throws -> ScreenFrame {
+    return try FfiConverterTypeScreenFrame.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeScreenFrame_lower(_ value: ScreenFrame) -> RustBuffer {
+    return FfiConverterTypeScreenFrame.lower(value)
+}
+
+
+/**
  * Every failure the API reports.
  */
 public 
@@ -1851,6 +2513,31 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt16: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt16]
+
+    public static func write(_ value: [UInt16], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt16.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt16] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt16]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt16.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2016,12 +2703,46 @@ private let initializationResult: InitializationResult = {
     if (uniffi_agenthost_ffi_checksum_method_remoteclient_upload_file() != 44424) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_agenthost_ffi_checksum_method_screenlistener_on_frame() != 41286) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screenlistener_on_closed() != 21594) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_ack() != 61232) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_button() != 4742) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_click() != 4265) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_close() != 64671) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_key() != 42751) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_pointer_move() != 57943) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_scroll() != 19978) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_method_screensession_type_text() != 5138) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_agenthost_ffi_checksum_constructor_remoteclient_connect() != 45504) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agenthost_ffi_checksum_constructor_screensession_open() != 34276) {
         return InitializationResult.apiChecksumMismatch
     }
 
     uniffiCallbackInitConnectionListener()
     uniffiCallbackInitPairingListener()
+    uniffiCallbackInitScreenListener()
     return InitializationResult.ok
 }()
 

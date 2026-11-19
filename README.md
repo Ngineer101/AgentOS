@@ -28,7 +28,7 @@ over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP).
 ```sh
 # Prerequisites: Rust, Node 22+, bubblewrap, socat, ripgrep
 cargo build --release
-./target/release/agenthostd install-tools     # pinned adapters + sandbox runtime
+./target/release/agenthostd install-tools     # pinned adapters, sandbox runtime, screen-relay
 ./target/release/agenthostd run &             # listens only on a Unix socket
 
 agenthost status                              # sandbox health, agents, login state

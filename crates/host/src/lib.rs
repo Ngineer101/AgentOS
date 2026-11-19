@@ -20,6 +20,7 @@ pub mod proxy;
 pub mod relay_dev;
 pub mod remote;
 pub mod sandbox;
+pub mod screen;
 pub mod secrets;
 pub mod session;
 pub mod store;

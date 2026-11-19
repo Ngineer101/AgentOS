@@ -6,6 +6,7 @@
 
 pub mod jsonrpc;
 pub mod methods;
+pub mod screen;
 pub mod tunnel;
 pub mod types;
 
@@ -16,7 +17,8 @@ pub use types::*;
 ///
 /// 2: attachments (`upload.*`, `session.prompt` `attachments`) and voice input
 /// (`voice.*`). Clients show those controls only for hosts on 2 or newer.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// 3: screen sharing (`screen.*`).
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

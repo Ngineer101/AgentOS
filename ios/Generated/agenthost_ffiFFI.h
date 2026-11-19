@@ -264,6 +264,20 @@ typedef void (*UniffiCallbackInterfacePairingListenerMethod0)(uint64_t, RustBuff
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SCREEN_LISTENER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SCREEN_LISTENER_METHOD0
+typedef void (*UniffiCallbackInterfaceScreenListenerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SCREEN_LISTENER_METHOD1
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SCREEN_LISTENER_METHOD1
+typedef void (*UniffiCallbackInterfaceScreenListenerMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_CONNECTION_LISTENER
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_CONNECTION_LISTENER
 typedef struct UniffiVTableCallbackInterfaceConnectionListener {
@@ -281,6 +295,16 @@ typedef struct UniffiVTableCallbackInterfacePairingListener {
     UniffiCallbackInterfaceClone _Nonnull uniffiClone;
     UniffiCallbackInterfacePairingListenerMethod0 _Nonnull onShortCode;
 } UniffiVTableCallbackInterfacePairingListener;
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SCREEN_LISTENER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SCREEN_LISTENER
+typedef struct UniffiVTableCallbackInterfaceScreenListener {
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
+    UniffiCallbackInterfaceScreenListenerMethod0 _Nonnull onFrame;
+    UniffiCallbackInterfaceScreenListenerMethod1 _Nonnull onClosed;
+} UniffiVTableCallbackInterfaceScreenListener;
 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CLONE_CONNECTIONLISTENER
@@ -371,6 +395,86 @@ uint64_t uniffi_agenthost_ffi_fn_method_remoteclient_transcribe_wav_file(uint64_
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_UPLOAD_FILE
 #define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_REMOTECLIENT_UPLOAD_FILE
 uint64_t uniffi_agenthost_ffi_fn_method_remoteclient_upload_file(uint64_t ptr, RustBuffer path, RustBuffer name, RustBuffer mime
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CLONE_SCREENLISTENER
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CLONE_SCREENLISTENER
+uint64_t uniffi_agenthost_ffi_fn_clone_screenlistener(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FREE_SCREENLISTENER
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FREE_SCREENLISTENER
+void uniffi_agenthost_ffi_fn_free_screenlistener(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_INIT_CALLBACK_VTABLE_SCREENLISTENER
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_INIT_CALLBACK_VTABLE_SCREENLISTENER
+void uniffi_agenthost_ffi_fn_init_callback_vtable_screenlistener(const UniffiVTableCallbackInterfaceScreenListener* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENLISTENER_ON_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENLISTENER_ON_FRAME
+void uniffi_agenthost_ffi_fn_method_screenlistener_on_frame(uint64_t ptr, RustBuffer frame, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENLISTENER_ON_CLOSED
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENLISTENER_ON_CLOSED
+void uniffi_agenthost_ffi_fn_method_screenlistener_on_closed(uint64_t ptr, RustBuffer reason, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CLONE_SCREENSESSION
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CLONE_SCREENSESSION
+uint64_t uniffi_agenthost_ffi_fn_clone_screensession(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FREE_SCREENSESSION
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FREE_SCREENSESSION
+void uniffi_agenthost_ffi_fn_free_screensession(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CONSTRUCTOR_SCREENSESSION_OPEN
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_CONSTRUCTOR_SCREENSESSION_OPEN
+uint64_t uniffi_agenthost_ffi_fn_constructor_screensession_open(RustBuffer credentials, RustBuffer ticket, uint64_t listener
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_ACK
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_ACK
+void uniffi_agenthost_ffi_fn_method_screensession_ack(uint64_t ptr, uint32_t generation, uint32_t sequence, uint32_t wait_us, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_BUTTON
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_BUTTON
+void uniffi_agenthost_ffi_fn_method_screensession_button(uint64_t ptr, double x, double y, uint16_t button, int8_t down, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_CLICK
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_CLICK
+void uniffi_agenthost_ffi_fn_method_screensession_click(uint64_t ptr, double x, double y, uint16_t button, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_CLOSE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_CLOSE
+void uniffi_agenthost_ffi_fn_method_screensession_close(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_KEY
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_KEY
+void uniffi_agenthost_ffi_fn_method_screensession_key(uint64_t ptr, uint16_t hid, RustBuffer modifiers, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_POINTER_MOVE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_POINTER_MOVE
+void uniffi_agenthost_ffi_fn_method_screensession_pointer_move(uint64_t ptr, double x, double y, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_SCROLL
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_SCROLL
+void uniffi_agenthost_ffi_fn_method_screensession_scroll(uint64_t ptr, double x, double y, int32_t dx, int32_t dy, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_TYPE_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_METHOD_SCREENSESSION_TYPE_TEXT
+void uniffi_agenthost_ffi_fn_method_screensession_type_text(uint64_t ptr, RustBuffer text, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_FN_FUNC_PAIR
@@ -721,9 +825,75 @@ uint16_t uniffi_agenthost_ffi_checksum_method_remoteclient_upload_file(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENLISTENER_ON_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENLISTENER_ON_FRAME
+uint16_t uniffi_agenthost_ffi_checksum_method_screenlistener_on_frame(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENLISTENER_ON_CLOSED
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENLISTENER_ON_CLOSED
+uint16_t uniffi_agenthost_ffi_checksum_method_screenlistener_on_closed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_ACK
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_ACK
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_ack(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_BUTTON
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_BUTTON
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_button(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_CLICK
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_CLICK
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_click(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_CLOSE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_CLOSE
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_close(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_KEY
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_KEY
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_POINTER_MOVE
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_POINTER_MOVE
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_pointer_move(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_SCROLL
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_SCROLL
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_scroll(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_TYPE_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_METHOD_SCREENSESSION_TYPE_TEXT
+uint16_t uniffi_agenthost_ffi_checksum_method_screensession_type_text(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_CONSTRUCTOR_REMOTECLIENT_CONNECT
 #define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_CONSTRUCTOR_REMOTECLIENT_CONNECT
 uint16_t uniffi_agenthost_ffi_checksum_constructor_remoteclient_connect(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_CONSTRUCTOR_SCREENSESSION_OPEN
+#define UNIFFI_FFIDEF_UNIFFI_AGENTHOST_FFI_CHECKSUM_CONSTRUCTOR_SCREENSESSION_OPEN
+uint16_t uniffi_agenthost_ffi_checksum_constructor_screensession_open(void
     
 );
 #endif

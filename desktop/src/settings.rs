@@ -1575,6 +1575,56 @@ fn devices(s: &App, t: &Theme) -> El {
         .gap(18.0)
         .child(col().w_full().gap(0.0).child(section(t, if mac { "Paired devices" } else { "Paired Devices" }, Some(format!("Phones reach {here} through your relay")), t.group(rows, 44.0))).child(pair))
         .child(section(t, "Relay", None, t.group(relay, if mac { 12.0 } else { 0.0 })))
+        .child(screen_sharing(s, t))
+}
+
+/// Whether paired phones may see this computer's screen (through screen-relay),
+/// and click and type on it. Only this app can turn it on.
+fn screen_sharing(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let title = if mac { "Screen sharing" } else { "Screen Sharing" };
+    let Some(st) = &s.screen_share else {
+        return section(t, title, None, t.group(vec![form_row(t, "Not available", Some("Update agenthostd to share this screen with your phone.".into()), el())], 0.0));
+    };
+    let p = st.policy;
+    let mut rows = vec![
+        form_row(
+            t,
+            "Let phones see this screen",
+            Some("For a sign-in page or an approval in a browser while you're away".into()),
+            t.switch(p.enabled, "Let phones see this screen", move |s: &mut App| {
+                s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": !p.enabled, "allow_control": p.allow_control && !p.enabled}))
+            }),
+        ),
+        form_row(
+            t,
+            "Let phones click and type",
+            Some(if p.enabled { "Full control of everything you're logged in to".into() } else { "Turn on screen sharing first".into() }),
+            if p.enabled {
+                t.switch(p.allow_control, "Let phones click and type", move |s: &mut App| {
+                    s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": true, "allow_control": !p.allow_control}))
+                })
+            } else {
+                t.small("Off")
+            },
+        ),
+    ];
+    for mode in &st.modes {
+        let name = match mode.mode {
+            ScreenMode::Desktop => "Your desktop",
+            ScreenMode::Browser => "Browser on this computer",
+        };
+        rows.push(form_row(t, name, Some(mode.detail.clone()), t.status(if mode.available { t.ok } else { t.warn }, if mode.available { "Available" } else { "Unavailable" }, false)));
+    }
+    if let Some(r) = &st.running {
+        let what = if r.control { "Controlled" } else { "Watched" };
+        let who = if r.viewers > 0 { format!("{what} by {}", r.started_by) } else { format!("Started by {}, waiting for the phone", r.started_by) };
+        rows.push(form_row(t, "Sharing now", Some(who), t.small_button_danger("Stop", |s| s.call(Tag::Screen, m::SCREEN_STOP, json!({}))).key("screen-stop")));
+    }
+    if let Some(e) = &st.error {
+        rows.push(form_row(t, "Last error", Some(e.clone()), el()));
+    }
+    section(t, title, Some("Through screen-relay, started only while a phone watches".into()), t.group(rows, if mac { 12.0 } else { 0.0 }))
 }
 
 fn qr(payload: &str, t: &Theme) -> El {

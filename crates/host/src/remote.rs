@@ -11,7 +11,7 @@ use crate::host::{DeviceAdmin, Host};
 use crate::secrets::SecretStore;
 use crate::store::DeviceRecord;
 use crate::util::{new_id, now_ms};
-use agenthost_proto::jsonrpc::{codes, RpcError};
+use agenthost_proto::jsonrpc::{codes, Message, Request, Response, RpcError};
 use agenthost_proto::methods::{self as m, Capability};
 use agenthost_proto::tunnel::{
     self, b64, unb64, Handshake, PairHello, PairResult, PairingQr, RelayKey, StaticKey, Transport,
@@ -382,8 +382,24 @@ impl Remote {
             label: rec.device.name.clone(),
         };
         let _ = self.ctx.store.device_seen(&rec.device.device_id);
+        // The first message decides what this tunnel is: a client connection
+        // (it starts with `hello`) or a screen stream (`screen.attach`).
+        let first = loop {
+            let frame = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await?
+                .ok_or_else(|| anyhow!("closed"))?;
+            if let Some(msg) = transport.open(&frame).map_err(|e| anyhow!("tunnel integrity failure: {e}"))? {
+                break String::from_utf8(msg).map_err(|_| anyhow!("not UTF-8"))?;
+            }
+        };
+        if let Ok(Message::Request(req)) = Message::parse(&first) {
+            if req.method == m::SCREEN_ATTACH {
+                return self.serve_screen(conn_id, rx, transport, &host, &principal, req).await;
+            }
+        }
         let (in_tx, in_rx) = mpsc::channel::<String>(256);
         let (out_tx, mut out_rx) = mpsc::channel::<String>(1024);
+        in_tx.send(first).await.map_err(|_| anyhow!("closed"))?;
         let serve = tokio::spawn(serve_connection(host, principal, in_rx, out_tx));
         let mut bus = self.ctx.bus.subscribe();
         let device_id = rec.device.device_id.clone();
@@ -426,6 +442,82 @@ impl Remote {
             bail!("device revoked");
         }
         Ok(())
+    }
+
+    /// A screen stream: answer `screen.attach`, then pipe whole screen-relay
+    /// messages between the tunnel and the engine.
+    async fn serve_screen(
+        self: &Arc<Self>,
+        conn_id: &str,
+        mut rx: mpsc::Receiver<Vec<u8>>,
+        mut transport: Transport,
+        host: &Arc<Host>,
+        principal: &Principal,
+        req: Request,
+    ) -> Result<()> {
+        let allowed = m::required_capability(m::SCREEN_ATTACH)
+            .is_some_and(|c| principal.capabilities.contains(&c));
+        let attached = if allowed {
+            serde_json::from_value::<ScreenAttachParams>(req.params.clone())
+                .map_err(|e| RpcError::invalid_params(e.to_string()))
+                .and_then(|p| host.screen.attach(&p, principal.device_id.as_deref()))
+        } else {
+            Err(RpcError::new(codes::CAPABILITY_DENIED, "this device may not watch the screen"))
+        };
+        let resp = match &attached {
+            Ok(_) => Response::ok(req.id.clone(), json!({"attached": true})),
+            Err(e) => Response::err(req.id.clone(), e.clone()),
+        };
+        for f in transport.seal(Message::Response(resp).to_json().as_bytes())? {
+            self.send_frame_wait(conn_id, &f).await;
+        }
+        let Ok(attached) = attached else { return Ok(()) };
+        let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
+        let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(16);
+        let screen = host.screen.clone();
+        let mut pipe = tokio::spawn(async move { screen.pipe(attached, in_rx, out_tx).await });
+        let mut bus = self.ctx.bus.subscribe();
+        let device_id = principal.device_id.clone();
+        let result = loop {
+            tokio::select! {
+                r = &mut pipe => break r.map_err(|e| anyhow!("{e}")).and_then(|r| r),
+                frame = rx.recv() => {
+                    let Some(frame) = frame else { break Ok(()) };
+                    if let Some(msg) = transport.open(&frame).map_err(|e| anyhow!("tunnel integrity failure: {e}"))? {
+                        if in_tx.send(msg).await.is_err() { break Ok(()); }
+                    }
+                }
+                msg = out_rx.recv() => {
+                    let Some(msg) = msg else { continue };
+                    // Waits for room in the relay queue: a dropped Noise
+                    // frame would break the tunnel, and waiting here holds
+                    // the engine back, which its rate control notices.
+                    for f in transport.seal(&msg)? {
+                        self.send_frame_wait(conn_id, &f).await;
+                    }
+                }
+                msg = bus.recv() => {
+                    if let Ok(BusMsg::DeviceRevoked(id)) = msg {
+                        if device_id.as_deref() == Some(id.as_str()) {
+                            pipe.abort();
+                            bail!("device revoked");
+                        }
+                    }
+                }
+            }
+        };
+        pipe.abort();
+        result
+    }
+
+    /// Like `send_frame`, but waits for room instead of dropping the frame.
+    async fn send_frame_wait(&self, conn_id: &str, payload: &[u8]) {
+        let Some(tx) = self.out.lock().unwrap().clone() else { return };
+        let mut f = Vec::with_capacity(payload.len() + conn_id.len() + 1);
+        f.push(conn_id.len() as u8);
+        f.extend_from_slice(conn_id.as_bytes());
+        f.extend_from_slice(payload);
+        let _ = tx.send(Out::Binary(f)).await;
     }
 
     /// Pairing: XXpsk3 with the QR secret, then wait for the desktop to confirm.

@@ -34,6 +34,8 @@ pub enum Tag {
     Voice,
     /// `project.browse` with no path: the project folders.
     ProjectRoots,
+    /// `screen.status`, `screen.set_policy` or `screen.stop`: answered with the status.
+    Screen,
     /// `session.list` with `archived: true`.
     Archived,
     /// `session.side_ask` in this session: the reply names the side conversation.
