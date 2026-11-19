@@ -105,6 +105,18 @@ pub const SCREEN_ATTACH: &str = "screen.attach";
 /// Allow phones to watch (and click and type). Desktop only.
 pub const SCREEN_SET_POLICY: &str = "screen.set_policy";
 
+/// Push notifications through APNs. The host holds the APNs key
+/// (`push.set_key`, which a phone may call while pairing: it is only the
+/// host's credential for Apple, and every notification's content is
+/// encrypted to the receiving phone); each phone registers its own token.
+pub const PUSH_STATUS: &str = "push.status";
+pub const PUSH_SET_KEY: &str = "push.set_key";
+pub const PUSH_CLEAR_KEY: &str = "push.clear_key";
+pub const PUSH_REGISTER: &str = "push.register";
+pub const PUSH_UNREGISTER: &str = "push.unregister";
+pub const PUSH_SET_PREFS: &str = "push.set_prefs";
+pub const PUSH_TEST: &str = "push.test";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -168,7 +180,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST
-        | SCREEN_STATUS => Read,
+        | SCREEN_STATUS | PUSH_STATUS => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
@@ -176,7 +188,9 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         // Bounded by the project folders, which only an admin sets.
         | PROJECT_BROWSE | PROJECT_CREATE
         // Bounded by the screen policy, which only an admin sets.
-        | SCREEN_START | SCREEN_STOP | SCREEN_ATTACH => Sessions,
+        | SCREEN_START | SCREEN_STOP | SCREEN_ATTACH
+        // A device's own notifications; the key only lets the host talk to Apple.
+        | PUSH_SET_KEY | PUSH_REGISTER | PUSH_UNREGISTER | PUSH_SET_PREFS | PUSH_TEST => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
@@ -186,7 +200,8 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE
         | PROJECT_SET_ROOTS
         // Lets a phone see, and maybe control, everything you are logged in to.
-        | SCREEN_SET_POLICY => Admin,
+        | SCREEN_SET_POLICY
+        | PUSH_CLEAR_KEY => Admin,
         _ => return None,
     })
 }
@@ -212,6 +227,7 @@ mod tests {
             PROJECT_SET_ROOTS,
             BUILTIN_SET_POLICY,
             SCREEN_SET_POLICY,
+            PUSH_CLEAR_KEY,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }
@@ -242,6 +258,12 @@ mod tests {
             SCREEN_STATUS,
             SCREEN_START,
             SCREEN_STOP,
+            PUSH_STATUS,
+            PUSH_SET_KEY,
+            PUSH_REGISTER,
+            PUSH_UNREGISTER,
+            PUSH_SET_PREFS,
+            PUSH_TEST,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

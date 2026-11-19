@@ -8,7 +8,9 @@ import UIKit
 ///     -AgentHostDemoScreen <screen>       session | dictating | new | new-login | picker |
 ///                                         settings | archived | archived-session |
 ///                                         pair | side | config | paste |
-///                                         quick | plain | btw | subagents
+///                                         quick | plain | btw | subagents |
+///                                         notifications | pair-notifications |
+///                                         pair-apns-key
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 ///     -AgentHostDemoTitleMenu             the session opens with its title menu open
@@ -39,6 +41,23 @@ struct DemoData {
         case screen
         /// Choosing what to show before the stream starts.
         case screenPicker = "screen-picker"
+        /// Settings → Notifications, on, with the host's APNs key set.
+        case notifications
+        /// The pairing flow's "Turn On Notifications?" step.
+        case pairNotifications = "pair-notifications"
+        /// Its "Add Your APNs Key" step (the host has no key yet).
+        case pairAPNsKey = "pair-apns-key"
+    }
+
+    /// `push.status` for a screen: a key and this iPhone registered on
+    /// `notifications`, no key otherwise.
+    func pushStatus(for screen: Screen) -> PushStatusModel {
+        guard screen == .notifications else { return PushStatusModel(configured: false) }
+        let device = PushDeviceModel(
+            deviceId: "demo-iphone", name: deviceName, environment: "sandbox",
+            prefs: PushPrefsModel(), registeredAt: Int64(Date().timeIntervalSince1970 * 1000) - 86_400_000,
+            lastError: nil)
+        return PushStatusModel(configured: true, keyId: "7KX9Q2M4PL", teamId: "A1B2C3D4E5", thisDevice: device)
     }
 
     var screen: Screen

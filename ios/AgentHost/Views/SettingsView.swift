@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings: the host and its connection, Security (Require Face ID, off by
+/// Settings: the host and its connection, Notifications (protocol 4), Security (Require Face ID, off by
 /// default), the agents on the host (read only), this iPhone, and Unpair.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
@@ -12,6 +12,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             hostSection
+            if model.hostSupportsPush { notificationsSection }
             if model.hostSharesScreen { screenSection }
             Section {
                 NavigationLink(value: Route.archived) {
@@ -40,7 +41,7 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity)
                 }
             } footer: {
-                Text("Deletes this iPhone's keys and cached transcripts. Also remove it on the computer (Settings → Devices) so the host forgets its key.")
+                Text("Deletes this iPhone's keys and cached transcripts and turns off its notifications. Also remove it on the computer (Settings → Devices) so the host forgets its key.")
             }
         }
         .listStyle(.insetGrouped)
@@ -97,6 +98,19 @@ struct SettingsView: View {
                 }
                 if let p = info.sandbox.problem {
                     Text(p).font(.footnote).foregroundStyle(Palette.orange)
+                }
+            }
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section {
+            NavigationLink(value: Route.notifications) {
+                HStack(spacing: 12) {
+                    SettingsIcon(systemName: "bell.fill", color: Palette.red)
+                    Text("Notifications")
+                    Spacer(minLength: 8)
+                    Text(model.notificationsSummary).foregroundStyle(.secondary)
                 }
             }
         }

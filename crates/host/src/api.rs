@@ -461,6 +461,37 @@ impl Conn {
             m::SCREEN_ATTACH => Err(RpcError::invalid_params(
                 "screen.attach must be the first message on a new device tunnel",
             )),
+            m::PUSH_STATUS => to_value(h.push.status(self.principal.device_id.as_deref())?),
+            m::PUSH_SET_KEY => {
+                h.push.set_key(params(p)?, device_display_name(&self.principal.label))?;
+                to_value(h.push.status(self.principal.device_id.as_deref())?)
+            }
+            m::PUSH_CLEAR_KEY => {
+                h.push.clear_key()?;
+                to_value(h.push.status(self.principal.device_id.as_deref())?)
+            }
+            m::PUSH_REGISTER | m::PUSH_UNREGISTER | m::PUSH_SET_PREFS => {
+                let Some(d) = self.principal.device_id.clone() else {
+                    return Err(RpcError::invalid_params(
+                        "only a paired phone registers for notifications",
+                    ));
+                };
+                match method {
+                    m::PUSH_REGISTER => h.push.register(&d, params(p)?)?,
+                    m::PUSH_UNREGISTER => h.push.unregister(&d)?,
+                    _ => {
+                        let sp: PushSetPrefsParams = params(p)?;
+                        h.push.set_prefs(&d, &sp.prefs)?
+                    }
+                }
+                to_value(h.push.status(Some(&d))?)
+            }
+            m::PUSH_TEST => {
+                let tp: PushTestParams = params(p)?;
+                // A phone tests only itself.
+                let target = self.principal.device_id.clone().or(tp.device_id);
+                to_value(h.push.test(target.as_deref()).await?)
+            }
             m::VOICE_DOWNLOAD => to_value(h.ctx.voice.download()),
             m::VOICE_TRANSCRIBE => {
                 let vp: VoiceTranscribeParams = params(p)?;

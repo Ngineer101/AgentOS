@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod profiles;
 pub mod projects;
 pub mod proxy;
+pub mod push;
 pub mod relay_dev;
 pub mod remote;
 pub mod sandbox;
@@ -45,6 +46,7 @@ pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()
     let remote = remote::Remote::new(&host)?;
     let _ = host.devices.set(remote.clone());
     remote.spawn();
+    host.push.spawn();
     let task = api::serve_unix(host.clone(), &socket).await?;
     let resumed = host.sessions.resume_all()?;
     tracing::info!(socket = %socket.display(), resumed, "host listening");

@@ -9,7 +9,8 @@
 A native SwiftUI app (iOS 17+) for following and steering an agenthost from
 your phone: pair with one host by QR code, read sessions, send prompts
 (with photos and files attached, or dictated), start a session in an
-existing workspace, and answer MCP approvals.
+existing workspace, answer MCP approvals, and (optionally) get a push
+notification when a session needs you.
 
 All security-relevant protocol code (relay authentication, the Noise
 `XXpsk3` pairing and `IK` handshakes, framing, replay protection, JSON-RPC)
@@ -26,7 +27,9 @@ state and calls `RemoteClient.call(method:paramsJson:)`.
 | `Generated/` | UniFFI output: `agenthost_ffi.swift` (compiled into the app), `agenthost_ffiFFI.h` and `module.modulemap` (packed into the XCFramework). Committed; regenerate after changing `crates/ffi` |
 | `AgentHost/App` | App entry, lock / privacy cover, `AppModel` (connection, sync, cache, outbox) |
 | `AgentHost/Core` | Protocol models, Keychain + Secure Enclave store, transcript model and cache |
-| `AgentHost/Views` | The screens: Pair, Sessions, Session, New session (with the project folder picker), Approval, Settings. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout, with iOS 26 Liquid Glass controls (`Glass.swift`: `.glassEffect`, `.glassProminent`, the bottom search toolbar) and a material look-alike on iOS 17–25; designs in the project's nano.design file |
+| `Shared` | `PushCrypto.swift`, compiled into the app and the extension: the notification key in the shared Keychain group and the code that opens a notification's content |
+| `AgentHostNotifications` | Notification Service Extension (`dev.agenthost.ios.notifications`): decrypts each push before it is shown |
+| `AgentHost/Views` | The screens: Pair, Sessions, Session, New session (with the project folder picker), Approval, Settings, Notifications. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout, with iOS 26 Liquid Glass controls (`Glass.swift`: `.glassEffect`, `.glassProminent`, the bottom search toolbar) and a material look-alike on iOS 17–25; designs in the project's nano.design file |
 
 ## Building on a Mac
 
@@ -61,12 +64,42 @@ must be reachable from the phone.
 
 For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
 transcripts and an approval; no pairing, lock or network) and optionally
-`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair`
+`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair|notifications|pair-notifications|pair-apns-key`
 (`App/DemoData.swift`; compiled out of Release builds):
 
 ```sh
 xcrun simctl launch booted dev.agenthost.ios -AgentHostDemo -AgentHostDemoScreen session
 ```
+
+### Push notifications (optional)
+
+Notifications need the Push Notifications capability, which needs a **paid
+Apple Developer account** (a free Personal Team can't sign it; without it,
+leave the feature off and everything else works).
+
+1. Set `DEVELOPMENT_TEAM` for both targets, `AgentHost` and
+   `AgentHostNotifications` (the Notification Service Extension,
+   `dev.agenthost.ios.notifications`, embedded in the app). `xcodegen
+   generate` writes both entitlements files from `project.yml`: the app has
+   `aps-environment` (`development`; Xcode's distribution export switches it
+   to `production`) and both have Keychain Sharing with the group
+   `$(AppIdentifierPrefix)dev.agenthost.shared`, where the app keeps the
+   notification key the extension reads. Automatic signing registers the
+   App IDs and capabilities.
+2. Create an APNs key: developer.apple.com → Certificates, Identifiers &
+   Profiles → Keys → +, enable "Apple Push Notifications service (APNs)",
+   download `AuthKey_<KEYID>.p8` (it can be downloaded only once) and put it
+   where the phone can reach it, for example iCloud Drive.
+3. Pair the phone. After the first connection the app asks to turn on
+   notifications and, when the host has no key yet, to pick the `.p8` file
+   (Settings → Notifications → "Add APNs Key…" later). The key goes to the
+   host (`push.set_key`), never stays on the phone; the team id is the app's
+   own (`AppIdentifierPrefix` in Info.plist).
+
+The app tells the host which APNs server its token belongs to: Debug
+builds use the sandbox; other builds read `aps-environment` from the
+embedded provisioning profile (`development` → sandbox, otherwise and for
+App Store builds production).
 
 ## Behaviour
 
@@ -83,13 +116,13 @@ xcrun simctl launch booted dev.agenthost.ios -AgentHostDemo -AgentHostDemoScreen
 | Approval reaches the host within 2 s | `approval.respond` straight from `ApprovalView`; a status row on the Sessions list and a status card on the Session screen while anything is `waiting_approval` |
 | Capability errors and "update required" | Typed `AgentHostError.Rpc(code:…)` from Rust; `-32001` and `-32002` get specific messages. `hello` rejection stops reconnecting and shows "Update required" |
 | Attachments (protocol 2 hosts) | Composer paperclip menu: Photo Library (`PhotosPicker`; HEIC re-encoded as JPEG) or Files (`.fileImporter`, any type, several at once). Each pick is copied to a temporary file, sent with `RemoteClient.uploadFile` straight away (up to 25 MB, 10 per prompt), then deleted; the ids go in `session.prompt` `attachments`. Chips show progress and failures; Send waits for uploads. Sent attachments are listed under the prompt bubble |
+| Push notifications (protocol 4 hosts), optional, off until turned on | Offered once after pairing, when the phone has connected for the first time ("Turn On Notifications?", then "Add Your APNs Key" if the host has none, then a test notification; every step can be skipped), and in Settings → Notifications: on/off, what to be told about (approvals, on by default; finished turns; failed sessions → `push.set_prefs`), the host's APNs key, Send Test Notification, the last APNs error. On: `UNUserNotificationCenter.requestAuthorization`, `registerForRemoteNotifications`, then `push.register` with the token (hex), the bundle id, the APNs environment, the prefs and this phone's 32-byte notification key; repeated on every connection while on (tokens change). Off: `push.unregister` (or on the next connection when offline). The host sends only "A session needs you" in the clear; the real title and text are ChaCha20-Poly1305-sealed to the notification key (`e`, AAD `agenthost-push-v1`) and opened by the Notification Service Extension, which shows the generic alert if anything fails. The key is a Keychain item in the group shared with the extension, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (notifications arrive while locked) and not behind Face ID; it only opens notification content. Tapping a notification opens its session (an approval's session leads to the approval); in the foreground the notification is quiet when that session is on screen; opening a session clears its notifications. Turned off in iOS Settings: Settings → Notifications says so, with Open Settings. Unpair: `push.unregister` (best effort), then the key, the token registration and delivered notifications are deleted; the same when the device is removed |
 | Voice input | Mic button uses iOS dictation (the Speech framework, `SFSpeechRecognizer` fed from `AVAudioEngine`, at most 5 minutes): the text appears while you talk and is added to the draft on Stop. Recognition is forced on device where the iPhone supports it, otherwise Apple's dictation service is used. Works with any host; the host's speech model (Nemotron) is only for the desktop, so nothing is downloaded for the phone. Needs speech recognition and microphone permission (`NSSpeechRecognitionUsageDescription`, `NSMicrophoneUsageDescription`); the photo picker needs none |
 
 Unpair (Settings) deletes this phone's keys and cache. A phone may not
 call `device.revoke`, so the desktop should also revoke the device.
 
-Not in v1 (per the spec): push notifications, adding workspaces or
-connectors, policy changes, pairing other devices, multiple hosts, iPad
+Not in v1 (per the spec): adding workspaces or connectors, policy changes, pairing other devices, multiple hosts, iPad
 layout.
 
 ## Sessions: status, archive, default logins
@@ -114,4 +147,6 @@ layout.
 - **Not verified:** anything in Swift, the XcodeGen project, `build-rust.sh`
   on macOS (the iOS cross-compile, the XCFramework), Keychain and Secure
   Enclave behaviour, the camera scanner, photo/file pickers, audio
-  recording, layout.
+  recording, layout, and all of push notifications on the phone (APNs
+  registration, the Notification Service Extension, the shared Keychain
+  group, the entitlements and the provisioning-profile check).

@@ -34,11 +34,14 @@ rusqlite.workspace = true
 futures = "0.3"
 async-trait = "0.1"
 toml = "0.8"
-hyper = { version = "1", features = ["server", "http1"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+# Push notifications: APNs provider tokens (ES256) and sealing their content.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+chacha20poly1305 = "0.10"
 url = "2"
 libc = "0.2"
 hound = "3.5"
