@@ -584,6 +584,53 @@ fn btw_asks_on_the_side_and_opens_the_pane() {
 }
 
 #[test]
+fn live_dictation_writes_words_as_they_come_and_return_sends() {
+    use crate::model::{LiveDictation, Mic};
+    let live = |gen, done, text: &str| bridge::FromHost::LiveText { gen, done, result: Ok(text.into()) };
+    let mut app = demo("composer-pickers");
+    app.screen = Screen::Session("ses_2".into());
+    // Words go at the caret, spaced from what is typed, and are replaced as they firm up.
+    app.prompt.replace_text("Fix the bug");
+    app.live = Some(LiveDictation { gen: 1, start: app.prompt.range().0, shown: String::new() });
+    app.apply(live(1, false, "in the"));
+    assert_eq!(app.prompt.text, "Fix the bug in the");
+    app.apply(live(1, false, "in the parser,"));
+    assert_eq!(app.prompt.text, "Fix the bug in the parser,");
+    assert_eq!(app.prompt.range(), (app.prompt.text.len(), app.prompt.text.len()));
+    // A reply for an earlier dictation is dropped.
+    app.apply(live(0, false, "stale"));
+    assert_eq!(app.prompt.text, "Fix the bug in the parser,");
+    // Return while the last words are on their way: nothing is sent yet...
+    app.mic = Mic::Transcribing;
+    app.send_prompt();
+    assert!(app.send_after_dictation);
+    assert_eq!(app.prompt.text, "Fix the bug in the parser,");
+    // ...then the final text lands and the prompt goes.
+    app.apply(live(1, true, "in the parser, please."));
+    assert!(app.prompt.text.is_empty(), "sent: {:?}", app.prompt.text);
+    assert!(app.live.is_none() && matches!(app.mic, Mic::Idle) && !app.send_after_dictation);
+
+    // In the middle of a line: a space before, none needed after.
+    app.prompt.replace_text("Hello world");
+    app.prompt.set_caret(5);
+    app.live = Some(LiveDictation { gen: 2, start: 5, shown: String::new() });
+    app.apply(live(2, false, "there"));
+    assert_eq!(app.prompt.text, "Hello there world");
+    // Typing after the words while talking keeps the typing and the caret.
+    app.prompt.set_caret(app.prompt.text.len());
+    app.prompt.insert("!");
+    app.apply(live(2, false, "there, big"));
+    assert_eq!(app.prompt.text, "Hello there, big world!");
+    assert_eq!(app.prompt.range().0, app.prompt.text.len());
+    // A failure keeps the words heard and sends nothing.
+    app.mic = Mic::Transcribing;
+    app.send_after_dictation = true;
+    app.apply(bridge::FromHost::LiveText { gen: 2, done: true, result: Err("the host went away".into()) });
+    assert_eq!(app.prompt.text, "Hello there, big world!");
+    assert!(app.error.is_some() && app.live.is_none() && !app.send_after_dictation);
+}
+
+#[test]
 fn side_threads_come_from_events_and_deltas() {
     let mut app = demo("side-panel");
     let threads = app.side_threads("ses_1");

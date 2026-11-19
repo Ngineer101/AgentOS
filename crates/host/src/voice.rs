@@ -4,8 +4,9 @@
 //! as exported to ONNX by sherpa-onnx, run on the CPU in this process. It is
 //! downloaded once, when a user first asks for voice input, into
 //! `<data>/models/` (about 475 MB, checked against a pinned SHA-256). The
-//! desktop and paired phones send recordings (WAV) as uploads; nothing leaves
-//! the machine.
+//! desktop and paired phones either stream audio while you talk (the text so
+//! far comes back with each piece) or send a finished recording (WAV) as an
+//! upload; nothing leaves the machine.
 
 use crate::bus::{Bus, BusMsg};
 use agenthost_proto::jsonrpc::{codes, RpcError};
@@ -13,8 +14,10 @@ use agenthost_proto::*;
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::Digest;
 use std::io::{Read, Write};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub struct ModelSpec {
     pub name: &'static str,
@@ -43,6 +46,19 @@ pub const MODEL: ModelSpec = ModelSpec {
 
 /// Longest recording accepted.
 const MAX_SECONDS: f32 = 10.0 * 60.0;
+/// Live streams open at once, across all connections.
+const MAX_STREAMS: usize = 8;
+/// A live stream nobody fed for this long is dropped.
+const STREAM_IDLE: Duration = Duration::from_secs(60);
+
+/// One live dictation.
+struct Live {
+    stream: engine::Live,
+    rate: u32,
+    /// Samples received so far.
+    samples: u64,
+    touched: Instant,
+}
 
 #[derive(Default)]
 struct State {
@@ -57,6 +73,8 @@ pub struct Voice {
     state: Mutex<State>,
     /// Loaded on first use, kept for later recordings.
     engine: Mutex<Option<Arc<engine::Engine>>>,
+    /// Live dictations by stream id.
+    live: Mutex<HashMap<String, Arc<Mutex<Live>>>>,
 }
 
 impl Voice {
@@ -71,6 +89,7 @@ impl Voice {
                 .expect("http client"),
             state: Mutex::new(State::default()),
             engine: Mutex::new(None),
+            live: Mutex::new(HashMap::new()),
         })
     }
 
@@ -96,6 +115,7 @@ impl Voice {
             model: MODEL.name.into(),
             download_bytes: MODEL.bytes,
             ready: engine::AVAILABLE && self.installed(),
+            streaming: engine::AVAILABLE,
             progress: st.progress.clone(),
             error,
         }
@@ -196,6 +216,20 @@ impl Voice {
         wav: &Path,
         language: Option<String>,
     ) -> Result<String, RpcError> {
+        self.usable()?;
+        let me = self.clone();
+        let wav = wav.to_path_buf();
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            let (rate, samples) = read_wav(&wav)?;
+            let engine = me.engine()?;
+            engine.transcribe(rate, &samples, language.as_deref())
+        })
+        .await
+        .map_err(|e| RpcError::internal(e.to_string()))?
+        .map_err(|e| RpcError::invalid_params(format!("could not transcribe: {e:#}")))
+    }
+
+    fn usable(&self) -> Result<(), RpcError> {
         if !engine::AVAILABLE {
             return Err(RpcError::new(
                 codes::UNAVAILABLE,
@@ -209,16 +243,77 @@ impl Voice {
             )
             .with_data(serde_json::json!({"needs_download": true})));
         }
+        Ok(())
+    }
+
+    /// Open a live dictation. Loads the model the first time (a second or two).
+    pub async fn stream_begin(self: &Arc<Self>, p: VoiceStreamBeginParams) -> Result<String, RpcError> {
+        self.usable()?;
+        if !(8000..=192_000).contains(&p.sample_rate) {
+            return Err(RpcError::invalid_params("sample_rate must be 8000 to 192000 Hz"));
+        }
+        {
+            let mut live = self.live.lock().unwrap();
+            // A stream busy decoding is in use; don't wait for it.
+            live.retain(|_, l| match l.try_lock() {
+                Ok(l) => l.touched.elapsed() < STREAM_IDLE,
+                Err(std::sync::TryLockError::WouldBlock) => true,
+                Err(std::sync::TryLockError::Poisoned(_)) => false,
+            });
+            if live.len() >= MAX_STREAMS {
+                return Err(RpcError::new(codes::UNAVAILABLE, "too many dictations at once; try again in a moment"));
+            }
+        }
         let me = self.clone();
-        let wav = wav.to_path_buf();
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let (rate, samples) = read_wav(&wav)?;
+        let stream = tokio::task::spawn_blocking(move || -> Result<engine::Live> {
             let engine = me.engine()?;
-            engine.transcribe(rate, &samples, language.as_deref())
+            Ok(engine.live(p.language.as_deref()))
         })
         .await
         .map_err(|e| RpcError::internal(e.to_string()))?
-        .map_err(|e| RpcError::invalid_params(format!("could not transcribe: {e:#}")))
+        .map_err(|e| RpcError::internal(format!("{e:#}")))?;
+        let id = format!("vs_{}", uuid::Uuid::new_v4().simple());
+        let l = Live { stream, rate: p.sample_rate, samples: 0, touched: Instant::now() };
+        self.live.lock().unwrap().insert(id.clone(), Arc::new(Mutex::new(l)));
+        Ok(id)
+    }
+
+    fn stream(&self, id: &str) -> Result<Arc<Mutex<Live>>, RpcError> {
+        self.live
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| RpcError::invalid_params("no such voice stream (it may have been idle too long)"))
+    }
+
+    /// Feed a live dictation; returns the text so far.
+    pub async fn stream_append(self: &Arc<Self>, p: VoiceStreamAppendParams) -> Result<String, RpcError> {
+        let l = self.stream(&p.stream_id)?;
+        let pcm = decode_pcm(&p.data)?;
+        let r = feed(l, pcm, false).await;
+        if r.is_err() {
+            self.live.lock().unwrap().remove(&p.stream_id);
+        }
+        r
+    }
+
+    /// End a live dictation; returns the final text (empty when cancelled).
+    pub async fn stream_finish(self: &Arc<Self>, p: VoiceStreamFinishParams) -> Result<String, RpcError> {
+        let l = self
+            .live
+            .lock()
+            .unwrap()
+            .remove(&p.stream_id)
+            .ok_or_else(|| RpcError::invalid_params("no such voice stream (it may have been idle too long)"))?;
+        if p.cancel {
+            return Ok(String::new());
+        }
+        let pcm = match &p.data {
+            Some(d) => decode_pcm(d)?,
+            None => vec![],
+        };
+        feed(l, pcm, true).await
     }
 
     fn engine(&self) -> Result<Arc<engine::Engine>> {
@@ -231,6 +326,41 @@ impl Voice {
         *slot = Some(e.clone());
         Ok(e)
     }
+}
+
+/// Mono 16-bit little-endian PCM from base64, as floats.
+fn decode_pcm(b64: &str) -> Result<Vec<f32>, RpcError> {
+    use base64::Engine as _;
+    if b64.len() > VOICE_STREAM_CHUNK_BYTES / 3 * 4 + 4 {
+        return Err(RpcError::invalid_params("audio piece too large"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|_| RpcError::invalid_params("audio is not valid base64"))?;
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect())
+}
+
+/// Add audio to a live stream on a blocking thread; the text so far.
+async fn feed(l: Arc<Mutex<Live>>, pcm: Vec<f32>, last: bool) -> Result<String, RpcError> {
+    tokio::task::spawn_blocking(move || -> Result<String, RpcError> {
+        let mut l = l.lock().unwrap();
+        l.samples += pcm.len() as u64;
+        l.touched = Instant::now();
+        if l.samples as f32 / l.rate as f32 > MAX_SECONDS {
+            return Err(RpcError::invalid_params(format!(
+                "the dictation is longer than {} minutes",
+                MAX_SECONDS as u32 / 60
+            )));
+        }
+        let rate = l.rate;
+        let r = if last { l.stream.finish(rate, &pcm) } else { l.stream.feed(rate, &pcm) };
+        r.map_err(|e| RpcError::internal(format!("could not transcribe: {e:#}")))
+    })
+    .await
+    .map_err(|e| RpcError::internal(e.to_string()))?
 }
 
 /// Unpack only the model's four files, flat, into `dest`.
@@ -304,6 +434,7 @@ mod engine {
     use super::MODEL;
     use anyhow::{anyhow, Result};
     use std::path::Path;
+    use std::sync::Arc;
 
     pub const AVAILABLE: bool = true;
 
@@ -333,24 +464,58 @@ mod engine {
             })
         }
 
-        pub fn transcribe(&self, rate: u32, samples: &[f32], language: Option<&str>) -> Result<String> {
-            let _one = self.lock.lock().unwrap();
+        pub fn transcribe(self: &Arc<Self>, rate: u32, samples: &[f32], language: Option<&str>) -> Result<String> {
+            self.live(language).finish(rate, samples)
+        }
+
+        /// A stream to feed audio as it is recorded.
+        pub fn live(self: &Arc<Self>, language: Option<&str>) -> Live {
             let s = self.rec.create_stream();
             if let Some(l) = language.filter(|l| l.len() <= 8 && l.chars().all(|c| c.is_ascii_alphabetic() || c == '-')) {
                 s.set_option("language", l);
             }
-            s.accept_waveform(rate as i32, samples);
-            // Trailing silence lets the streaming model emit the last words.
-            s.accept_waveform(rate as i32, &vec![0.0; rate as usize]);
-            s.input_finished();
-            while self.rec.is_ready(&s) {
-                self.rec.decode(&s);
+            Live { s, engine: self.clone() }
+        }
+    }
+
+    /// A streaming recognition. The stream is dropped before the engine.
+    pub struct Live {
+        s: sherpa_onnx::OnlineStream,
+        engine: Arc<Engine>,
+    }
+
+    impl Live {
+        /// Add audio and decode what can be decoded; the text so far.
+        pub fn feed(&self, rate: u32, samples: &[f32]) -> Result<String> {
+            let e = &self.engine;
+            let _one = e.lock.lock().unwrap();
+            if !samples.is_empty() {
+                self.s.accept_waveform(rate as i32, samples);
             }
-            Ok(self
-                .rec
-                .get_result(&s)
-                .map(|r| r.text.trim().to_string())
-                .unwrap_or_default())
+            while e.rec.is_ready(&self.s) {
+                e.rec.decode(&self.s);
+            }
+            Ok(self.text())
+        }
+
+        /// Add the last audio and end the stream; the final text.
+        pub fn finish(&self, rate: u32, samples: &[f32]) -> Result<String> {
+            let e = &self.engine;
+            let _one = e.lock.lock().unwrap();
+            if !samples.is_empty() {
+                self.s.accept_waveform(rate as i32, samples);
+            }
+            // Trailing silence lets the streaming model emit the last words.
+            self.s.accept_waveform(rate as i32, &vec![0.0; rate as usize]);
+            self.s.input_finished();
+            while e.rec.is_ready(&self.s) {
+                e.rec.decode(&self.s);
+            }
+            Ok(self.text())
+        }
+
+        fn text(&self) -> String {
+            self.engine.rec.get_result(&self.s).map(|r| r.text.trim().to_string()).unwrap_or_default()
         }
     }
 }
@@ -368,7 +533,21 @@ mod engine {
         pub fn load(_: &Path) -> Result<Engine> {
             bail!("no voice support in this build")
         }
-        pub fn transcribe(&self, _: u32, _: &[f32], _: Option<&str>) -> Result<String> {
+        pub fn transcribe(self: &std::sync::Arc<Self>, _: u32, _: &[f32], _: Option<&str>) -> Result<String> {
+            bail!("no voice support in this build")
+        }
+        pub fn live(self: &std::sync::Arc<Self>, _: Option<&str>) -> Live {
+            Live
+        }
+    }
+
+    pub struct Live;
+
+    impl Live {
+        pub fn feed(&self, _: u32, _: &[f32]) -> Result<String> {
+            bail!("no voice support in this build")
+        }
+        pub fn finish(&self, _: u32, _: &[f32]) -> Result<String> {
             bail!("no voice support in this build")
         }
     }
@@ -416,8 +595,76 @@ mod tests {
         };
         let e = engine::Engine::load(Path::new(&m)).unwrap();
         let (rate, s) = read_wav(Path::new(&w)).unwrap();
+        let e = Arc::new(e);
         let text = e.transcribe(rate, &s, None).unwrap();
         eprintln!("{text}");
         assert!(!text.is_empty());
+        // Live, in 200 ms pieces: words come before the end, and the end matches.
+        let live = e.live(None);
+        let mut partial = String::new();
+        for piece in s.chunks(rate as usize / 5) {
+            let t = live.feed(rate, piece).unwrap();
+            if partial.is_empty() && !t.is_empty() {
+                partial = t;
+            }
+        }
+        assert!(!partial.is_empty(), "no text before the end");
+        assert_eq!(live.finish(rate, &[]).unwrap(), text);
+    }
+
+    /// The live API as clients call it, with the real model (same variables as above).
+    #[cfg(feature = "voice")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn streams_live_dictation_with_the_real_model() {
+        use base64::Engine as _;
+        let (Ok(m), Ok(w)) = (
+            std::env::var("AGENTHOST_TEST_VOICE_MODEL"),
+            std::env::var("AGENTHOST_TEST_VOICE_WAV"),
+        ) else {
+            eprintln!("skipped: set AGENTHOST_TEST_VOICE_MODEL and AGENTHOST_TEST_VOICE_WAV");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let v = Voice::new(dir.path(), Bus::new());
+        let dest = v.model_dir();
+        std::fs::create_dir_all(&dest).unwrap();
+        for f in [MODEL.encoder, MODEL.decoder, MODEL.joiner, MODEL.tokens] {
+            std::os::unix::fs::symlink(Path::new(&m).join(f), dest.join(f)).unwrap();
+        }
+        assert!(v.status().ready && v.status().streaming);
+        let (rate, s) = read_wav(Path::new(&w)).unwrap();
+        let pcm = |s: &[f32]| {
+            let b: Vec<u8> = s.iter().flat_map(|v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+            base64::engine::general_purpose::STANDARD.encode(b)
+        };
+        let t = std::time::Instant::now();
+        let id = v.stream_begin(VoiceStreamBeginParams { sample_rate: rate, language: None }).await.unwrap();
+        eprintln!("begin (loads the model): {} ms", t.elapsed().as_millis());
+        let mut first = None;
+        let mut slowest = Duration::ZERO;
+        for (i, piece) in s.chunks(rate as usize / 5).enumerate() {
+            let t = std::time::Instant::now();
+            let text = v.stream_append(VoiceStreamAppendParams { stream_id: id.clone(), data: pcm(piece) }).await.unwrap();
+            slowest = slowest.max(t.elapsed());
+            if first.is_none() && !text.is_empty() {
+                first = Some(((i + 1) as f32 * 0.2, text));
+            }
+        }
+        let t = std::time::Instant::now();
+        let fin = v.stream_finish(VoiceStreamFinishParams { stream_id: id.clone(), data: None, cancel: false }).await.unwrap();
+        let (at, words) = first.expect("no words before the end");
+        eprintln!(
+            "first words {words:?} after {at:.1} s of {:.1} s; slowest piece {} ms; finish {} ms; final: {fin}",
+            s.len() as f32 / rate as f32,
+            slowest.as_millis(),
+            t.elapsed().as_millis()
+        );
+        assert!(!fin.is_empty());
+        // Finished streams are gone; cancelled ones give nothing back.
+        assert!(v.stream_append(VoiceStreamAppendParams { stream_id: id, data: String::new() }).await.is_err());
+        let id = v.stream_begin(VoiceStreamBeginParams { sample_rate: rate, language: None }).await.unwrap();
+        let r = v.stream_finish(VoiceStreamFinishParams { stream_id: id, data: Some(pcm(&s)), cancel: true }).await.unwrap();
+        assert!(r.is_empty());
+        assert!(v.live.lock().unwrap().is_empty());
     }
 }

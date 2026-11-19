@@ -76,6 +76,23 @@ pub enum ToHost {
     UploadBytes { local_id: u64, name: String, mime: String, data: Vec<u8> },
     /// Transcribe a WAV recording; answered by [`FromHost::Transcribed`].
     Transcribe { wav: Vec<u8> },
+    /// Live dictation, sent in order; answered by [`FromHost::LiveText`].
+    Live(Live),
+}
+
+/// One live dictation (`gen`) as it happens: audio is mono 16-bit PCM bytes.
+pub enum Live {
+    Begin { gen: u64, sample_rate: u32 },
+    Audio { gen: u64, pcm: Vec<u8> },
+    Finish { gen: u64, pcm: Vec<u8>, cancel: bool },
+}
+
+impl Live {
+    fn gen(&self) -> u64 {
+        match self {
+            Live::Begin { gen, .. } | Live::Audio { gen, .. } | Live::Finish { gen, .. } => *gen,
+        }
+    }
 }
 
 pub enum FromHost {
@@ -87,6 +104,8 @@ pub enum FromHost {
     Note(Notification),
     Uploaded { local_id: u64, result: Result<agenthost_proto::Attachment, String> },
     Transcribed(Result<String, String>),
+    /// Everything heard so far in dictation `gen`; `done` with the final text.
+    LiveText { gen: u64, done: bool, result: Result<String, String> },
 }
 
 pub struct Bridge {
@@ -147,6 +166,82 @@ fn start_daemon() -> bool {
         .is_ok()
 }
 
+/// Most audio merged into one `voice.stream_append` when pieces pile up.
+const LIVE_MERGE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Live dictation for one connection: requests go one at a time, in order, so audio
+/// can't overtake itself. Pieces that queue up while the host decodes are merged,
+/// so a busy host gets fewer, larger pieces instead of falling behind.
+fn live_dictation(client: Arc<Client>, out: std_mpsc::Sender<FromHost>, waker: rune::Waker) -> mpsc::UnboundedSender<Live> {
+    use base64::Engine as _;
+    let b64 = |pcm: &[u8]| base64::engine::general_purpose::STANDARD.encode(pcm);
+    let (tx, mut rx) = mpsc::unbounded_channel::<Live>();
+    tokio::spawn(async move {
+        let send = |gen: u64, done: bool, result: Result<Value, RpcError>| {
+            let result = result.map(|v| v["text"].as_str().unwrap_or_default().to_string()).map_err(|e| e.message);
+            let _ = out.send(FromHost::LiveText { gen, done, result });
+            waker();
+        };
+        // The open stream: (dictation, stream id). None after a failure, so the rest of
+        // that dictation is dropped.
+        let mut open: Option<(u64, String)> = None;
+        let mut next: Option<Live> = None;
+        loop {
+            let cmd = match next.take() {
+                Some(c) => c,
+                None => match rx.recv().await {
+                    Some(c) => c,
+                    None => return,
+                },
+            };
+            let gen = cmd.gen();
+            let id = open.as_ref().filter(|(g, _)| *g == gen).map(|(_, id)| id.clone());
+            match cmd {
+                Live::Begin { gen, sample_rate } => match client.request(m::VOICE_STREAM_BEGIN, json!({"sample_rate": sample_rate})).await {
+                    Ok(v) => open = v["stream_id"].as_str().map(|id| (gen, id.to_string())),
+                    Err(e) => {
+                        open = None;
+                        send(gen, true, Err(e));
+                    }
+                },
+                Live::Audio { mut pcm, .. } => {
+                    while pcm.len() < LIVE_MERGE_BYTES {
+                        match rx.try_recv() {
+                            Ok(Live::Audio { gen: g, pcm: more }) if g == gen => pcm.extend_from_slice(&more),
+                            Ok(other) => {
+                                next = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let Some(id) = id else { continue };
+                    let r = client.request(m::VOICE_STREAM_APPEND, json!({"stream_id": id, "data": b64(&pcm)})).await;
+                    if r.is_err() {
+                        open = None;
+                        send(gen, true, r);
+                    } else {
+                        send(gen, false, r);
+                    }
+                }
+                Live::Finish { pcm, cancel, .. } => {
+                    let Some(id) = id else { continue };
+                    open = None;
+                    let mut p = json!({"stream_id": id, "cancel": cancel});
+                    if !pcm.is_empty() && !cancel {
+                        p["data"] = json!(b64(&pcm));
+                    }
+                    let r = client.request(m::VOICE_STREAM_FINISH, p).await;
+                    if !cancel {
+                        send(gen, true, r);
+                    }
+                }
+            }
+        }
+    });
+    tx
+}
+
 pub fn start(waker: rune::Waker) -> Bridge {
     let (tx, mut cmd_rx) = mpsc::unbounded_channel::<ToHost>();
     let (out_tx, rx) = std_mpsc::channel::<FromHost>();
@@ -190,10 +285,18 @@ pub fn start(waker: rune::Waker) -> Bridge {
                         let _ = s2.send(FromHost::Reply { tag: Tag::Sessions, result: r });
                         w2();
                     });
+                    let live_tx = live_dictation(client.clone(), out_tx.clone(), waker.clone());
                     loop {
                         tokio::select! {
                             cmd = cmd_rx.recv() => {
                                 let Some(cmd) = cmd else { return };
+                                let cmd = match cmd {
+                                    ToHost::Live(l) => {
+                                        let _ = live_tx.send(l);
+                                        continue;
+                                    }
+                                    cmd => cmd,
+                                };
                                 let c = client.clone();
                                 let s = out_tx.clone();
                                 let w = waker.clone();
@@ -203,6 +306,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                         ToHost::Upload { local_id, path } => FromHost::Uploaded { local_id, result: c.upload_file(&path).await.map_err(|e| format!("{e:#}")) },
                                         ToHost::UploadBytes { local_id, name, mime, data } => FromHost::Uploaded { local_id, result: c.upload(&name, Some(&mime), &data, |_, _| {}).await.map_err(|e| format!("{e:#}")) },
                                         ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
+                                        ToHost::Live(_) => unreachable!(),
                                     };
                                     let _ = s.send(msg);
                                     w();

@@ -1130,6 +1130,48 @@ pub struct VoiceTranscribeResult {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceStreamBeginParams {
+    /// Rate of the audio the client will send, in Hz.
+    pub sample_rate: u32,
+    /// Language hint such as "en"; the model detects it when absent.
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceStreamBeginResult {
+    pub stream_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceStreamAppendParams {
+    pub stream_id: String,
+    /// Mono 16-bit little-endian PCM at the stream's rate, standard base64.
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceStreamFinishParams {
+    pub stream_id: String,
+    /// The last audio, as in `voice.stream_append`.
+    #[serde(default)]
+    pub data: Option<String>,
+    /// Throw the stream away; the result's text is empty.
+    #[serde(default)]
+    pub cancel: bool,
+}
+
+/// `voice.stream_append` and `voice.stream_finish`: everything heard so far
+/// (the whole text, not only the new words).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceStreamText {
+    pub text: String,
+}
+
+/// Largest decoded piece in one `voice.stream_append`.
+pub const VOICE_STREAM_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+
 /// The local speech model, as clients show it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct VoiceStatus {
@@ -1139,6 +1181,9 @@ pub struct VoiceStatus {
     pub download_bytes: u64,
     /// Installed and usable.
     pub ready: bool,
+    /// Takes live dictation (`voice.stream_*`). Hosts before it leave this out.
+    #[serde(default)]
+    pub streaming: bool,
     /// Present while downloading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<VoiceProgress>,

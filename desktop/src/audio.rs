@@ -1,5 +1,6 @@
 //! Microphone recording for voice input: the default input device, kept in
-//! memory, handed to the host as a 16-bit mono WAV.
+//! memory, streamed to the host in pieces while you talk ([`Recorder::take_new`]),
+//! or handed over as a 16-bit mono WAV at the end for hosts without live dictation.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
@@ -77,6 +78,25 @@ impl Recorder {
         let v = *p;
         *p = 0.0;
         v.min(1.0)
+    }
+
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// The audio recorded since the last call, mono 16-bit PCM (little-endian bytes).
+    pub fn take_new(&self) -> Vec<u8> {
+        let ch = self.channels.max(1) as usize;
+        let mut b = self.buf.lock().unwrap();
+        let whole = b.len() - b.len() % ch;
+        let frames: Vec<f32> = b.drain(..whole).collect();
+        drop(b);
+        let mut out = Vec::with_capacity(frames.len() / ch * 2);
+        for f in frames.chunks(ch) {
+            let v = f.iter().sum::<f32>() / ch as f32;
+            out.extend_from_slice(&((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+        out
     }
 
     /// Stop and return the recording as WAV bytes, or None if it is too short to hold speech.

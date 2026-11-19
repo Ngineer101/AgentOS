@@ -226,7 +226,7 @@ fn base(s: &mut App) {
         },
         relay: RelayStatus { configured: true, connected: true, url: Some("wss://relay.example.workers.dev".into()), error: None },
     });
-    s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, progress: None, error: None });
+    s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, streaming: true, progress: None, error: None });
 }
 
 /// Claude Code's settings as ACP reports them: a model, an effort and fast mode.
