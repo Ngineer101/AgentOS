@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct AgentHostApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -12,6 +13,35 @@ struct AgentHostApp: App {
                 // which covers the launch screen and system UI).
                 .preferredColorScheme(.dark)
         }
+    }
+}
+
+/// The app is portrait; the host screen viewer unlocks landscape while it is
+/// open (a desktop is wide).
+enum OrientationLock {
+    @MainActor static var mask: UIInterfaceOrientationMask = .portrait
+
+    @MainActor static func set(_ mask: UIInterfaceOrientationMask) {
+        self.mask = mask
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes {
+            for window in scene.windows {
+                var vc = window.rootViewController
+                while let v = vc {
+                    v.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    vc = v.presentedViewController
+                }
+            }
+            if mask == .portrait, scene.interfaceOrientation != .portrait {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
+            }
+        }
+    }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        OrientationLock.mask
     }
 }
 

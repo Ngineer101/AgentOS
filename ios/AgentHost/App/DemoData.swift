@@ -78,6 +78,11 @@ struct DemoData {
         return .sessions
     }
 
+    /// `-AgentHostDemoLandscape`: the screen viewer turns landscape.
+    static var landscape: Bool {
+        requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoLandscape")
+    }
+
     /// `-AgentHostDemoModelSheet`: the session screen opens the model sheet.
     static var opensModelSheet: Bool {
         requestedScreen != nil && ProcessInfo.processInfo.arguments.contains("-AgentHostDemoModelSheet")

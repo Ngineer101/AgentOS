@@ -183,6 +183,19 @@ struct HostScreenView: View {
             }
         }
         .statusBarHidden(chromeHidden)
+        .onAppear {
+            OrientationLock.set(.allButUpsideDown)
+            #if DEBUG
+            if DemoData.landscape {
+                // After the cover is on screen; asking earlier is ignored.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+                    scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+                }
+            }
+            #endif
+        }
+        .onDisappear { OrientationLock.set(.portrait) }
     }
 
     private var title: String {
