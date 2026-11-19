@@ -400,6 +400,9 @@ struct ApprovalBanner: View {
     }
 }
 
+/// A session in the list: the agent's icon, the title, and one status line
+/// ("● Your turn · 3m"). The workspace is the section header and the branch
+/// and login are in the session's title menu, so the row leaves them out.
 struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
     var session: SessionInfo
@@ -409,20 +412,17 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            SessionStatusIcon(state: session.state)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(session.title ?? model.agentLabel(session))
+            AgentBadge(agent: session.agent, dimmed: ended, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
                     .foregroundStyle(ended ? Color.secondary : Color.primary)
                     .lineLimit(1)
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(subtitleColor)
-                    .lineLimit(1)
-                if let branch = session.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .labelStyle(BranchLabelStyle())
-                        .foregroundStyle(ended ? Color(uiColor: .tertiaryLabel) : .secondary)
-                        .accessibilityLabel("Branch \(branch)")
+                HStack(spacing: 5) {
+                    SessionStatusMark(status: status)
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(subtitleColor)
+                        .lineLimit(1)
                 }
                 if let reason = session.stateReason, session.state == SessionStateName.failed {
                     Text(reason)
@@ -435,18 +435,24 @@ struct SessionRow: View {
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(agentDisplayName(session.agent))
     }
 
-    /// "Your turn · Claude Code · Work · 3m" (no age while it needs you).
+    /// The session's own title, else "New session".
+    private var title: String {
+        if let t = session.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
+        return "New session"
+    }
+
+    /// "Your turn · 3m", "Working · 2 agents running", "Needs approval"
+    /// (no age while it needs you).
     private var subtitle: String {
-        let agent = model.agentLabel(session)
-        if status == .needsYou { return "\(status.label) · \(agent)" }
-        // "Working · 2 agents running" while subagents run.
+        if status == .needsYou { return status.label }
         if status == .working {
             let n = runningSubagentCount(model.transcripts[session.sessionId]?.events ?? [])
             if n > 0 { return "\(status.label) · \(n == 1 ? "1 agent" : "\(n) agents") running" }
         }
-        return "\(status.label) · \(agent) · \(shortAge(session.updatedAt))"
+        return "\(status.label) · \(shortAge(session.updatedAt))"
     }
 
     private var subtitleColor: Color {
@@ -454,21 +460,6 @@ struct SessionRow: View {
         case .needsYou, .failed: return status.color
         case .ended: return Color(uiColor: .tertiaryLabel)
         case .working, .yourTurn: return .secondary
-        }
-    }
-}
-
-/// A branch name under a session: a small branch glyph and the name in
-/// monospaced footnote, truncated in the middle.
-struct BranchLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 4) {
-            configuration.icon
-                .font(.caption2.weight(.semibold))
-            configuration.title
-                .font(.footnote.monospaced())
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
     }
 }

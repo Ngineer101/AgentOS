@@ -49,6 +49,14 @@ struct SessionView: View {
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
     private var sides: [SideConversation] { model.sideConversations(sessionId) }
 
+    /// "Working…" under the transcript while the agent is quiet (nil while
+    /// text streams in, or before there's anything to show it under).
+    private func workingLabel(_ rows: [TranscriptRow]) -> String? {
+        guard model.streaming[sessionId] == nil, !(rows.isEmpty && pending.isEmpty) else { return nil }
+        let sending = model.link.isOnline && pending.contains { $0.failure == nil }
+        return quietWork(state: session?.state ?? "", rows: rows, pending: sending)
+    }
+
     /// The question when the draft is a side question (`/btw …`) and the
     /// agent takes them.
     private var sideQuestion: String? {
@@ -156,6 +164,7 @@ struct SessionView: View {
 
     var body: some View {
         let rows = self.rows
+        let working = workingLabel(rows)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -205,6 +214,9 @@ struct SessionView: View {
                     ForEach(pending) { p in
                         PendingPromptRow(prompt: p)
                     }
+                    if let working {
+                        WorkingRow(label: working)
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 16)
@@ -212,13 +224,28 @@ struct SessionView: View {
                 .padding(.bottom, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: rows.count) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            .startsAtBottom()
+            .onChange(of: rows.count) { old, new in
+                // A message or two arriving glides into view; the
+                // transcript loading (or a backlog replaying) jumps
+                // straight to its end instead of animating from the top.
+                proxy.scrollToBottom(animated: old > 0 && new - old <= 2)
             }
             .onChange(of: model.streaming[sessionId]?.text) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // Sent: the message and "Working…" come into view at once.
+            .onChange(of: pending.count) { _, _ in
+                proxy.scrollToBottom(animated: true)
+            }
+            .onChange(of: working) { _, _ in
+                proxy.scrollToBottom(animated: true)
+            }
+            .onAppear {
+                // onAppear runs before the first layout, when scrollTo has
+                // nothing to scroll; wait a turn so it lands.
+                DispatchQueue.main.async { proxy.scrollToBottom(animated: false) }
+            }
             .onDrop(of: [.image, .fileURL, .data], isTargeted: $dropTargeted) { providers in
                 guard canAttach else { return false }
                 reportSkipped(composer.addItemProviders(providers, model: model))
@@ -1019,9 +1046,10 @@ struct ToolStatusIcon: View {
         case "denied"?:
             Image(systemName: "hand.raised.slash").font(.caption2).foregroundStyle(.orange)
         default:
+            // Muted, not red: most failed calls don't change the outcome.
             Image(systemName: tool.sandboxDenied ? "lock.trianglebadge.exclamationmark" : "xmark")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.red)
+                .foregroundStyle(tool.sandboxDenied ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
         }
     }
 }
@@ -1090,15 +1118,12 @@ struct ActivityGroupRow: View {
                         Image(systemName: "checklist")
                             .font(.caption)
                             .frame(width: 16)
+                        // No failure count here: a failed call (a grep with
+                        // no match, a missing file) is routine and the agent
+                        // carries on. Each call still shows its own status.
                         Text(title)
                             .font(.footnote)
                             .lineLimit(1)
-                        let failed = tools.filter(\.failed).count
-                        if failed > 0 {
-                            Text("\(failed) failed")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.red)
-                        }
                     }
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
@@ -1384,19 +1409,39 @@ struct StreamingRow: View {
     }
 }
 
+/// "Working…" with a spinner at the end of the transcript, while the agent
+/// is quiet.
+struct WorkingRow: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.mini).frame(width: 16)
+            Text(label).font(.footnote)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+}
+
 struct PendingPromptRow: View {
     @EnvironmentObject private var model: AppModel
     let prompt: OutgoingPrompt
 
     var body: some View {
+        // On its way: shown as sent (with "Working…" under it), so the
+        // round trip to the host never reads as a stall. Dimmed only when
+        // it can't go (offline) or didn't (refused).
+        let held = !model.link.isOnline || prompt.failure != nil
         VStack(alignment: .trailing, spacing: 4) {
-            // Not yet accepted by the host: the same bubble, dimmed.
             if !prompt.text.isEmpty {
-                PromptBubble(text: prompt.text, pending: true)
+                PromptBubble(text: prompt.text, pending: held)
             }
             if !prompt.attachments.isEmpty {
                 PromptAttachmentsView(attachments: prompt.attachments)
-                    .opacity(0.7)
+                    .opacity(held ? 0.7 : 1)
             }
             if let f = prompt.failure {
                 HStack {
@@ -1404,8 +1449,8 @@ struct PendingPromptRow: View {
                     Button("Retry") { model.retryPrompt(prompt.id) }.font(.caption2)
                     Button("Discard", role: .destructive) { model.discardPrompt(prompt.id) }.font(.caption2)
                 }
-            } else {
-                Label(model.link.isOnline ? "Sending…" : "Waiting for connection", systemImage: "clock")
+            } else if !model.link.isOnline {
+                Label("Waiting for connection", systemImage: "clock")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1843,9 +1888,13 @@ struct SideQuestionsSheet: View {
                 .padding(16)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .startsAtBottom()
+            .onAppear { DispatchQueue.main.async { proxy.scrollToBottom(animated: false) } }
             .onChange(of: c) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
+        // Each conversation gets its own scroll view, so switching tabs
+        // opens the other one at its end rather than at this one's offset.
+        .id(c.id)
     }
 
     private var followUpBar: some View {
@@ -2338,3 +2387,31 @@ enum DemoMenuOpener {
     }
 }
 #endif
+
+extension ScrollViewProxy {
+    /// Scrolls to the `"bottom"` marker at the end of a conversation.
+    func scrollToBottom(animated: Bool) {
+        if animated {
+            withAnimation { scrollTo("bottom", anchor: .bottom) }
+        } else {
+            scrollTo("bottom", anchor: .bottom)
+            // A LazyVStack only measures rows as they come on screen, so a
+            // long jump can stop short of the end; once they're measured a
+            // second pass finishes it.
+            DispatchQueue.main.async { scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+}
+
+extension View {
+    /// Opens a scroll view at its end, like Messages. Only the initial
+    /// offset: a short conversation still sits at the top.
+    @ViewBuilder
+    func startsAtBottom() -> some View {
+        if #available(iOS 18, *) {
+            defaultScrollAnchor(.bottom, for: .initialOffset)
+        } else {
+            self
+        }
+    }
+}
