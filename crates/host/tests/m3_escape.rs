@@ -345,7 +345,10 @@ async fn worktree_sessions_in_the_sandbox() {
     let repo_dir = short_tempdir();
     let repo = std::fs::canonicalize(repo_dir.path()).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("README.md"), "hi\n").unwrap();
+    // A marker no temp path can contain: those are letters and digits only,
+    // and a short one like "hi" turned up in `/tmp/ahhiWRZb` in an error message.
+    const README: &str = "readme-of-main";
+    std::fs::write(repo.join("README.md"), format!("{README}\n")).unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "first"]);
     let (c, mut n) = th.client().await;
@@ -397,9 +400,9 @@ async fn worktree_sessions_in_the_sandbox() {
     let o = sh_in(&c, &mut n, &a.session_id, &format!("echo x > {}/main.txt; echo rc=$?", repo.display())).await;
     check("your checkout is read-only", !repo.join("main.txt").exists(), o);
     let o = sh_in(&c, &mut n, &a.session_id, &format!("cat {}/README.md", repo.display())).await;
-    check("your checkout is readable", o.contains("hi"), o);
+    check("your checkout is readable", o.contains(README), o);
     let o = sh_in(&c, &mut n, &a.session_id, &format!("ls {} 2>&1; cat {}/README.md 2>&1", wb.path, wb.path)).await;
-    check("the other session's worktree is unreadable", !o.contains("hi"), o);
+    check("the other session's worktree is unreadable", !o.contains(README), o);
     let o = sh_in(&c, &mut n, &b.session_id, "git status --short; git log -1 --format=%s").await;
     check("the other session is unaffected", o.contains("first"), o);
     assert!(failures.is_empty(), "worktree sandbox tests failed:\n{}", failures.join("\n"));
