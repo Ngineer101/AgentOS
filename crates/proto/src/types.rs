@@ -1153,6 +1153,89 @@ pub struct VoiceProgress {
     pub total: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Screen sharing (screen-relay)
+// ---------------------------------------------------------------------------
+
+/// What a phone can look at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenMode {
+    /// The display you are logged in to: a Mac's main display, an X11
+    /// session, or a Wayland compositor with the wlroots capture protocols.
+    Desktop,
+    /// A separate desktop on the host with only a browser in it (Linux).
+    /// Works with no monitor, a locked screen, and on GNOME and KDE.
+    Browser,
+}
+
+/// What the desktop allows. Only an admin (the desktop) changes it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ScreenPolicy {
+    /// Phones may start screen sharing at all.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Phones may click and type, not only watch.
+    #[serde(default)]
+    pub allow_control: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenModeInfo {
+    pub mode: ScreenMode,
+    pub available: bool,
+    /// What it will show ("Main display", "X11 :0", "Hyprland (wayland-1)")
+    /// or why it is not available.
+    pub detail: String,
+}
+
+/// A running screen-relay engine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenRunning {
+    pub mode: ScreenMode,
+    pub control: bool,
+    pub started_at: i64,
+    /// Who started it (a device's name, or "local").
+    pub started_by: String,
+    /// Open viewers.
+    pub viewers: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenStatus {
+    pub policy: ScreenPolicy,
+    /// screen-relay was found on the host.
+    pub installed: bool,
+    pub modes: Vec<ScreenModeInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<ScreenRunning>,
+    /// Why the last start failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenStartParams {
+    pub mode: ScreenMode,
+    /// Ask to click and type; refused unless the policy allows control.
+    #[serde(default)]
+    pub control: bool,
+}
+
+/// A one-time ticket for `screen.attach` on a new tunnel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenStartResult {
+    pub ticket: String,
+    pub expires_in_ms: i64,
+    pub mode: ScreenMode,
+    pub control: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenAttachParams {
+    pub ticket: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

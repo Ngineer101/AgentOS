@@ -4,7 +4,7 @@
 //! A subscriber that falls behind re-reads from SQLite, so a slow client never
 //! loses events.
 
-use agenthost_proto::{Event, PairingPending, Session, SessionDelta, VoiceStatus};
+use agenthost_proto::{Event, PairingPending, ScreenStatus, Session, SessionDelta, VoiceStatus};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
@@ -24,6 +24,8 @@ pub enum BusMsg {
     ConnectorChanged(String),
     /// The speech model's status changed.
     VoiceChanged(VoiceStatus),
+    /// Screen sharing started, stopped, or its policy changed.
+    ScreenChanged(ScreenStatus),
 }
 
 #[derive(Clone)]

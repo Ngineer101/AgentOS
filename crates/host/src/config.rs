@@ -39,6 +39,16 @@ pub struct HostConfig {
     /// Where connector icons come from (`<base>?domain=…&sz=64`); `None`
     /// fetches none (tests).
     pub favicon_url: Option<String>,
+    /// screen-relay's CLI; `None` looks for `screen-relay` on PATH.
+    pub screen_relay_bin: Option<PathBuf>,
+    /// A screen-relay engine you started yourself (`http://127.0.0.1:8080`).
+    /// The host then pipes to it and never starts or stops one.
+    pub screen_engine_url: Option<String>,
+    /// The token file of that engine, when it has one (it listens beyond
+    /// loopback, as in a container).
+    pub screen_engine_token_file: Option<PathBuf>,
+    /// Test only: how long an engine waits for a viewer before it is stopped.
+    pub screen_idle_stop: Option<std::time::Duration>,
 }
 
 /// The catalog `connector.search` uses.
@@ -72,6 +82,10 @@ impl HostConfig {
             agent_env_overrides: vec![],
             integrations_url: Some(INTEGRATIONS_URL.into()),
             favicon_url: Some(FAVICON_URL.into()),
+            screen_relay_bin: None,
+            screen_engine_url: None,
+            screen_engine_token_file: None,
+            screen_idle_stop: None,
         })
     }
 
@@ -94,6 +108,10 @@ impl HostConfig {
             // Off: tests never reach the network unless they ask.
             integrations_url: None,
             favicon_url: None,
+            screen_relay_bin: None,
+            screen_engine_url: None,
+            screen_engine_token_file: None,
+            screen_idle_stop: None,
         }
     }
 

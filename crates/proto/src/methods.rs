@@ -85,6 +85,18 @@ pub const VOICE_DOWNLOAD: &str = "voice.download";
 /// Turn an uploaded recording (WAV) into text. The recording is deleted after.
 pub const VOICE_TRANSCRIBE: &str = "voice.transcribe";
 
+/// Screen sharing through screen-relay: what can be shown, and the policy.
+pub const SCREEN_STATUS: &str = "screen.status";
+/// Start the engine (if needed) and get a one-time ticket for `screen.attach`.
+pub const SCREEN_START: &str = "screen.start";
+/// Stop the engine and close every viewer.
+pub const SCREEN_STOP: &str = "screen.stop";
+/// The first message on a new tunnel: turn it into a screen stream. After the
+/// response, the tunnel carries screen-relay `nsl1` messages, not JSON-RPC.
+pub const SCREEN_ATTACH: &str = "screen.attach";
+/// Allow phones to watch (and click and type). Desktop only.
+pub const SCREEN_SET_POLICY: &str = "screen.set_policy";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -104,6 +116,9 @@ pub const N_CONNECTOR_CHANGED: &str = "connector.changed";
 /// The speech model's status changed (download progress, installed, failed).
 /// Params are a [`crate::VoiceStatus`]. Sent to every connection.
 pub const N_VOICE_CHANGED: &str = "voice.changed";
+/// Screen sharing started, stopped or its policy changed. Params are a
+/// [`crate::ScreenStatus`]. Sent to every connection.
+pub const N_SCREEN_CHANGED: &str = "screen.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -144,13 +159,16 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     use Capability::*;
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
-        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST => Read,
+        | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST
+        | SCREEN_STATUS => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE
         // Bounded by the project folders, which only an admin sets.
-        | PROJECT_BROWSE | PROJECT_CREATE => Sessions,
+        | PROJECT_BROWSE | PROJECT_CREATE
+        // Bounded by the screen policy, which only an admin sets.
+        | SCREEN_START | SCREEN_STOP | SCREEN_ATTACH => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
@@ -158,7 +176,9 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | DEVICE_PAIR_START | DEVICE_PAIR_CONFIRM | DEVICE_RENAME | DEVICE_REVOKE
         // A profile's folder becomes writable inside every session that uses it.
         | AGENT_PROFILE_ADD | AGENT_PROFILE_REMOVE
-        | PROJECT_SET_ROOTS => Admin,
+        | PROJECT_SET_ROOTS
+        // Lets a phone see, and maybe control, everything you are logged in to.
+        | SCREEN_SET_POLICY => Admin,
         _ => return None,
     })
 }
@@ -183,6 +203,7 @@ mod tests {
             AGENT_PROFILE_REMOVE,
             PROJECT_SET_ROOTS,
             BUILTIN_SET_POLICY,
+            SCREEN_SET_POLICY,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }
@@ -207,6 +228,9 @@ mod tests {
             SESSION_SET_CONFIG,
             SESSION_SIDE_ASK,
             SESSION_RENAME,
+            SCREEN_STATUS,
+            SCREEN_START,
+            SCREEN_STOP,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

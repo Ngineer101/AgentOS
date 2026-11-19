@@ -552,6 +552,195 @@ impl Drop for RemoteClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Screen sharing
+// ---------------------------------------------------------------------------
+
+/// One H.264 access unit from screen-relay: Annex B NAL units, with SPS and
+/// PPS on keyframes. Decode in order; ACK each with [`ScreenSession::ack`]
+/// once it was drawn (or dropped for a newer one).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ScreenFrame {
+    pub generation: u32,
+    pub sequence: u32,
+    pub keyframe: bool,
+    /// Desktop size in pixels.
+    pub width: u16,
+    pub height: u16,
+    pub data: Vec<u8>,
+}
+
+/// Receives one screen stream.
+#[uniffi::export(foreign)]
+pub trait ScreenListener: Send + Sync {
+    /// A frame, in order. Called on a background thread.
+    fn on_frame(&self, frame: ScreenFrame);
+    /// The stream ended (host stopped sharing, another viewer took over, the
+    /// network dropped). Called once, unless the app called `close()`.
+    fn on_closed(&self, reason: String);
+}
+
+/// A screen stream on a tunnel of its own. Get a ticket with `screen.start`
+/// on the normal connection first. Input methods take positions as fractions
+/// of the desktop (0…1) and do nothing unless the ticket allows control.
+#[derive(uniffi::Object)]
+pub struct ScreenSession {
+    tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
+    generation: Arc<std::sync::atomic::AtomicU32>,
+    closed_by_app: Arc<AtomicBool>,
+}
+
+fn coord(v: f64) -> u16 {
+    (v.clamp(0.0, 1.0) * agenthost_proto::screen::COORD_MAX as f64).round() as u16
+}
+
+impl ScreenSession {
+    fn input(&self, events: &[agenthost_proto::screen::Input]) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        if generation == 0 {
+            return; // No frame yet: the engine would reject the generation.
+        }
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            for e in events {
+                // Never block the UI thread: drop input if the link is that far behind.
+                let _ = tx.try_send(e.message(generation));
+            }
+        }
+    }
+}
+
+#[uniffi::export]
+impl ScreenSession {
+    #[uniffi::constructor]
+    pub async fn open(
+        credentials: DeviceCredentials,
+        ticket: String,
+        listener: Arc<dyn ScreenListener>,
+    ) -> Result<Arc<ScreenSession>, AgentHostError> {
+        on_runtime(async move {
+            let state = DeviceState::from(credentials);
+            let (mut incoming, sender, mut closed) = remote::open_screen(&state, &ticket)
+                .await
+                .map_err(|e| AgentHostError::from_anyhow(e, transport))?
+                .split();
+            let generation = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let closed_by_app = Arc::new(AtomicBool::new(false));
+            let session = Arc::new(ScreenSession {
+                tx: Mutex::new(Some(sender)),
+                generation: generation.clone(),
+                closed_by_app: closed_by_app.clone(),
+            });
+            tokio::spawn(async move {
+                use agenthost_proto::screen::{decode, ServerMessage};
+                while let Some(msg) = incoming.recv().await {
+                    match decode(&msg) {
+                        Ok(ServerMessage::Frame(f)) => {
+                            generation.store(f.generation, Ordering::SeqCst);
+                            listener.on_frame(ScreenFrame {
+                                generation: f.generation,
+                                sequence: f.sequence,
+                                keyframe: f.keyframe,
+                                width: f.width,
+                                height: f.height,
+                                data: f.data,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            if !closed_by_app.load(Ordering::SeqCst) {
+                                listener.on_closed(format!("bad message from the host: {e}"));
+                            }
+                            return;
+                        }
+                    }
+                }
+                let _ = tokio::time::timeout(Duration::from_secs(2), closed.wait_for(|r| r.is_some())).await;
+                if !closed_by_app.load(Ordering::SeqCst) {
+                    let reason = closed.borrow().clone().unwrap_or_else(|| "the stream ended".into());
+                    listener.on_closed(reason);
+                }
+            });
+            Ok(session)
+        })
+        .await
+    }
+
+    /// Acknowledge a frame. `wait_us`: how long it waited between arriving
+    /// and being drawn, so a busy phone isn't mistaken for a slow network.
+    pub fn ack(&self, generation: u32, sequence: u32, wait_us: u32) {
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.try_send(agenthost_proto::screen::ack(generation, sequence, wait_us));
+        }
+    }
+
+    pub fn pointer_move(&self, x: f64, y: f64) {
+        use agenthost_proto::screen::Input;
+        self.input(&[Input::PointerMove { x: coord(x), y: coord(y) }]);
+    }
+
+    /// Press and release a button (1 left, 2 middle, 3 right) at a point.
+    pub fn click(&self, x: f64, y: f64, button: u16) {
+        use agenthost_proto::screen::Input;
+        let (x, y) = (coord(x), coord(y));
+        self.input(&[
+            Input::PointerMove { x, y },
+            Input::Button { button, down: true, x, y },
+            Input::Button { button, down: false, x, y },
+        ]);
+    }
+
+    /// Hold or release a button, for drags.
+    pub fn button(&self, x: f64, y: f64, button: u16, down: bool) {
+        use agenthost_proto::screen::Input;
+        self.input(&[Input::Button { button, down, x: coord(x), y: coord(y) }]);
+    }
+
+    /// Scroll by notches at a point (positive `dy` scrolls down).
+    pub fn scroll(&self, x: f64, y: f64, dx: i32, dy: i32) {
+        use agenthost_proto::screen::Input;
+        let (x, y) = (coord(x), coord(y));
+        let mut events = vec![];
+        if dy != 0 {
+            events.push(Input::Wheel { horizontal: false, delta: dy * 120, x, y });
+        }
+        if dx != 0 {
+            events.push(Input::Wheel { horizontal: true, delta: dx * 120, x, y });
+        }
+        self.input(&events);
+    }
+
+    /// Type text as characters (layout independent).
+    pub fn type_text(&self, text: String) {
+        use agenthost_proto::screen::Input;
+        let events: Vec<Input> = text.chars().map(Input::Text).collect();
+        self.input(&events);
+    }
+
+    /// Press and release one key by HID usage (Enter 40, Escape 41,
+    /// Backspace 42, Tab 43, arrows 79–82), with modifiers held around it
+    /// (HID 224–231: left Ctrl, Shift, Alt, GUI/⌘, then the right ones).
+    pub fn key(&self, hid: u16, modifiers: Vec<u16>) {
+        use agenthost_proto::screen::Input;
+        let mut events: Vec<Input> = modifiers.iter().map(|&m| Input::Key { hid: m, down: true }).collect();
+        events.push(Input::Key { hid, down: true });
+        events.push(Input::Key { hid, down: false });
+        events.extend(modifiers.iter().rev().map(|&m| Input::Key { hid: m, down: false }));
+        self.input(&events);
+    }
+
+    /// Close the stream. `on_closed` is not called for it.
+    pub fn close(&self) {
+        self.closed_by_app.store(true, Ordering::SeqCst);
+        let _ = self.tx.lock().unwrap().take();
+    }
+}
+
+impl Drop for ScreenSession {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// Pull the close code out of the CLI's closed-reason text
 /// (`"… (code 4401: …)"`), or 0 when there is none.
 fn close_code_from_reason(reason: &str) -> u16 {

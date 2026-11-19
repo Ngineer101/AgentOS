@@ -31,6 +31,13 @@ enum Cmd {
         /// Store secrets in an owner-only file even if a keychain is available.
         #[arg(long)]
         file_secrets: bool,
+        /// Pipe phone screen sharing to a screen-relay engine you started
+        /// yourself (e.g. http://127.0.0.1:8080) instead of starting one.
+        #[arg(long, env = "AGENTHOST_SCREEN_ENGINE_URL")]
+        screen_engine_url: Option<String>,
+        /// That engine's token file (`screen-relay status --json` shows it).
+        #[arg(long, env = "AGENTHOST_SCREEN_ENGINE_TOKEN_FILE")]
+        screen_engine_token_file: Option<PathBuf>,
     },
     /// Install the pinned agent adapters and sandbox runtime.
     InstallTools,
@@ -84,8 +91,12 @@ async fn main() -> Result<()> {
             relay_url,
             enable_fake_agent,
             file_secrets,
+            screen_engine_url,
+            screen_engine_token_file,
         }) => {
+            cfg.screen_engine_token_file = screen_engine_token_file;
             cfg.relay_url = relay_url;
+            cfg.screen_engine_url = screen_engine_url;
             cfg.enable_fake_agent = enable_fake_agent;
             cfg.file_secrets = file_secrets;
             run(cfg).await
