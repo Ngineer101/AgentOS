@@ -179,6 +179,9 @@ pub async fn serve_connection(
                     Ok(BusMsg::VoiceChanged(v)) if conn.greeted => {
                         conn.notify(m::N_VOICE_CHANGED, serde_json::to_value(v).unwrap()).await;
                     }
+                    Ok(BusMsg::ScreenChanged(s)) if conn.greeted => {
+                        conn.notify(m::N_SCREEN_CHANGED, serde_json::to_value(s).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -441,6 +444,23 @@ impl Conn {
             }
 
             m::VOICE_STATUS => to_value(h.ctx.voice.status()),
+
+            m::SCREEN_STATUS => to_value(h.screen.status()),
+            m::SCREEN_SET_POLICY => to_value(h.screen.set_policy(params(p)?).await?),
+            m::SCREEN_START => {
+                let sp: ScreenStartParams = params(p)?;
+                let who = device_display_name(&self.principal.label).to_string();
+                to_value(h.screen.start(sp, self.principal.device_id.clone(), &who).await?)
+            }
+            m::SCREEN_STOP => {
+                h.screen.stop(&format!("stopped by {}", device_display_name(&self.principal.label))).await;
+                to_value(h.screen.status())
+            }
+            // Only valid as the first message of a tunnel, which the relay
+            // connector handles before this connection exists.
+            m::SCREEN_ATTACH => Err(RpcError::invalid_params(
+                "screen.attach must be the first message on a new device tunnel",
+            )),
             m::VOICE_DOWNLOAD => to_value(h.ctx.voice.download()),
             m::VOICE_TRANSCRIBE => {
                 let vp: VoiceTranscribeParams = params(p)?;

@@ -156,3 +156,10 @@ Not visible to the relay; documented here for completeness. Implemented once in
   reordered or altered frame fails decryption and the connection is closed.
 - Each transport frame carries a 1-byte flag (`0` = more, `1` = final) then a
   chunk of one JSON-RPC message, so messages larger than a Noise frame work.
+- Screen streams use a tunnel of their own (a second device socket, its own
+  `Noise_IK` handshake). Its first message is the JSON-RPC request
+  `screen.attach` with a one-time ticket from `screen.start` on the normal
+  connection; after the response, every message on that tunnel is one
+  [screen-relay](https://github.com/vercel-labs/screen-relay) `nsl1` message
+  (H.264 frames from the host; ACKs and, when allowed, input from the phone),
+  chunked the same way. The relay sees no difference.

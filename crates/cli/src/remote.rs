@@ -217,13 +217,8 @@ fn keepalive() -> (Duration, Duration) {
         .unwrap_or((Duration::from_secs(15), Duration::from_secs(40)))
 }
 
-pub async fn connect(
-    state: &DeviceState,
-) -> Result<(
-    Client,
-    mpsc::Receiver<Notification>,
-    tokio::sync::watch::Receiver<Option<String>>,
-)> {
+/// Relay authentication and the `Noise_IK` handshake: an open tunnel.
+async fn open_tunnel(state: &DeviceState) -> Result<(Ws, tunnel::Transport)> {
     let noise = StaticKey::from_private(&unb64(&state.noise_private)?)?;
     let relay_key = RelayKey::from_bytes(&unb64(&state.relay_private)?)?;
     let host_key: [u8; 32] = unb64(&state.host_key)?
@@ -241,7 +236,17 @@ pub async fn connect(
     let mut hs = Handshake::connect_initiator(&noise, &host_key)?;
     ws.send(WsMsg::Binary(hs.write(&[])?)).await?;
     hs.read(&next_binary(&mut ws, Duration::from_secs(20)).await?)?;
-    let mut transport = hs.into_transport()?;
+    Ok((ws, hs.into_transport()?))
+}
+
+pub async fn connect(
+    state: &DeviceState,
+) -> Result<(
+    Client,
+    mpsc::Receiver<Notification>,
+    tokio::sync::watch::Receiver<Option<String>>,
+)> {
+    let (ws, mut transport) = open_tunnel(state).await?;
 
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let (in_tx, in_rx) = mpsc::channel::<String>(4096);
@@ -311,4 +316,120 @@ pub async fn connect(
     });
     let (c, n) = Client::over(out_tx, in_rx, "agenthost-cli-remote").await?;
     Ok((c, n, closed_rx))
+}
+
+/// A screen stream on a tunnel of its own (see `screen.start`).
+///
+/// `incoming` yields whole screen-relay messages (decode them with
+/// [`agenthost_proto::screen::decode`]); send ACKs and input with
+/// [`ScreenStream::send`]. Dropping the stream closes the tunnel.
+pub struct ScreenStream {
+    pub incoming: mpsc::Receiver<Vec<u8>>,
+    outgoing: mpsc::Sender<Vec<u8>>,
+    /// Why the stream ended, once it has.
+    pub closed: tokio::sync::watch::Receiver<Option<String>>,
+}
+
+impl ScreenStream {
+    /// Queue one message for the host. Fails once the stream has closed.
+    pub async fn send(&self, msg: Vec<u8>) -> Result<()> {
+        self.outgoing.send(msg).await.map_err(|_| anyhow!("the screen stream closed"))
+    }
+
+    /// The incoming messages, the only sender (dropping it closes the
+    /// tunnel), and why it closed.
+    #[allow(clippy::type_complexity)]
+    pub fn split(
+        self,
+    ) -> (
+        mpsc::Receiver<Vec<u8>>,
+        mpsc::Sender<Vec<u8>>,
+        tokio::sync::watch::Receiver<Option<String>>,
+    ) {
+        (self.incoming, self.outgoing, self.closed)
+    }
+}
+
+/// Open a second tunnel and redeem a `screen.start` ticket on it.
+pub async fn open_screen(state: &DeviceState, ticket: &str) -> Result<ScreenStream> {
+    use agenthost_proto::jsonrpc::{Message, Request};
+    let (mut ws, mut transport) = open_tunnel(state).await?;
+    let req = Request::new(
+        json!(1),
+        agenthost_proto::methods::SCREEN_ATTACH,
+        json!({ "ticket": ticket }),
+    );
+    for f in transport.seal(Message::Request(req).to_json().as_bytes())? {
+        ws.send(WsMsg::Binary(f)).await?;
+    }
+    let reply = loop {
+        if let Some(m) = transport.open(&next_binary(&mut ws, Duration::from_secs(20)).await?)? {
+            break m;
+        }
+    };
+    match Message::parse(std::str::from_utf8(&reply)?)? {
+        Message::Response(r) => {
+            if let Some(e) = r.error {
+                bail!("{}", e.message);
+            }
+        }
+        _ => bail!("unexpected reply to screen.attach"),
+    }
+    let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
+    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel::<Option<String>>(None);
+    let (mut sink, mut stream) = ws.split();
+    tokio::spawn(async move {
+        let (every, silence) = keepalive();
+        let mut ping = tokio::time::interval(every);
+        ping.tick().await;
+        let mut heard = tokio::time::Instant::now();
+        let reason = loop {
+            tokio::select! {
+                msg = out_rx.recv() => {
+                    let Some(msg) = msg else { break "closed".to_string() };
+                    let frames = match transport.seal(&msg) {
+                        Ok(f) => f,
+                        Err(e) => break format!("tunnel error: {e}"),
+                    };
+                    let mut failed = None;
+                    for f in frames {
+                        if let Err(e) = sink.send(WsMsg::Binary(f)).await {
+                            failed = Some(e.to_string());
+                            break;
+                        }
+                    }
+                    if let Some(e) = failed { break format!("connection lost: {e}"); }
+                }
+                _ = ping.tick() => {
+                    if heard.elapsed() > silence {
+                        break "connection lost: the relay stopped answering".to_string();
+                    }
+                    if let Err(e) = sink.send(WsMsg::Text(r#"{"type":"ping"}"#.into())).await {
+                        break format!("connection lost: {e}");
+                    }
+                }
+                msg = stream.next() => {
+                    heard = tokio::time::Instant::now();
+                    match msg {
+                        Some(Ok(WsMsg::Binary(b))) => match transport.open(&b) {
+                            Ok(Some(m)) => { if in_tx.send(m).await.is_err() { break "closed".into(); } }
+                            Ok(None) => {}
+                            Err(e) => break format!("tunnel integrity failure: {e}"),
+                        },
+                        Some(Ok(WsMsg::Close(f))) => {
+                            let (code, reason) = f.map(|f| (u16::from(f.code), f.reason.to_string())).unwrap_or((1000, String::new()));
+                            break Closed { code, reason }.to_string();
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => break e.to_string(),
+                        None => break "relay closed".into(),
+                    }
+                }
+            }
+        };
+        let _ = sink.send(WsMsg::Close(None)).await;
+        let _ = closed_tx.send(Some(reason));
+    });
+    Ok(ScreenStream { incoming: in_rx, outgoing: out_tx, closed: closed_rx })
 }

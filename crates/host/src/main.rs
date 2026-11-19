@@ -31,6 +31,13 @@ enum Cmd {
         /// Store secrets in an owner-only file even if a keychain is available.
         #[arg(long)]
         file_secrets: bool,
+        /// Pipe phone screen sharing to a screen-relay engine you started
+        /// yourself (e.g. http://127.0.0.1:8080) instead of starting one.
+        #[arg(long, env = "AGENTHOST_SCREEN_ENGINE_URL")]
+        screen_engine_url: Option<String>,
+        /// That engine's token file (`screen-relay status --json` shows it).
+        #[arg(long, env = "AGENTHOST_SCREEN_ENGINE_TOKEN_FILE")]
+        screen_engine_token_file: Option<PathBuf>,
     },
     /// Install the pinned agent adapters and sandbox runtime.
     InstallTools,
@@ -84,8 +91,12 @@ async fn main() -> Result<()> {
             relay_url,
             enable_fake_agent,
             file_secrets,
+            screen_engine_url,
+            screen_engine_token_file,
         }) => {
+            cfg.screen_engine_token_file = screen_engine_token_file;
             cfg.relay_url = relay_url;
+            cfg.screen_engine_url = screen_engine_url;
             cfg.enable_fake_agent = enable_fake_agent;
             cfg.file_secrets = file_secrets;
             run(cfg).await
@@ -146,6 +157,7 @@ fn install_tools(cfg: &HostConfig) -> Result<()> {
         agents::CLAUDE_ACP_PACKAGE,
         agents::SANDBOX_RUNTIME_PACKAGE,
         agents::GEMINI_CLI_PACKAGE,
+        agenthost_host::screen::SCREEN_RELAY_PACKAGE,
     ];
     println!("Installing into {}:", cfg.tools_dir.display());
     for p in packages {
@@ -164,6 +176,29 @@ fn install_tools(cfg: &HostConfig) -> Result<()> {
     if !status.success() {
         bail!("npm install failed");
     }
+    build_screen_engine(cfg);
     println!("Done.");
     Ok(())
+}
+
+/// screen-relay's engine is C++ built on this machine, after its system
+/// packages (brew on macOS; apt, dnf, pacman or apk on Linux, which asks for
+/// sudo). screen-relay asks before installing them. Only phone screen sharing
+/// needs it, so a skipped or failed build doesn't fail install-tools.
+fn build_screen_engine(cfg: &HostConfig) {
+    let bin = cfg.tools_dir.join("node_modules/.bin/screen-relay");
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.arg("install");
+    if !cfg!(target_os = "macos") {
+        // X11 for the browser desktop, Wayland to attach to compositors like Hyprland.
+        cmd.args(["--backend", "all"]);
+    }
+    println!("Building screen-relay's engine (for phone screen sharing):");
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        _ => println!(
+            "  Skipped. Screen sharing needs it: run `{} install` when you want it.",
+            bin.display()
+        ),
+    }
 }

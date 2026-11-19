@@ -127,6 +127,8 @@ final class AppModel: ObservableObject {
     /// The host's connectors, for their icons (`connector.list`; empty on
     /// hosts that send none).
     @Published private(set) var connectors: [ConnectorInfo] = []
+    /// What the host can show and whether this phone may watch (protocol 3).
+    @Published var screenStatus: ScreenStatusModel?
     /// Streaming side answers (`session.delta` with a `side_id`), by side id;
     /// replaced by the coalesced `side.message` event.
     @Published private(set) var sideStreaming: [String: String] = [:]
@@ -696,6 +698,7 @@ final class AppModel: ObservableObject {
             deviceName = me.name
         }
         await refreshApprovals()
+        await refreshScreen()
         if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
             connectors = list
             iconCache = [:]
@@ -1048,6 +1051,8 @@ final class AppModel: ObservableObject {
                 Task { await subscribe(s.sessionId) }
             }
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
+        case RPC.nScreenChanged:
+            screenStatus = try? JSONDecoder().decode(ScreenStatusModel.self, from: data)
         case RPC.nDeviceRevoked:
             deviceRemoved()
         default:
@@ -1253,7 +1258,8 @@ final class AppModel: ObservableObject {
         deviceName = d.deviceName
         transcripts = d.transcripts
         connectors = d.connectors
-        hostProtocolVersion = RPC.mediaProtocolVersion
+        screenStatus = d.screenStatus
+        hostProtocolVersion = RPC.screenProtocolVersion
         link = .online
         phase = d.screen == .pair ? .unpaired : .ready
     }
