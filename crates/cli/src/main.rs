@@ -180,8 +180,8 @@ enum ScreenCmd {
         seconds: u64,
         /// Click at x,y (fractions of the screen, e.g. 0.5,0.5) after the
         /// first frame; needs control to be allowed.
-        #[arg(long, value_delimiter = ',', num_args = 2)]
-        click: Option<Vec<f64>>,
+        #[arg(long, value_parser = parse_point)]
+        click: Option<(f64, f64)>,
         /// Type this text after the first frame; needs control.
         #[arg(long)]
         r#type: Option<String>,
@@ -1839,6 +1839,13 @@ fn truncate_str(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+/// `x,y` as fractions of the screen.
+fn parse_point(s: &str) -> Result<(f64, f64), String> {
+    let (x, y) = s.split_once(',').ok_or("expected x,y, e.g. 0.5,0.5")?;
+    let f = |v: &str| v.trim().parse::<f64>().map_err(|_| format!("{v:?} is not a number"));
+    Ok((f(x)?, f(y)?))
+}
+
 async fn screen_cmd(
     c: &Client,
     cmd: ScreenCmd,
@@ -1886,8 +1893,8 @@ async fn screen_cmd(
                 if !acted {
                     acted = true;
                     let frac = |v: f64| (v.clamp(0.0, 1.0) * wire::COORD_MAX as f64) as u16;
-                    if let Some(p) = &click {
-                        let (x, y) = (frac(p[0]), frac(p[1]));
+                    if let Some((px, py)) = click {
+                        let (x, y) = (frac(px), frac(py));
                         for i in [
                             Input::PointerMove { x, y },
                             Input::Button { button: 1, down: true, x, y },
