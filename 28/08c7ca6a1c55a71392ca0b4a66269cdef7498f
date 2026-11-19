@@ -1,0 +1,31 @@
+README.md
+  s_f73c2a29b0652f::t_19bc1d9862d7af 107-115
+crates/host/src/hostcmd.rs
+  s_f73c2a29b0652f::t_e1eaca765aa364 1-480
+crates/host/src/lib.rs
+  s_f73c2a29b0652f::t_1d6769d742fbf6 15
+crates/host/src/mcp.rs
+  s_f73c2a29b0652f::t_d4f03b73b20860 53-55,115,122-124,144,149-177,182-188,223-246,578-580,740,975-1093
+crates/host/tests/run_command.rs
+  s_f73c2a29b0652f::t_44db539dabcd3d 1-137
+crates/proto/src/types.rs
+  s_f73c2a29b0652f::t_a28ec3e535aab1 940-941,945,954-957,960-962,967-968
+docs/status.md
+  s_f73c2a29b0652f::t_be17cba81662a2 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2808c7ca6a1c55a71392ca0b4a66269cdef7498f",
+  "prompts": {},
+  "sessions": {
+    "s_f73c2a29b0652f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f73c2a29b0652f",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
