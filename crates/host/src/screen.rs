@@ -39,6 +39,9 @@ const TICKET_TTL_MS: i64 = 60_000;
 /// How long a started engine waits for its first viewer, and lingers after
 /// the last one (a phone switching networks reconnects within this).
 const IDLE_STOP: Duration = Duration::from_secs(60);
+/// The longest one viewer may stay, in case the phone is forgotten with the
+/// stream open. Reconnecting starts a new one.
+const MAX_VIEW: Duration = Duration::from_secs(15 * 60);
 /// The virtual desktop for [`ScreenMode::Browser`]: roomy enough for sign-in
 /// pages, small enough to read on a phone.
 const BROWSER_RESOLUTION: &str = "1280x800";
@@ -495,7 +498,7 @@ impl Screen {
     }
 
     /// Redeem a ticket for the tunnel it arrived on.
-    pub fn attach(&self, p: &ScreenAttachParams, device_id: Option<&str>) -> Result<Attached, RpcError> {
+    pub fn attach(self: &Arc<Self>, p: &ScreenAttachParams, device_id: Option<&str>) -> Result<Attached, RpcError> {
         let mut st = self.state.lock().unwrap();
         let t = st.tickets.remove(&hex::encode(tunnel::sha256(p.ticket.as_bytes())));
         let Some(t) = t.filter(|t| t.expires_at > now_ms() && t.device_id.as_deref() == device_id) else {
@@ -520,7 +523,33 @@ impl Screen {
         drop(st);
         self.ctx.audit.log("screen.attach", json!({"device_id": device_id, "control": control}));
         self.changed();
+        self.limit_view(id);
         Ok(Attached { url, control, id, kill })
+    }
+
+    /// End viewer `id` after [`MAX_VIEW`] if it is still watching.
+    fn limit_view(self: &Arc<Self>, id: u64) {
+        let me = self.clone();
+        let wait = self.ctx.cfg.screen_max_view.unwrap_or(MAX_VIEW);
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let kill = {
+                let mut st = me.state.lock().unwrap();
+                match st.viewer.take() {
+                    Some((v, kill)) if v == id => Some(kill),
+                    other => {
+                        st.viewer = other;
+                        None
+                    }
+                }
+            };
+            if let Some(kill) = kill {
+                let _ = kill.send(());
+                me.ctx.audit.log("screen.time_limit", json!({"after_s": wait.as_secs()}));
+                me.changed();
+                me.schedule_idle_stop();
+            }
+        });
     }
 
     /// Pipe screen-relay messages between the engine and a device until

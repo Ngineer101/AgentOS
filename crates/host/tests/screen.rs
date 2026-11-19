@@ -90,6 +90,10 @@ async fn fake_engine() -> (String, Arc<Mutex<Seen>>) {
 }
 
 async fn setup() -> (TestHost, DevRelay, DeviceState, Arc<Mutex<Seen>>) {
+    setup_with(None).await
+}
+
+async fn setup_with(max_view: Option<Duration>) -> (TestHost, DevRelay, DeviceState, Arc<Mutex<Seen>>) {
     let (engine, seen) = fake_engine().await;
     let relay = DevRelay::start("127.0.0.1:0").await.unwrap();
     let url = relay.url();
@@ -97,6 +101,7 @@ async fn setup() -> (TestHost, DevRelay, DeviceState, Arc<Mutex<Seen>>) {
         c.relay_url = Some(url);
         c.screen_engine_url = Some(engine);
         c.screen_idle_stop = Some(Duration::from_millis(300));
+        c.screen_max_view = max_view;
     })
     .await;
     let state = pair_device(&th).await;
@@ -264,4 +269,23 @@ async fn an_unused_engine_stops_on_its_own() {
     tokio::time::sleep(Duration::from_millis(800)).await;
     let st: ScreenStatus = desk.call(m::SCREEN_STATUS, json!({})).await.unwrap();
     assert!(st.running.is_none(), "no viewer came, so the engine was stopped");
+}
+
+#[tokio::test]
+async fn a_forgotten_viewer_is_ended_after_the_time_limit() {
+    let (th, _relay, state, _) = setup_with(Some(Duration::from_millis(500))).await;
+    let (desk, _) = th.client().await;
+    let _: ScreenStatus = desk.call(m::SCREEN_SET_POLICY, json!({"enabled": true})).await.unwrap();
+    let (phone, _, _) = remote::connect(&state).await.unwrap();
+    let start: ScreenStartResult = phone.call(m::SCREEN_START, json!({"mode": "desktop"})).await.unwrap();
+    let mut s = remote::open_screen(&state, &start.ticket).await.unwrap();
+    next_frame(&mut s).await;
+    let mut closed = s.closed.clone();
+    tokio::time::timeout(T, closed.wait_for(|r| r.is_some())).await.unwrap().unwrap();
+    // Then the engine stops, as after any viewer leaves.
+    wait_for("the engine to stop", || {
+        let st = th.host.screen.status();
+        st.running.is_none()
+    })
+    .await;
 }

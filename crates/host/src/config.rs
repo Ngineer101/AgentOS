@@ -49,6 +49,8 @@ pub struct HostConfig {
     pub screen_engine_token_file: Option<PathBuf>,
     /// Test only: how long an engine waits for a viewer before it is stopped.
     pub screen_idle_stop: Option<std::time::Duration>,
+    /// Test only: how long one viewer may watch (15 minutes otherwise).
+    pub screen_max_view: Option<std::time::Duration>,
 }
 
 /// The catalog `connector.search` uses.
@@ -86,6 +88,7 @@ impl HostConfig {
             screen_engine_url: None,
             screen_engine_token_file: None,
             screen_idle_stop: None,
+            screen_max_view: None,
         })
     }
 
@@ -112,6 +115,7 @@ impl HostConfig {
             screen_engine_url: None,
             screen_engine_token_file: None,
             screen_idle_stop: None,
+            screen_max_view: None,
         }
     }
 
