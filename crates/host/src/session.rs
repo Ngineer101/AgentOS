@@ -32,6 +32,11 @@ pub const REPEAT_FAILURE_LIMIT: usize = 3;
 /// How long an agent gets to honour `session/cancel` before it is restarted.
 pub const CANCEL_GRACE: Duration = Duration::from_secs(3);
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long text the agent streams outside a prompt's turn (a reply to a
+/// background task finishing, say) waits for more before it is written out.
+/// No turn end comes to flush it, so without this it sat unwritten until the
+/// next prompt, and showed up below that prompt.
+const OUT_OF_TURN_SETTLE: Duration = Duration::from_millis(800);
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -768,6 +773,8 @@ struct Actor {
     host_cancel_reason: Option<String>,
     /// Text being streamed: (event kind, accumulated text).
     buf: Option<(EventType, String)>,
+    /// When text last streamed in; out of a turn, it is written out once it settles.
+    streamed_at: Option<Instant>,
     /// What each running subagent is saying, by its parent tool call id, in
     /// the order the subagents first spoke; kept apart from `buf`, since
     /// parallel subagents interleave with each other and the main agent.
@@ -885,6 +892,7 @@ impl Actor {
             cancel_requested: false,
             host_cancel_reason: None,
             buf: None,
+            streamed_at: None,
             sub_bufs: Vec::new(),
             tools: HashMap::new(),
             failures: HashMap::new(),
@@ -1409,8 +1417,13 @@ impl Actor {
                 Msg(Option<Incoming>),
                 Turn(Result<Value, RpcError>),
                 CancelTimeout,
+                Settled,
             }
             let cancel_deadline = self.cancel_deadline;
+            let settle_at = self
+                .streamed_at
+                .filter(|_| self.turn.is_none() && (self.buf.is_some() || !self.sub_bufs.is_empty()))
+                .map(|t| t + OUT_OF_TURN_SETTLE);
             let step = {
                 let agent = self.agent.as_mut().expect("agent running in main loop");
                 let turn = &mut self.turn;
@@ -1420,6 +1433,7 @@ impl Actor {
                     m = agent.incoming.recv() => Step::Msg(m),
                     r = async { turn.as_mut().unwrap().await }, if has_turn => Step::Turn(r),
                     _ = async { tokio::time::sleep_until(cancel_deadline.unwrap()).await }, if cancel_deadline.is_some() && has_turn => Step::CancelTimeout,
+                    _ = async { tokio::time::sleep_until(settle_at.unwrap()).await }, if settle_at.is_some() => Step::Settled,
                 }
             };
             match step {
@@ -1429,11 +1443,22 @@ impl Actor {
                     seq,
                     text,
                     attachments,
-                })) => self.queue.push_back(Queued {
-                    seq,
-                    text,
-                    attachments,
-                }),
+                })) => {
+                    // Anything the agent said on its own goes before this prompt's reply.
+                    if self.turn.is_none() {
+                        self.flush_all();
+                    }
+                    self.queue.push_back(Queued {
+                        seq,
+                        text,
+                        attachments,
+                    })
+                }
+                Step::Settled => {
+                    self.record_pending_calls();
+                    self.flush_all();
+                    self.streamed_at = None;
+                }
                 Step::Cmd(Some(Cmd::Cancel)) => self.request_cancel(None).await,
                 Step::Cmd(Some(Cmd::SetConfig {
                     config_id,
@@ -1929,6 +1954,7 @@ impl Actor {
             return;
         }
         self.record_pending_calls_of(Some(parent));
+        self.streamed_at = Some(Instant::now());
         match self.sub_bufs.iter_mut().find(|(p, _)| p == parent) {
             Some((_, buf)) => buf.push_str(text),
             None => self.sub_bufs.push((parent.to_string(), text.to_string())),
@@ -1940,6 +1966,7 @@ impl Actor {
             return;
         }
         self.record_pending_calls_of(None);
+        self.streamed_at = Some(Instant::now());
         match &mut self.buf {
             Some((k, buf)) if *k == kind => buf.push_str(text),
             _ => {

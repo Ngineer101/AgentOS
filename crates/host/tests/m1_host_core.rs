@@ -60,6 +60,30 @@ async fn full_session_streams_reply() {
     wait_state(&c, &sid, SessionState::Idle, T).await;
 }
 
+/// A reply the agent sends on its own after its turn ended (a background task
+/// finished) is written out by itself, before the next prompt, not held back
+/// until that prompt's turn and shown below it.
+#[tokio::test]
+async fn a_reply_between_turns_stays_before_the_next_prompt() {
+    let th = TestHost::start().await;
+    let (c, mut n) = th.client().await;
+    let sid = new_session(&th, &c).await;
+    c.subscribe(&sid, 0).await.unwrap();
+    c.prompt(&sid, "later 0.2 the build finished").await.unwrap();
+    let (mut all, _) = collect_until(&mut n, T, turn_end).await;
+    let (between, _) = collect_until(&mut n, T, |e| e.kind == EventType::AgentMessage).await;
+    all.extend(between);
+    c.prompt(&sid, "hello").await.unwrap();
+    all.extend(collect_until(&mut n, T, turn_end).await.0);
+    all.sort_by_key(|e| e.seq);
+    let order: Vec<String> = all
+        .iter()
+        .filter(|e| matches!(e.kind, EventType::Prompt | EventType::AgentMessage))
+        .map(|e| e.payload["text"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(order, ["later 0.2 the build finished", "started it", "the build finished", "hello", "echo: hello"]);
+}
+
 #[tokio::test]
 async fn long_replies_are_complete_before_turn_end() {
     let th = TestHost::start().await;
