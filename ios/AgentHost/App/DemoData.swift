@@ -37,6 +37,10 @@ struct DemoData {
         case btw
         /// A turn with two subagents in parallel: one done, one running.
         case subagents
+        /// The host's screen, streaming (plays `DemoScreen.h264`).
+        case screen
+        /// Choosing what to show before the stream starts.
+        case screenPicker = "screen-picker"
     }
 
     var screen: Screen
@@ -49,6 +53,14 @@ struct DemoData {
     var approvals: [PendingApprovalModel]
     var transcripts: [String: Transcript]
     var connectors: [ConnectorInfo] = []
+    var screenStatus = ScreenStatusModel(
+        policy: ScreenPolicyModel(enabled: true, allowControl: true),
+        installed: true,
+        modes: [
+            ScreenModeInfoModel(mode: ScreenModeName.desktop, available: true, detail: "Hyprland (wayland-1)"),
+            ScreenModeInfoModel(mode: ScreenModeName.browser, available: true, detail: "chromium in a separate 1280x800 desktop"),
+        ]
+    )
 
     static let flakySession = "demo-flaky"
     static let quickSession = "demo-rust"

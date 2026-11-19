@@ -13,6 +13,7 @@ struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
     @State private var showNew = false
+    @State private var showScreen = false
     @State private var approvalShown: PendingApprovalModel?
     @State private var showApprovalList = false
     @State private var search = ""
@@ -112,6 +113,17 @@ struct SessionsView: View {
             }
             .navigationTitle(model.hostName)
             .toolbar {
+                if model.screenStatus?.policy.enabled == true {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showScreen = true
+                        } label: {
+                            ToolbarIcon(systemName: "display")
+                        }
+                        .accessibilityLabel("Host Screen")
+                        .disabled(!model.link.isOnline)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         path.append(.settings)
@@ -148,9 +160,22 @@ struct SessionsView: View {
                 ApprovalListView()
                     .environmentObject(model)
             }
+            .fullScreenCover(isPresented: $showScreen) {
+                HostScreenView(startImmediately: demoStreams)
+                    .environmentObject(model)
+            }
         }
         #if DEBUG
         .task { openDemoScreen() }
+        #endif
+    }
+
+    /// Demo screenshots: the screen viewer starts streaming at once.
+    private var demoStreams: Bool {
+        #if DEBUG
+        DemoData.requestedScreen == .screen
+        #else
+        false
         #endif
     }
 
@@ -177,6 +202,7 @@ struct SessionsView: View {
         case .side, .config, .paste, .quick, .btw: path = [.session(DemoData.quickSession)]
         case .plain: path = [.session(DemoData.plainSession)]
         case .subagents: path = [.session(DemoData.subagentSession)]
+        case .screen, .screenPicker: showScreen = true
         case .sessions, .pair: break
         }
     }

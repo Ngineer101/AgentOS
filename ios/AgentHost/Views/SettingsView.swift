@@ -7,10 +7,12 @@ struct SettingsView: View {
     @State private var confirmUnpair = false
     @State private var securityError: String?
     @State private var changingLock = false
+    @State private var showScreen = false
 
     var body: some View {
         List {
             hostSection
+            if model.hostSharesScreen { screenSection }
             Section {
                 NavigationLink(value: Route.archived) {
                     HStack(spacing: 12) {
@@ -47,6 +49,9 @@ struct SettingsView: View {
         .refreshable { await model.refreshAll() }
         .task {
             if model.archivedSessions == nil { await model.refreshArchived() }
+        }
+        .fullScreenCover(isPresented: $showScreen) {
+            HostScreenView().environmentObject(model)
         }
         .confirmationDialog("Unpair this iPhone?", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("Unpair", role: .destructive) { model.unpair() }
@@ -95,6 +100,33 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var screenSection: some View {
+        Section {
+            Button {
+                showScreen = true
+            } label: {
+                HStack(spacing: 12) {
+                    SettingsIcon(systemName: "display", color: .blue)
+                    Text("Host Screen").foregroundStyle(Color.primary)
+                    Spacer(minLength: 8)
+                    Text(screenSummary).foregroundStyle(Color(uiColor: .secondaryLabel))
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                }
+            }
+            .disabled(!model.link.isOnline)
+        } footer: {
+            Text("See the computer's screen when a task needs it: a sign-in page, or an approval in a browser. The computer decides whether this iPhone may watch, or also click and type.")
+        }
+    }
+
+    private var screenSummary: String {
+        guard let st = model.screenStatus, st.policy.enabled else { return "Off" }
+        if st.running != nil { return "Sharing" }
+        return st.policy.allowControl ? "Watch & control" : "Watch only"
     }
 
     private var hostDetail: String {
