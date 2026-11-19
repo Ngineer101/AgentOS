@@ -27,7 +27,7 @@ jobs:
       - name: Test (including the sandbox escape suite)
         env:
           AGENTHOST_TEST_TOOLS: ${{ runner.temp }}/ah/tools
-        run: cargo test --workspace -- --test-threads 4
+        run: cargo test --workspace --no-fail-fast -- --test-threads 4
 
   relay:
     runs-on: ubuntu-24.04
