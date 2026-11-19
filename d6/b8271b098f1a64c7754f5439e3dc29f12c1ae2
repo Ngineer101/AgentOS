@@ -1,0 +1,21 @@
+ios/AgentHost/Core/ProtocolModels.swift
+  s_2c19a128d83d46::t_665d4e31002f77 501-502
+ios/AgentHost/Views/ApprovalView.swift
+  s_2c19a128d83d46::t_c94916435cde14 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6b8271b098f1a64c7754f5439e3dc29f12c1ae2",
+  "prompts": {},
+  "sessions": {
+    "s_2c19a128d83d46": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2c19a128d83d46",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
