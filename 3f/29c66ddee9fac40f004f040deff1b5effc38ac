@@ -1,0 +1,19 @@
+crates/host/tests/m3_escape.rs
+  s_6bc4b801c87460::t_120f39c9a1cd8a 348-351,403,405
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f29c66ddee9fac40f004f040deff1b5effc38ac",
+  "prompts": {},
+  "sessions": {
+    "s_6bc4b801c87460": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6bc4b801c87460",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
