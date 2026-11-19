@@ -49,6 +49,14 @@ struct SessionView: View {
     private var canPrompt: Bool { model.link.isOnline && !isTerminal }
     private var sides: [SideConversation] { model.sideConversations(sessionId) }
 
+    /// "Working…" under the transcript while the agent is quiet (nil while
+    /// text streams in, or before there's anything to show it under).
+    private func workingLabel(_ rows: [TranscriptRow]) -> String? {
+        guard model.streaming[sessionId] == nil, !(rows.isEmpty && pending.isEmpty) else { return nil }
+        let sending = model.link.isOnline && pending.contains { $0.failure == nil }
+        return quietWork(state: session?.state ?? "", rows: rows, pending: sending)
+    }
+
     /// The question when the draft is a side question (`/btw …`) and the
     /// agent takes them.
     private var sideQuestion: String? {
@@ -156,6 +164,7 @@ struct SessionView: View {
 
     var body: some View {
         let rows = self.rows
+        let working = workingLabel(rows)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -205,6 +214,9 @@ struct SessionView: View {
                     ForEach(pending) { p in
                         PendingPromptRow(prompt: p)
                     }
+                    if let working {
+                        WorkingRow(label: working)
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 16)
@@ -221,6 +233,13 @@ struct SessionView: View {
             }
             .onChange(of: model.streaming[sessionId]?.text) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            // Sent: the message and "Working…" come into view at once.
+            .onChange(of: pending.count) { _, _ in
+                proxy.scrollToBottom(animated: true)
+            }
+            .onChange(of: working) { _, _ in
+                proxy.scrollToBottom(animated: true)
             }
             .onAppear {
                 // onAppear runs before the first layout, when scrollTo has
@@ -1388,19 +1407,39 @@ struct StreamingRow: View {
     }
 }
 
+/// "Working…" with a spinner at the end of the transcript, while the agent
+/// is quiet.
+struct WorkingRow: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.mini).frame(width: 16)
+            Text(label).font(.footnote)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+}
+
 struct PendingPromptRow: View {
     @EnvironmentObject private var model: AppModel
     let prompt: OutgoingPrompt
 
     var body: some View {
+        // On its way: shown as sent (with "Working…" under it), so the
+        // round trip to the host never reads as a stall. Dimmed only when
+        // it can't go (offline) or didn't (refused).
+        let held = !model.link.isOnline || prompt.failure != nil
         VStack(alignment: .trailing, spacing: 4) {
-            // Not yet accepted by the host: the same bubble, dimmed.
             if !prompt.text.isEmpty {
-                PromptBubble(text: prompt.text, pending: true)
+                PromptBubble(text: prompt.text, pending: held)
             }
             if !prompt.attachments.isEmpty {
                 PromptAttachmentsView(attachments: prompt.attachments)
-                    .opacity(0.7)
+                    .opacity(held ? 0.7 : 1)
             }
             if let f = prompt.failure {
                 HStack {
@@ -1408,8 +1447,8 @@ struct PendingPromptRow: View {
                     Button("Retry") { model.retryPrompt(prompt.id) }.font(.caption2)
                     Button("Discard", role: .destructive) { model.discardPrompt(prompt.id) }.font(.caption2)
                 }
-            } else {
-                Label(model.link.isOnline ? "Sending…" : "Waiting for connection", systemImage: "clock")
+            } else if !model.link.isOnline {
+                Label("Waiting for connection", systemImage: "clock")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

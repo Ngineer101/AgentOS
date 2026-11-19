@@ -54,6 +54,9 @@ pub enum Tag {
     /// `builtin.set_policy`, answered with the updated list. `announce` names the tool
     /// "Approve and Don't Ask Again" just set, for its toast.
     BuiltinSet { announce: Option<String> },
+    /// `session.prompt` of this prompt in this session: the pending bubble goes when the
+    /// host records it, or back into the composer if it refuses.
+    Prompt { session: String, prompt_id: String },
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
