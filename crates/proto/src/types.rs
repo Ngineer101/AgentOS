@@ -1254,6 +1254,26 @@ pub struct ScreenRunning {
     pub started_by: String,
     /// Open viewers.
     pub viewers: u32,
+    /// The monitor being shown ([`ScreenOutput::name`]), when the host knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+/// One monitor of the desktop, for showing a particular one in
+/// [`ScreenMode::Desktop`]. Listed on Hyprland (Omarchy).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenOutput {
+    /// The compositor's name for it, which `screen.start` takes: "DP-1".
+    pub name: String,
+    /// Make and model when the monitor reports them: "Dell Inc. DELL U2720Q".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// What the stream will be, in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Has the keyboard focus on the host now.
+    #[serde(default)]
+    pub focused: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1262,6 +1282,10 @@ pub struct ScreenStatus {
     /// screen-relay was found on the host.
     pub installed: bool,
     pub modes: Vec<ScreenModeInfo>,
+    /// The monitors [`ScreenMode::Desktop`] can show, first one the default.
+    /// Empty when the host can't list them (one is shown then).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<ScreenOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running: Option<ScreenRunning>,
     /// Why the last start failed.
@@ -1275,6 +1299,11 @@ pub struct ScreenStartParams {
     /// Ask to click and type; refused unless the policy allows control.
     #[serde(default)]
     pub control: bool,
+    /// The monitor to show in [`ScreenMode::Desktop`] (a
+    /// [`ScreenOutput::name`]); the first one when absent. Asking for
+    /// another one than the running engine shows restarts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 /// A one-time ticket for `screen.attach` on a new tunnel.
@@ -1284,6 +1313,9 @@ pub struct ScreenStartResult {
     pub expires_in_ms: i64,
     pub mode: ScreenMode,
     pub control: bool,
+    /// The monitor it will show, when the host knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

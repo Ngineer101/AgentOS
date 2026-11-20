@@ -21,13 +21,14 @@ extension AppModel {
     }
 
     /// `screen.start` on the main connection, then `screen.attach` with the
-    /// ticket on a new tunnel. Frames go to `listener`.
-    func openScreen(mode: String, control: Bool, listener: ScreenListener) async throws -> ScreenSession {
+    /// ticket on a new tunnel. Frames go to `listener`. `output` picks a
+    /// monitor (a `ScreenOutputModel.name`); another one than the running
+    /// one restarts screen-relay on the host.
+    func openScreen(mode: String, control: Bool, output: String?, listener: ScreenListener) async throws -> ScreenSession {
         guard let creds = credentials else { throw AgentHostError.NotConnected }
-        let start: ScreenStartResultModel = try await call(
-            RPC.screenStart,
-            ["mode": mode, "control": control]
-        )
+        var params: [String: Any] = ["mode": mode, "control": control]
+        if let output { params["output"] = output }
+        let start: ScreenStartResultModel = try await call(RPC.screenStart, params)
         return try await ScreenSession.open(credentials: creds.ffi, ticket: start.ticket, listener: listener)
     }
 

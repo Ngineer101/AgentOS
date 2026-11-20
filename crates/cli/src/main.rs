@@ -178,6 +178,10 @@ enum ScreenCmd {
         /// desktop or browser.
         #[arg(long, default_value = "desktop")]
         mode: String,
+        /// The monitor to show in desktop mode, by name (see `screen
+        /// status`); the first one by default.
+        #[arg(long)]
+        output: Option<String>,
         /// Stop after this many seconds.
         #[arg(long, default_value_t = 10)]
         seconds: u64,
@@ -1960,14 +1964,14 @@ async fn screen_cmd(
         }
         ScreenCmd::Off => c.call(m::SCREEN_SET_POLICY, json!({"enabled": false})).await?,
         ScreenCmd::Stop => c.call(m::SCREEN_STOP, json!({})).await?,
-        ScreenCmd::Record { out, mode, seconds, click, r#type } => {
+        ScreenCmd::Record { out, mode, output, seconds, click, r#type } => {
             let Some(state) = remote else {
                 bail!("record watches as a paired device would: add --remote <state file>");
             };
             let state = agenthost_cli::remote::DeviceState::load(state)?;
             let control = click.is_some() || r#type.is_some();
             let start: ScreenStartResult = c
-                .call(m::SCREEN_START, json!({"mode": mode, "control": control}))
+                .call(m::SCREEN_START, json!({"mode": mode, "control": control, "output": output}))
                 .await?;
             let mut s = agenthost_cli::remote::open_screen(&state, &start.ticket).await?;
             let mut file = std::fs::File::create(&out)?;
@@ -2011,6 +2015,7 @@ async fn screen_cmd(
             let summary = json!({
                 "file": out.display().to_string(), "frames": frames, "width": size.0, "height": size.1,
                 "seconds": secs, "kbps": (bytes as f64 * 8.0 / 1000.0 / secs).round(), "control": start.control,
+                "output": start.output,
             });
             if json_out {
                 print_json(&summary);
@@ -2043,10 +2048,19 @@ async fn screen_cmd(
         };
         println!("  {} {name}: {}", if mode.available { "✓" } else { "✗" }, mode.detail);
     }
+    if !st.outputs.is_empty() {
+        println!("Monitors (record --output NAME; the first is the default):");
+        for o in &st.outputs {
+            let about = if o.description.is_empty() { String::new() } else { format!(", {}", o.description) };
+            let focus = if o.focused { ", focused" } else { "" };
+            println!("  {}: {}x{}{about}{focus}", o.name, o.width, o.height);
+        }
+    }
     match &st.running {
         Some(r) => println!(
-            "Running: {:?}{}, started by {} {}, {} viewer(s)",
+            "Running: {:?}{}{}, started by {} {}, {} viewer(s)",
             r.mode,
+            r.output.as_ref().map(|o| format!(" on {o}")).unwrap_or_default(),
             if r.control { " with control" } else { ", view only" },
             r.started_by,
             ago(r.started_at),

@@ -76,6 +76,11 @@ struct DemoData {
         modes: [
             ScreenModeInfoModel(mode: ScreenModeName.desktop, available: true, detail: "Hyprland (wayland-1)"),
             ScreenModeInfoModel(mode: ScreenModeName.browser, available: true, detail: "chromium in a separate 1280x800 desktop"),
+        ],
+        outputs: [
+            ScreenOutputModel(name: "DP-1", description: "Dell Inc. DELL U2720Q", width: 3840, height: 2160, focused: false),
+            ScreenOutputModel(name: "DP-2", description: "LG Electronics LG ULTRAGEAR", width: 2560, height: 1440, focused: true),
+            ScreenOutputModel(name: "HDMI-A-1", description: "Samsung Odyssey", width: 1080, height: 1920, focused: false),
         ]
     )
 

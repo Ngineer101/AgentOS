@@ -709,7 +709,8 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
                 ScreenModeInfo { mode: ScreenMode::Desktop, available: true, detail: "Hyprland (wayland-1)".into() },
                 ScreenModeInfo { mode: ScreenMode::Browser, available: true, detail: "chromium in a separate 1280x800 desktop".into() },
             ],
-            running: Some(ScreenRunning { mode: ScreenMode::Browser, control: true, started_at: now() - 90_000, started_by: "Nico's iPhone".into(), viewers: 1 }),
+            outputs: vec![],
+            running: Some(ScreenRunning { mode: ScreenMode::Browser, control: true, started_at: now() - 90_000, started_by: "Nico's iPhone".into(), viewers: 1, output: None }),
             error: None,
         });
     }),

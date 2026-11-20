@@ -184,8 +184,14 @@ async fn view_only_streams_frames_and_acks_but_drops_input() {
     let (desk, _) = th.client().await;
     let _: ScreenStatus = desk.call(m::SCREEN_SET_POLICY, json!({"enabled": true})).await.unwrap();
     let (phone, _, _) = remote::connect(&state).await.unwrap();
+    // An engine you run yourself shows what it shows: no monitors to pick.
+    let st: ScreenStatus = phone.call(m::SCREEN_STATUS, json!({})).await.unwrap();
+    assert!(st.outputs.is_empty());
+    let e = phone.request(m::SCREEN_START, json!({"mode": "desktop", "output": "DP-2"})).await.unwrap_err();
+    assert_eq!(e.code, codes::INVALID_PARAMS, "{e:?}");
     let start: ScreenStartResult = phone.call(m::SCREEN_START, json!({"mode": "desktop"})).await.unwrap();
     assert!(!start.control);
+    assert_eq!(start.output, None);
 
     let mut s = remote::open_screen(&state, &start.ticket).await.unwrap();
     let f = next_frame(&mut s).await;

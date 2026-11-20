@@ -45,15 +45,39 @@ struct ScreenModeInfoModel: Codable, Hashable, Identifiable {
     }
 }
 
+/// One monitor of the host's desktop (Hyprland lists them).
+struct ScreenOutputModel: Codable, Hashable, Identifiable {
+    /// The compositor's name, which `screen.start` takes: "DP-1".
+    var name: String
+    var description: String?
+    var width: UInt32
+    var height: UInt32
+    var focused: Bool?
+
+    var id: String { name }
+
+    var size: String { "\(width)×\(height)" }
+
+    /// "Dell Inc. DELL U2720Q · 3840×2160 · Focused"
+    var detail: String {
+        var parts = [size]
+        if let d = description, !d.isEmpty { parts.insert(d, at: 0) }
+        if focused == true { parts.append("Focused") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct ScreenRunningModel: Codable, Hashable {
     var mode: String
     var control: Bool
     var startedAt: Int64
     var startedBy: String
     var viewers: UInt32
+    /// The monitor shown, when the host knows.
+    var output: String?
 
     enum CodingKeys: String, CodingKey {
-        case mode, control, viewers
+        case mode, control, viewers, output
         case startedAt = "started_at"
         case startedBy = "started_by"
     }
@@ -63,8 +87,13 @@ struct ScreenStatusModel: Codable, Hashable {
     var policy: ScreenPolicyModel
     var installed: Bool
     var modes: [ScreenModeInfoModel]
+    /// Absent from hosts that can't list monitors (and older ones).
+    var outputs: [ScreenOutputModel]?
     var running: ScreenRunningModel?
     var error: String?
+
+    /// The monitors Your Desktop can show; a choice only with two or more.
+    var monitors: [ScreenOutputModel] { outputs ?? [] }
 }
 
 struct ScreenStartResultModel: Codable, Hashable {
@@ -72,9 +101,10 @@ struct ScreenStartResultModel: Codable, Hashable {
     var expiresInMs: Int64
     var mode: String
     var control: Bool
+    var output: String?
 
     enum CodingKeys: String, CodingKey {
-        case ticket, mode, control
+        case ticket, mode, control, output
         case expiresInMs = "expires_in_ms"
     }
 }

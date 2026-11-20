@@ -10,12 +10,39 @@ struct HostScreenView: View {
     @StateObject private var stream = ScreenStream()
     @State private var mode = ScreenModeName.desktop
     @State private var control = false
+    /// The monitor for Your Desktop (nil: the host's default).
+    @State private var output: String?
     @State private var keyboard = false
     @State private var chromeHidden = false
     /// Demo screenshots: start streaming at once.
     var startImmediately = false
 
     private var status: ScreenStatusModel? { model.screenStatus }
+
+    /// Monitors to choose from: only for Your Desktop, and only with two or more.
+    private var monitors: [ScreenOutputModel] {
+        let list = status?.monitors ?? []
+        return list.count > 1 ? list : []
+    }
+
+    /// Start (or restart) the stream with what's picked.
+    private func begin(keepPicture: Bool = false) {
+        let desktop = mode == ScreenModeName.desktop
+        stream.start(
+            model: model,
+            mode: mode,
+            control: control && (status?.policy.allowControl ?? false),
+            output: desktop ? output : nil,
+            keepPicture: keepPicture
+        )
+    }
+
+    /// Show another monitor without leaving the viewer.
+    private func switchMonitor(to name: String) {
+        guard name != output || !stream.isLive else { return }
+        output = name
+        begin(keepPicture: true)
+    }
 
     var body: some View {
         Group {
@@ -34,7 +61,14 @@ struct HostScreenView: View {
         .onAppear {
             if let first = status?.modes.first(where: \.available) { mode = first.mode }
             control = status?.policy.allowControl ?? false
-            if startImmediately { stream.start(model: model, mode: mode, control: control) }
+            output = status?.running?.output ?? status?.monitors.first?.name
+            if startImmediately { begin() }
+        }
+        .onChange(of: status?.monitors) { _, list in
+            // The status arrived after the sheet opened, or a monitor went away.
+            if let list, output.map({ o in !list.contains { $0.name == o } }) ?? true {
+                output = status?.running?.output ?? list.first?.name
+            }
         }
         .onDisappear { stream.close() }
     }
@@ -69,6 +103,30 @@ struct HostScreenView: View {
                     } footer: {
                         Text("Browser on Host opens a separate desktop with only a browser: it works while the computer is locked, and sign-ins there reach the host's own sign-in callbacks.")
                     }
+                    if mode == ScreenModeName.desktop, !monitors.isEmpty {
+                        Section {
+                            ForEach(monitors) { o in
+                                Button {
+                                    output = o.name
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(o.name).foregroundStyle(Color.primary)
+                                            Text(o.detail).font(.footnote).foregroundStyle(Color(uiColor: .secondaryLabel))
+                                        }
+                                        Spacer(minLength: 8)
+                                        if output == o.name {
+                                            Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold)
+                                        }
+                                    }
+                                }
+                            }
+                        } header: {
+                            GroupHeader("Monitor")
+                        } footer: {
+                            Text("Switch monitors while you watch from the ••• menu.")
+                        }
+                    }
                     Section {
                         Toggle(isOn: $control) {
                             HStack(spacing: 12) {
@@ -102,9 +160,7 @@ struct HostScreenView: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("View") {
-                        stream.start(model: model, mode: mode, control: control && (status?.policy.allowControl ?? false))
-                    }
+                    Button("View") { begin() }
                     .fontWeight(.semibold)
                     .disabled(!(status?.policy.enabled ?? false) || !(status?.modes.contains { $0.mode == mode && $0.available } ?? false))
                 }
@@ -130,7 +186,7 @@ struct HostScreenView: View {
             } description: {
                 Text(reason)
             } actions: {
-                Button("Try Again") { stream.start(model: model, mode: mode, control: control) }
+                Button("Try Again") { begin() }
                     .buttonStyle(.borderedProminent)
                 Button("Back") { stream.close(); resetToPicker() }
             }
@@ -174,7 +230,7 @@ struct HostScreenView: View {
                 VStack(spacing: 12) {
                     Text("The stream ended").font(.headline)
                     Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Reconnect") { stream.start(model: model, mode: mode, control: control) }
+                    Button("Reconnect") { begin() }
                         .buttonStyle(.borderedProminent)
                 }
                 .padding(20)
@@ -199,7 +255,9 @@ struct HostScreenView: View {
     }
 
     private var title: String {
-        stream.mode == ScreenModeName.browser ? "Browser on \(model.hostName)" : model.hostName
+        if stream.mode == ScreenModeName.browser { return "Browser on \(model.hostName)" }
+        if let o = stream.output, !monitors.isEmpty { return "\(model.hostName) · \(o)" }
+        return model.hostName
     }
 
     private var topBar: some View {
@@ -223,6 +281,19 @@ struct HostScreenView: View {
             .glassSurface(Capsule())
             Spacer(minLength: 0)
             Menu {
+                if stream.mode == ScreenModeName.desktop, !monitors.isEmpty {
+                    Section("Monitor") {
+                        Picker("Monitor", selection: Binding(
+                            get: { stream.output ?? output ?? "" },
+                            set: { switchMonitor(to: $0) }
+                        )) {
+                            ForEach(monitors) { o in
+                                Text("\(o.name)  \(o.size)").tag(o.name)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                }
                 Button(role: .destructive) {
                     stream.close()
                     Task { await model.stopScreen() }
@@ -241,6 +312,7 @@ struct HostScreenView: View {
     }
 
     private var subtitle: String {
+        if stream.switching, let o = stream.output { return "Switching to \(o)…" }
         let what = stream.control ? "Control" : "View only"
         guard stream.size != .zero else { return what }
         return "\(what) · \(Int(stream.size.width))×\(Int(stream.size.height)) · \(stream.framesPerSecond) fps"

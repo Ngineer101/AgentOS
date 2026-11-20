@@ -166,15 +166,17 @@ final class ScreenBridge: ScreenListener, @unchecked Sendable {
             lock.unlock()
             s?.ack(generation: frame.generation, sequence: frame.sequence, waitUs: waited)
             let size = CGSize(width: Int(frame.width), height: Int(frame.height))
-            DispatchQueue.main.async { [weak stream] in
-                MainActor.assumeIsolated { stream?.didShow(size: size, decoded: shown) }
+            DispatchQueue.main.async { [weak stream, weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated { stream?.didShow(size: size, decoded: shown, from: self) }
             }
         }
     }
 
     func onClosed(reason: String) {
-        DispatchQueue.main.async { [weak stream] in
-            MainActor.assumeIsolated { stream?.didEnd(reason) }
+        DispatchQueue.main.async { [weak stream, weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated { stream?.didEnd(reason, from: self) }
         }
     }
 }
@@ -192,10 +194,17 @@ final class ScreenStream: ObservableObject {
     @Published private(set) var size: CGSize = .zero
     @Published private(set) var control = false
     @Published private(set) var mode = ScreenModeName.desktop
+    /// The monitor asked for (nil: the host's default).
+    @Published private(set) var output: String?
+    /// Moving to another monitor: the last picture stays up meanwhile.
+    @Published private(set) var switching = false
     @Published private(set) var framesPerSecond = 0
 
     let renderer = H264Renderer()
     private var session: ScreenSession?
+    /// The stream being shown; callbacks from an earlier one (closing after a
+    /// switch or a reconnect) are ignored.
+    private var bridge: ScreenBridge?
     private var recent: [Date] = []
     #if DEBUG
     private var demoTimer: Timer?
@@ -203,12 +212,19 @@ final class ScreenStream: ObservableObject {
 
     var isLive: Bool { phase == .live }
 
-    func start(model: AppModel, mode: String, control: Bool) {
+    /// Start watching. `keepPicture` leaves the last frame up until the new
+    /// stream's first one arrives (switching monitors).
+    func start(model: AppModel, mode: String, control: Bool, output: String? = nil, keepPicture: Bool = false) {
+        let keep = keepPicture && size != .zero
         close()
-        renderer.reset()
-        size = .zero
+        if !keep {
+            renderer.reset()
+            size = .zero
+        }
+        switching = keep
         self.mode = mode
         self.control = control
+        self.output = output
         phase = .connecting
         #if DEBUG
         if model.isDemo {
@@ -217,24 +233,32 @@ final class ScreenStream: ObservableObject {
         }
         #endif
         let bridge = ScreenBridge(renderer: renderer, stream: self)
+        self.bridge = bridge
         Task {
             do {
-                let s = try await model.openScreen(mode: mode, control: control, listener: bridge)
+                let s = try await model.openScreen(mode: mode, control: control, output: output, listener: bridge)
                 bridge.attach(s)
-                if phase == .connecting || phase == .live {
+                if self.bridge === bridge, phase == .connecting || phase == .live {
                     session = s
                 } else {
                     s.close()
                 }
             } catch {
-                phase = .ended(userMessage(for: error))
+                if self.bridge === bridge {
+                    switching = false
+                    phase = .ended(userMessage(for: error))
+                }
             }
         }
     }
 
-    func didShow(size: CGSize, decoded: Bool) {
+    func didShow(size: CGSize, decoded: Bool, from: ScreenBridge? = nil) {
+        if let from, from !== bridge { return }
         guard phase == .connecting || phase == .live else { return }
-        if decoded, phase == .connecting { phase = .live }
+        if decoded, phase == .connecting {
+            phase = .live
+            switching = false
+        }
         if size != self.size { self.size = size }
         let now = Date()
         recent.append(now)
@@ -242,8 +266,10 @@ final class ScreenStream: ObservableObject {
         framesPerSecond = recent.count
     }
 
-    func didEnd(_ reason: String) {
+    func didEnd(_ reason: String, from: ScreenBridge? = nil) {
+        if let from, from !== bridge { return }
         session = nil
+        switching = false
         if phase != .idle { phase = .ended(reason) }
     }
 
@@ -251,6 +277,7 @@ final class ScreenStream: ObservableObject {
     func close() {
         session?.close()
         session = nil
+        bridge = nil
         #if DEBUG
         demoTimer?.invalidate()
         demoTimer = nil

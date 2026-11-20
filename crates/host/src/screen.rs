@@ -64,6 +64,8 @@ struct Engine {
     base: String,
     /// Started by us (stop it when done) rather than an engine you run.
     owned: bool,
+    /// The monitor it shows, when one was chosen.
+    output: Option<String>,
 }
 
 struct Ticket {
@@ -146,6 +148,90 @@ impl Session {
     fn portal_only(&self) -> bool {
         let d = self.desktop.to_ascii_lowercase();
         self.wayland.is_some() && (d.contains("gnome") || d.contains("kde"))
+    }
+}
+
+/// Hyprland's monitors, asked over its IPC socket (what `hyprctl monitors -j`
+/// does) so neither hyprctl nor `HYPRLAND_INSTANCE_SIGNATURE` is needed: a
+/// login service often has neither.
+mod hyprland {
+    use agenthost_proto::ScreenOutput;
+    use anyhow::{Context, Result};
+    use serde_json::Value;
+    use std::io::{Read, Write};
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    /// Request sockets of running Hyprland instances, best match first: the
+    /// signature in the environment, then the instance whose lock names
+    /// `wayland` (its socket, "wayland-1"), then the newest.
+    pub fn sockets(runtime_dir: &Path, wayland: Option<&str>) -> Vec<PathBuf> {
+        let root = runtime_dir.join("hypr");
+        let signature = super::env("HYPRLAND_INSTANCE_SIGNATURE");
+        let mut found: Vec<(u8, std::time::SystemTime, PathBuf)> = std::fs::read_dir(&root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let dir = e.path();
+                let sock = dir.join(".socket.sock");
+                if !sock.exists() {
+                    return None;
+                }
+                let lock = std::fs::read_to_string(dir.join("hyprland.lock")).unwrap_or_default();
+                let rank = if signature.is_some() && e.file_name().to_str() == signature.as_deref() {
+                    0
+                } else if wayland.is_some_and(|w| lock.lines().nth(1).map(str::trim) == Some(w)) {
+                    1
+                } else {
+                    2
+                };
+                let modified = e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                Some((rank, modified, sock))
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        found.into_iter().map(|f| f.2).collect()
+    }
+
+    /// One request, such as `j/monitors`; Hyprland answers and closes.
+    pub fn request(sock: &Path, what: &str) -> Result<String> {
+        let mut s = std::os::unix::net::UnixStream::connect(sock)
+            .with_context(|| format!("connect to {}", sock.display()))?;
+        s.set_read_timeout(Some(Duration::from_secs(1)))?;
+        s.set_write_timeout(Some(Duration::from_secs(1)))?;
+        s.write_all(what.as_bytes())?;
+        let mut out = String::new();
+        s.read_to_string(&mut out)?;
+        Ok(out)
+    }
+
+    /// The enabled monitors in `monitors -j`, in Hyprland's order.
+    pub fn parse_monitors(json: &str) -> Result<Vec<ScreenOutput>> {
+        let v: Value = serde_json::from_str(json).context("Hyprland's monitor list")?;
+        let list = v.as_array().context("Hyprland's monitor list is not an array")?;
+        let text = |m: &Value, k: &str| m[k].as_str().unwrap_or_default().trim().to_string();
+        Ok(list
+            .iter()
+            .filter(|m| !m["disabled"].as_bool().unwrap_or(false))
+            .filter_map(|m| {
+                let name = text(m, "name");
+                if name.is_empty() {
+                    return None;
+                }
+                let (w, h) = (m["width"].as_u64()? as u32, m["height"].as_u64()? as u32);
+                // A rotated monitor is captured upright.
+                let turned = m["transform"].as_u64().unwrap_or(0) % 2 == 1;
+                let made = format!("{} {}", text(m, "make"), text(m, "model")).trim().to_string();
+                Some(ScreenOutput {
+                    name,
+                    description: if made.is_empty() { text(m, "description") } else { made },
+                    width: if turned { h } else { w },
+                    height: if turned { w } else { h },
+                    focused: m["focused"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect())
     }
 }
 
@@ -294,18 +380,72 @@ impl Screen {
         ]
     }
 
+    /// Whether [`ScreenMode::Desktop`] can be pointed at one monitor: an
+    /// engine we start, attached to a Wayland compositor.
+    fn can_pick_output(&self) -> Option<Session> {
+        if self.ctx.cfg.screen_engine_url.is_some() || cfg!(target_os = "macos") {
+            return None;
+        }
+        Some(Session::detect()).filter(|s| s.wayland.is_some() && !s.portal_only())
+    }
+
+    /// The monitors the desktop can show (Hyprland's; none elsewhere).
+    pub fn outputs(&self) -> Vec<ScreenOutput> {
+        let Some(s) = self.can_pick_output() else { return vec![] };
+        let Some(dir) = &s.runtime_dir else { return vec![] };
+        for sock in hyprland::sockets(dir, s.wayland.as_deref()) {
+            match hyprland::request(&sock, "j/monitors").and_then(|j| hyprland::parse_monitors(&j)) {
+                Ok(list) if !list.is_empty() => return list,
+                Ok(_) => {}
+                Err(e) => tracing::debug!("hyprland monitors: {e:#}"),
+            }
+        }
+        vec![]
+    }
+
+    /// The monitor `screen.start` shows: the one asked for, else the one
+    /// already shown (so a client that doesn't pick keeps it), else the first.
+    fn pick_output(&self, mode: ScreenMode, asked: Option<&str>) -> Result<Option<String>, RpcError> {
+        if mode != ScreenMode::Desktop {
+            return Ok(None);
+        }
+        let outputs = self.outputs();
+        let shown = {
+            let st = self.state.lock().unwrap();
+            st.engine.as_ref().filter(|e| e.mode == mode).and_then(|e| e.output.clone())
+        };
+        match asked.map(str::trim).filter(|a| !a.is_empty()) {
+            None => Ok(shown
+                .filter(|o| outputs.iter().any(|x| &x.name == o))
+                .or_else(|| outputs.first().map(|o| o.name.clone()))),
+            Some(a) if outputs.iter().any(|o| o.name == a) => Ok(Some(a.to_string())),
+            // A compositor we can't list (sway, river, …): screen-relay checks the name.
+            Some(a) if outputs.is_empty() && self.can_pick_output().is_some() => Ok(Some(a.to_string())),
+            Some(_) if outputs.is_empty() => {
+                Err(RpcError::invalid_params("This host can't show a particular monitor (Wayland only)"))
+            }
+            Some(a) => Err(RpcError::invalid_params(format!(
+                "No monitor named {a}; this host has {}",
+                outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ")
+            ))),
+        }
+    }
+
     pub fn status(&self) -> ScreenStatus {
+        let outputs = self.outputs();
         let st = self.state.lock().unwrap();
         ScreenStatus {
             policy: self.policy(),
             installed: self.ctx.cfg.screen_engine_url.is_some() || self.bin().is_some(),
             modes: self.modes(),
+            outputs,
             running: st.engine.as_ref().map(|e| ScreenRunning {
                 mode: e.mode,
                 control: e.control,
                 started_at: e.started_at,
                 started_by: e.started_by.clone(),
                 viewers: st.viewer.is_some() as u32,
+                output: e.output.clone(),
             }),
             error: st.error.clone(),
         }
@@ -341,6 +481,7 @@ impl Screen {
             Some(m) => return Err(RpcError::new(codes::UNAVAILABLE, m.detail)),
             None => return Err(RpcError::invalid_params("unknown mode")),
         }
+        let output = self.pick_output(p.mode, p.output.as_deref())?;
         {
             let _g = self.lifecycle.lock().await;
             let restart = self
@@ -349,12 +490,12 @@ impl Screen {
                 .unwrap()
                 .engine
                 .as_ref()
-                .map(|e| e.mode != p.mode || e.control != p.control);
+                .map(|e| e.mode != p.mode || e.control != p.control || e.output != output);
             if restart == Some(true) {
                 self.stop_locked("restarting for another mode").await;
             }
             if restart != Some(false) {
-                match self.launch(p.mode).await {
+                match self.launch(p.mode, output.as_deref()).await {
                     Ok((base, owned)) => {
                         let mut st = self.state.lock().unwrap();
                         st.engine = Some(Engine {
@@ -364,6 +505,7 @@ impl Screen {
                             started_by: who.to_string(),
                             base,
                             owned,
+                            output: output.clone(),
                         });
                         st.error = None;
                     }
@@ -388,15 +530,16 @@ impl Screen {
         }
         self.ctx.audit.log(
             "screen.start",
-            json!({"mode": p.mode, "control": p.control, "device_id": device_id, "label": who}),
+            json!({"mode": p.mode, "control": p.control, "output": output, "device_id": device_id, "label": who}),
         );
         self.changed();
         self.schedule_idle_stop();
-        Ok(ScreenStartResult { ticket, expires_in_ms: TICKET_TTL_MS, mode: p.mode, control: p.control })
+        Ok(ScreenStartResult { ticket, expires_in_ms: TICKET_TTL_MS, mode: p.mode, control: p.control, output })
     }
 
-    /// Run `screen-relay up` for `mode`; returns the engine's base URL.
-    async fn launch(&self, mode: ScreenMode) -> Result<(String, bool)> {
+    /// Run `screen-relay up` for `mode` (on monitor `output`); returns the
+    /// engine's base URL.
+    async fn launch(&self, mode: ScreenMode, output: Option<&str>) -> Result<(String, bool)> {
         if let Some(url) = &self.ctx.cfg.screen_engine_url {
             let base = url.trim_end_matches('/').replacen("http", "ws", 1);
             return Ok((base, false));
@@ -416,6 +559,9 @@ impl Screen {
                 }
                 if let Some(w) = &s.wayland {
                     cmd.args(["--backend", "wayland", "--display", w]);
+                    if let Some(o) = output {
+                        cmd.args(["--output", o]);
+                    }
                 } else if let Some(d) = &s.x11 {
                     cmd.args(["--backend", "x11", "--display", d]);
                     if let Some(a) = &s.xauthority {
@@ -696,6 +842,68 @@ mod tests {
         let firefox = browser_command(std::path::Path::new("/usr/bin/firefox"), profile);
         assert_eq!(firefox, ["/usr/bin/firefox", "--no-remote", "--profile", "/data/screen-browser"]);
         assert!(BROWSER_ENV_REMOVE.contains(&"WAYLAND_DISPLAY"));
+    }
+
+    #[test]
+    fn hyprland_monitors_are_listed_upright_and_enabled_only() {
+        let json = r#"[
+          {"id":0,"name":"DP-1","description":"Dell Inc. DELL U2720Q 8JX1","make":"Dell Inc.","model":"DELL U2720Q",
+           "width":3840,"height":2160,"scale":1.5,"transform":0,"focused":false,"disabled":false},
+          {"id":1,"name":"HDMI-A-1","description":"Some Monitor","make":"","model":"",
+           "width":1920,"height":1080,"transform":1,"focused":true,"disabled":false},
+          {"id":2,"name":"eDP-1","description":"","make":"BOE","model":"0x0BCA",
+           "width":2256,"height":1504,"transform":0,"focused":false,"disabled":true}
+        ]"#;
+        let list = hyprland::parse_monitors(json).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list[0],
+            ScreenOutput { name: "DP-1".into(), description: "Dell Inc. DELL U2720Q".into(), width: 3840, height: 2160, focused: false }
+        );
+        // Rotated: captured as 1080x1920; no make or model, so the description.
+        assert_eq!(
+            list[1],
+            ScreenOutput { name: "HDMI-A-1".into(), description: "Some Monitor".into(), width: 1080, height: 1920, focused: true }
+        );
+        assert!(hyprland::parse_monitors("not json").is_err());
+    }
+
+    #[test]
+    fn the_hyprland_instance_on_our_wayland_socket_comes_first() {
+        let root = std::env::temp_dir().join(format!("agenthost-hypr-{}", random_hex(6)));
+        for (sig, wayland) in [("aaa_1", "wayland-0"), ("bbb_2", "wayland-1"), ("ccc_3", "wayland-2")] {
+            let dir = root.join("hypr").join(sig);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hyprland.lock"), format!("1234\n{wayland}\n")).unwrap();
+            if sig != "ccc_3" {
+                std::fs::write(dir.join(".socket.sock"), "").unwrap();
+            }
+        }
+        let socks = hyprland::sockets(&root, Some("wayland-1"));
+        assert_eq!(socks.len(), 2, "an instance without a socket is skipped");
+        assert!(socks[0].ends_with("bbb_2/.socket.sock"), "{socks:?}");
+        assert!(hyprland::sockets(&root.join("nothing"), None).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn hyprland_answers_one_request() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("agenthost-hyprsock-{}", random_hex(6)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join(".socket.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 64];
+            let n = s.read(&mut buf).unwrap();
+            assert_eq!(&buf[..n], b"j/monitors");
+            s.write_all(br#"[{"name":"DP-2","width":2560,"height":1440}]"#).unwrap();
+        });
+        let out = hyprland::request(&sock, "j/monitors").unwrap();
+        server.join().unwrap();
+        assert_eq!(hyprland::parse_monitors(&out).unwrap()[0].name, "DP-2");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1638,7 +1638,10 @@ fn screen_sharing(s: &App, t: &Theme) -> El {
     }
     if let Some(r) = &st.running {
         let what = if r.control { "Controlled" } else { "Watched" };
-        let who = if r.viewers > 0 { format!("{what} by {}", r.started_by) } else { format!("Started by {}, waiting for the phone", r.started_by) };
+        let mut who = if r.viewers > 0 { format!("{what} by {}", r.started_by) } else { format!("Started by {}, waiting for the phone", r.started_by) };
+        if let Some(o) = &r.output {
+            who.push_str(&format!(" · {o}"));
+        }
         rows.push(form_row(t, "Sharing now", Some(who), t.small_button_danger("Stop", |s| s.call(Tag::Screen, m::SCREEN_STOP, json!({}))).key("screen-stop")));
     }
     if let Some(e) = &st.error {
