@@ -1,0 +1,57 @@
+assets/agents/README.md
+  s_2c401839f8f494::t_85d815267adffd 1-12
+assets/agents/claude.svg
+  s_2c401839f8f494::t_fcce616b2ebad9 1
+assets/agents/codex.svg
+  s_2c401839f8f494::t_57a16a96de94fd 1
+assets/agents/cursor.svg
+  s_2c401839f8f494::t_4aa04020eec6f4 1
+assets/agents/gemini.svg
+  s_2c401839f8f494::t_c0066be16283bc 1
+assets/agents/opencode.svg
+  s_2c401839f8f494::t_c77494e0de774f 1
+desktop/src/icons.rs
+  s_2c401839f8f494::t_6c42436f79fca9 71-142
+desktop/src/look.rs
+  s_2c401839f8f494::t_c1686bacb89f9a 496,508-511
+desktop/src/session.rs
+  s_2c401839f8f494::t_993f9ae4261d90 356-357,359-362
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/Contents.json
+  s_2c401839f8f494::t_e0043fd56e2dae 1-10
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/claude.svg
+  s_2c401839f8f494::t_21618a311d6a14 1
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/Contents.json
+  s_2c401839f8f494::t_544b29f229ac69 1-10
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/codex.svg
+  s_2c401839f8f494::t_c3a5549cd0f8c2 1
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/Contents.json
+  s_2c401839f8f494::t_6845407a20f835 1-10
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/cursor.svg
+  s_2c401839f8f494::t_08ed89be15d7b4 1
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/Contents.json
+  s_2c401839f8f494::t_6d3922e418ea74 1-10
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/gemini.svg
+  s_2c401839f8f494::t_c58a787aa9e7fd 1
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/Contents.json
+  s_2c401839f8f494::t_1284182640f4d8 1-10
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/opencode.svg
+  s_2c401839f8f494::t_f455cf1c909b5a 1
+ios/AgentHost/Views/Glass.swift
+  s_2c401839f8f494::t_8b535eb8bbfcb4 149-150,158-176,179,181-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "282e77a2eed84697fa0318f091134bc1d299db46",
+  "prompts": {},
+  "sessions": {
+    "s_2c401839f8f494": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2c401839f8f494",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
