@@ -100,24 +100,6 @@ pub fn status_color(t: &Theme, st: Status) -> Color {
     }
 }
 
-/// A branch name with the branch glyph: "⑂ fix-resume". `chip` draws it in a capsule.
-pub fn branch_label(t: &Theme, branch: &str, color: Color, chip: bool) -> El {
-    let size = if t.mac() { 11.0 } else { 12.0 };
-    let r = row()
-        .gap(4.0)
-        .center_y()
-        .min_w(0.0)
-        .label(format!("Branch {branch}"))
-        .help(format!("Works on its own branch, {branch}"))
-        .child(icon(&ic::BRANCH, size).color(color))
-        .child(text(branch.to_string()).font(TextStyle::new(size, 400.0).mono()).color(color).truncate().shrink());
-    if chip {
-        r.key("branch-chip").h(if t.mac() { 18.0 } else { 22.0 }).px(if t.mac() { 6.0 } else { 8.0 }).radius(if t.mac() { 5.0 } else { 11.0 }).fill(Color::WHITE.alpha(0.08))
-    } else {
-        r
-    }
-}
-
 /// The header's branch: the name in full (middle-truncated when the header is narrow), a
 /// button that copies it.
 pub fn branch_button(t: &Theme, branch: &str, color: Color, chip: bool) -> El {
@@ -370,15 +352,20 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     let selected = s.screen == Screen::Session(x.session_id.clone());
     let ended = x.state.is_terminal();
     let title = x.title.clone().unwrap_or_else(|| s.login_label(x));
-    // The status, then the login: a profile's name alone says which ("Your turn · Work · 3m").
+    // The status, then the login: a profile's name alone says which ("Needs you · Work · 3m").
+    // "Your turn" is the resting state, and its dot says so: the line leaves it out.
     let status = Status::of(x.state);
     let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
     // "Working · 2 agents running" while subagents run.
     let agents = if status == Status::Working { s.running_work(&x.session_id).0 } else { 0 };
     let sub = match crate::model::running_label(agents, 0) {
         Some(r) => format!("{} · {r}", status.word()),
-        None => [status.word().to_string(), profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)].join(" · "),
+        None => {
+            let word = (status != Status::YourTurn).then(|| status.word().to_string());
+            word.into_iter().chain([profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)]).collect::<Vec<_>>().join(" · ")
+        }
     };
+    let spoken = if status == Status::YourTurn { format!("{}, {sub}", status.word()) } else { sub.clone() };
     let (title_c, sub_c) = if selected && mac {
         (Color::WHITE, Color::WHITE.alpha(0.8))
     } else if ended {
@@ -395,7 +382,7 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
         .py(if mac { 6.0 } else { 8.0 })
         .radius(t.row_radius)
         .role("listitem")
-        .label(format!("{title}, {sub}"))
+        .label(format!("{title}, {spoken}"))
         .focusable(true)
         .on_press(move |s: &mut App| {
             s.close_overlays();
@@ -408,16 +395,13 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
         .child(status_glyph(t, status, selected && mac).mt(if mac { 2.0 } else { 0.0 }));
     r = if mac { r.items_start() } else { r.center_y() };
     let weight = if selected && !mac { 700.0 } else { 400.0 };
-    let mut names = col()
+    // Kept short: the session's branch is in its header.
+    let names = col()
         .grow(1.0)
         .min_w(0.0)
         .gap(1.0)
         .child(text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate())
         .child(text(sub).font(t.font_small()).color(sub_c).truncate());
-    // Sessions in a git workspace each work on a branch of their own.
-    if let Some(wt) = &x.worktree {
-        names = names.child(branch_label(t, &wt.branch, if selected && mac { Color::WHITE.alpha(0.7) } else { t.text3 }, false));
-    }
     r = r.child(names);
     if let (Some(n), true) = (n, mac) {
         r = r.child(text(format!("⌘{n}")).font(TextStyle::new(11.0, 400.0)).color(if selected { Color::WHITE.alpha(0.75) } else { t.text3 }).mt(1.0));
