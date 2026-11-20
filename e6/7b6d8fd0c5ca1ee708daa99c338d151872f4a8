@@ -1,0 +1,135 @@
+Cargo.lock
+  s_b6567dadea9860::t_4a521781a5ec14 119,144,151,155,1201-1209
+README.md
+  s_b6567dadea9860::t_fd4ef72d5526fd 95-150
+crates/cli/src/main.rs
+  s_b6567dadea9860::t_041ada54caf0a2 99-101,228-548,607-609,976
+crates/host/Cargo.toml
+  s_b6567dadea9860::t_8e2432e053089e 45-47
+crates/host/src/api.rs
+  s_b6567dadea9860::t_72783418554fdc 185-187,513-540
+crates/host/src/automations.rs
+  s_b6567dadea9860::t_e803a9f548ec4a 1-1156
+crates/host/src/bus.rs
+  s_b6567dadea9860::t_fe9e9c9c58661f 7,29-30
+crates/host/src/cron.rs
+  s_b6567dadea9860::t_f835c5085a0205 1-415
+crates/host/src/host.rs
+  s_b6567dadea9860::t_8a070c9acd57fe 41,106,115
+crates/host/src/lib.rs
+  s_b6567dadea9860::t_478d1f4c18ebe1 12-13,49,53
+crates/host/src/mcp.rs
+  s_b6567dadea9860::t_db565cf0b0ea8c 707-713,728,744-756,868-871,880,966-977,986
+crates/host/src/push.rs
+  s_b6567dadea9860::t_306a654bc8d5a4 417-442,474-486,503-515,837,851
+crates/host/src/relay_dev.rs
+  s_b6567dadea9860::t_c0672e1c38ceca 50-54,57-59,90-96,198-205,391-402,411-509
+crates/host/src/remote.rs
+  s_b6567dadea9860::t_e7e7b9b82f04d8 63-73,125,180-206,265-280,320,345,375
+crates/host/src/session.rs
+  s_b6567dadea9860::t_48d27f845e564a 144-163,223,232
+crates/host/src/store.rs
+  s_b6567dadea9860::t_f7eedc978445a5 120-154,271,274,301,622,639-640,1252-1471,1501
+crates/host/src/uploads.rs
+  s_b6567dadea9860::t_8622ccb0a76630 193-208
+crates/host/tests/automations.rs
+  s_b6567dadea9860::t_7cfbf222a33981 1-353
+crates/host/tests/automations_core.rs
+  s_b6567dadea9860::t_b36366c8ba9306 1-247
+crates/host/tests/push.rs
+  s_b6567dadea9860::t_5fb69cfbafa37c 232
+crates/proto/Cargo.toml
+  s_b6567dadea9860::t_c8f2418914254e 20-22
+crates/proto/src/automation.rs
+  s_b6567dadea9860::t_bf6f250f299fa4 1-347
+crates/proto/src/hookseal.rs
+  s_b6567dadea9860::t_f0687b4b16ff18 1-132
+crates/proto/src/lib.rs
+  s_b6567dadea9860::t_160499b5b1d046 7-8,16,25-26
+crates/proto/src/methods.rs
+  s_b6567dadea9860::t_2ce3a1723410ae 120-133,156-158,200-201,211-214,288-295
+crates/proto/src/types.rs
+  s_b6567dadea9860::t_42ab349901ad23 406-408,1345-1347,1360
+desktop/Cargo.lock
+  s_b6567dadea9860::t_9d09e8e07f698c 193,217,224,228,2036-2044
+desktop/README.md
+  s_b6567dadea9860::t_cc2c1450b5ca93 28-36,59-61
+desktop/src/automations.rs
+  s_b6567dadea9860::t_87bb98db0b616c 1-872
+desktop/src/bridge.rs
+  s_b6567dadea9860::t_fa6da2672c0a0c 63-74,89
+desktop/src/commands.rs
+  s_b6567dadea9860::t_15cc5dce83e250 151-158,164,364
+desktop/src/demo.rs
+  s_b6567dadea9860::t_5dcee9c5372c61 90,208,239-357,592,1078-1126
+desktop/src/icons.rs
+  s_b6567dadea9860::t_59e71072f9159d 71-75
+desktop/src/main.rs
+  s_b6567dadea9860::t_e6a792ce54ff73 4
+desktop/src/model.rs
+  s_b6567dadea9860::t_75d35a6e4f3c0c 15-16,59-60,613-625,721-727,871-873,880,1075,1080,1489-1490,1696-1755,1762-1768,2302,2428-2432,2497-3184
+desktop/src/settings.rs
+  s_b6567dadea9860::t_4b612c99d31426 190,199,207,279
+desktop/src/tests.rs
+  s_b6567dadea9860::t_d3ecf4b9106105 1266-1672
+desktop/src/view.rs
+  s_b6567dadea9860::t_758df46ca28a8f 29,44-49,98-118,371,378-409,429-431,467-474,494,511,895
+docs/relay-protocol.md
+  s_b6567dadea9860::t_6a3de71d9407ad 5-16,44,119-120,132,137-243,246-260
+docs/status.md
+  s_b6567dadea9860::t_f7acd4b37197fa 47
+ios/AgentHost/App/AppModel+Automations.swift
+  s_b6567dadea9860::t_8f02cc262ba661 1-220
+ios/AgentHost/App/AppModel.swift
+  s_b6567dadea9860::t_bd8bbb7825441a 133-136,548,748-750,1105-1106,1313-1314
+ios/AgentHost/App/DemoData.swift
+  s_b6567dadea9860::t_23eae7f5095e7a 13-14,51-58,82,102-105,232-235,255,257,492-575
+ios/AgentHost/Core/AutomationModels.swift
+  s_b6567dadea9860::t_e82b515249bbc6 1-463
+ios/AgentHost/Core/ProtocolModels.swift
+  s_b6567dadea9860::t_729ea990ffb910 168-169,201
+ios/AgentHost/Core/PushModels.swift
+  s_b6567dadea9860::t_04e553dcd28064 25-27,33,36,40,48,53
+ios/AgentHost/Views/AutomationEditorView.swift
+  s_b6567dadea9860::t_96057d5f99da33 1-499
+ios/AgentHost/Views/AutomationsView.swift
+  s_b6567dadea9860::t_72c18345e23f70 1-589
+ios/AgentHost/Views/NotificationsView.swift
+  s_b6567dadea9860::t_66198fc9d1456e 57-59,63-65
+ios/AgentHost/Views/SessionsView.swift
+  s_b6567dadea9860::t_0daee18102abc6 9-11,152-155,230-232,436-442
+ios/AgentHost/Views/SettingsView.swift
+  s_b6567dadea9860::t_e2f8887089f036 3,15,54,121-137
+ios/README.md
+  s_b6567dadea9860::t_a3aa254f968758 32,67
+ios/Shared/PushCrypto.swift
+  s_b6567dadea9860::t_e413e9401ceecf 12-13
+relay/README.md
+  s_b6567dadea9860::t_f9483828e19662 5-10,18-19,35-43,81-83,137-153
+relay/src/index.ts
+  s_b6567dadea9860::t_5ee7265d80d608 1,10,12,19-28
+relay/src/relay.ts
+  s_b6567dadea9860::t_88da5e00e99bfd 14,35-44,49-51,55-62,86-91,105-106,191,205-213,311-319,438-465,485-607,724-759,773-774
+relay/src/seal.ts
+  s_b6567dadea9860::t_01c2a550d90e01 1-63
+relay/test/helpers.ts
+  s_b6567dadea9860::t_03223cd9c45dee 2-3,128-129,140-144,191-302
+relay/test/hooks.test.ts
+  s_b6567dadea9860::t_6b2de6490c0d9b 1-417
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e67b6d8fd0c5ca1ee708daa99c338d151872f4a8",
+  "prompts": {},
+  "sessions": {
+    "s_b6567dadea9860": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b6567dadea9860",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
