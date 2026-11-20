@@ -12,6 +12,10 @@ struct NewSessionView: View {
     @State private var workspaceId: String?
     /// The chosen login (`AgentStatusInfo.id`).
     @State private var agent: String?
+    /// The user tapped a login in this sheet: the sheet's load (and its
+    /// automatic Quick Task choice) keeps it. Tapping another workspace
+    /// clears it, so that workspace's default applies.
+    @State private var pickedLogin = false
     /// Make the chosen login the workspace's default after starting.
     @State private var makeDefault = false
     @State private var starting = false
@@ -55,7 +59,11 @@ struct NewSessionView: View {
 
     /// The workspace's default login when available, else keep the current
     /// choice if it is still available, else the first available login.
+    /// A login the user tapped stays while it is available (`pickedLogin`).
     private func chooseLogin() {
+        if pickedLogin, let current = agent, agents.contains(where: { $0.id == current && $0.available }) {
+            return
+        }
         makeDefault = false
         if let d = defaultLogin(selectedWorkspace), d.available {
             agent = d.id
@@ -80,6 +88,8 @@ struct NewSessionView: View {
                     }
                     ForEach(workspaces) { w in
                         Button {
+                            // Choosing another workspace picks its default login.
+                            if workspaceId != w.workspaceId { pickedLogin = false }
                             workspaceId = w.workspaceId
                         } label: {
                             WorkspaceChoiceRow(workspace: w, selected: workspaceId == w.workspaceId)
@@ -104,7 +114,10 @@ struct NewSessionView: View {
                     let defaultId = defaultLogin(selectedWorkspace)?.id
                     ForEach(agents) { a in
                         Button {
-                            if a.available { agent = a.id }
+                            if a.available {
+                                agent = a.id
+                                pickedLogin = true
+                            }
                         } label: {
                             AgentChoiceRow(agent: a, selected: agent == a.id, isDefault: a.id == defaultId)
                         }
