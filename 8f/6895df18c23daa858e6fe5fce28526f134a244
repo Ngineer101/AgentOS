@@ -1,0 +1,39 @@
+crates/host/src/mcp.rs
+  s_2db1b9fbabe0a1::t_f8205362b78b11 785-799,886-887,1103-1106
+crates/host/src/push.rs
+  s_2db1b9fbabe0a1::t_5bc673bd21d0a2 799
+crates/host/src/session.rs
+  s_2db1b9fbabe0a1::t_4f617c10c8ce4e 203
+crates/host/src/store.rs
+  s_2db1b9fbabe0a1::t_0e8e26236bd5be 236-239,242,268-269,591,608-610,706-713,1259,1293-1302
+crates/host/tests/git_push.rs
+  s_2db1b9fbabe0a1::t_aef409da65af4b 187-190
+crates/proto/src/types.rs
+  s_2db1b9fbabe0a1::t_8b1f523e4a17c0 406-437,1572-1591
+desktop/src/demo.rs
+  s_2db1b9fbabe0a1::t_fa2c339a5c8554 90,100-102,476
+desktop/src/view.rs
+  s_2db1b9fbabe0a1::t_a6291c4797fd0e 361,368-377
+ios/AgentHost/App/DemoData.swift
+  s_2db1b9fbabe0a1::t_0fd53e9c875769 207,212-214,230-231
+ios/AgentHost/Core/ProtocolModels.swift
+  s_2db1b9fbabe0a1::t_735f5c51b17a79 168-169,201,205-209
+ios/AgentHost/Views/SessionsView.swift
+  s_2db1b9fbabe0a1::t_e87d744a357d81 404,448,450-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f6895df18c23daa858e6fe5fce28526f134a244",
+  "prompts": {},
+  "sessions": {
+    "s_2db1b9fbabe0a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2db1b9fbabe0a1",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
