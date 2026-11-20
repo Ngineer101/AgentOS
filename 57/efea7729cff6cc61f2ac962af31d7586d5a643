@@ -1,0 +1,25 @@
+desktop/src/demo.rs
+  s_b9943dfc956781::t_1f7ae78391395c 325-340,342,357
+desktop/src/icons.rs
+  s_b9943dfc956781::t_e6938828bde3b5 70
+desktop/src/session.rs
+  s_b9943dfc956781::t_02fe6c463d63f8 73-82,88,96-100,103,108,899-986,1016,1033,1048-1049,1053,1057
+desktop/src/tests.rs
+  s_b9943dfc956781::t_90df5ed3fb4238 1249-1265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "57efea7729cff6cc61f2ac962af31d7586d5a643",
+  "prompts": {},
+  "sessions": {
+    "s_b9943dfc956781": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b9943dfc956781",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
