@@ -1,0 +1,41 @@
+crates/cli/src/main.rs
+  s_8167f42cae157d::t_b2d47b09215bab 181-184,1967,1974,2018,2051-2058,2061,2063
+crates/host/src/screen.rs
+  s_8167f42cae157d::t_82bbbbbca2087c 67-68,154-237,383-433,435,441,448,484,493,498,508,533,537,540-542,562-564,847-908
+crates/host/tests/screen.rs
+  s_8167f42cae157d::t_7b8451f36a3ad0 187-191,194
+crates/proto/src/types.rs
+  s_8167f42cae157d::t_998ff6fed314f4 1257-1276,1285-1288,1302-1306,1316-1318
+desktop/src/demo.rs
+  s_8167f42cae157d::t_4e7f8a07f953d8 712-713
+desktop/src/settings.rs
+  s_8167f42cae157d::t_27e0ec09f9efd8 1641-1644
+docs/status.md
+  s_8167f42cae157d::t_0748ca94f020e4 44
+ios/AgentHost/App/AppModel+Screen.swift
+  s_8167f42cae157d::t_3aa0462fade733 24-27,29-31
+ios/AgentHost/App/DemoData.swift
+  s_8167f42cae157d::t_5e0e12efa8c7f3 79-83
+ios/AgentHost/Core/ScreenModels.swift
+  s_8167f42cae157d::t_14c39bdd9a1de2 48-69,76-77,80,90-91,94-96,104,107
+ios/AgentHost/Core/ScreenStream.swift
+  s_8167f42cae157d::t_35eceff22e948b 169-171,177-179,197-200,205-207,215-218,220-224,227,236,239,241,247-250,255-256,258-261,269-270,272,280
+ios/AgentHost/Views/HostScreenView.swift
+  s_8167f42cae157d::t_1e5b66d74e2d16 13-14,22-46,64-71,106-129,163,189,233,258-260,284-296,315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc24a87f779c0032d059561ea4227ce34e33a830",
+  "prompts": {},
+  "sessions": {
+    "s_8167f42cae157d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8167f42cae157d",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
