@@ -1,0 +1,19 @@
+desktop/src/view.rs
+  s_f192998996f6f5::t_13b0526e4b4ac4 355-356,363-366,368,385,398-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06ffc4ceeee314c5a2a469d41fceb9eb2d2d599e",
+  "prompts": {},
+  "sessions": {
+    "s_f192998996f6f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f192998996f6f5",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
