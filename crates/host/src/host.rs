@@ -38,6 +38,7 @@ pub struct Host {
     pub devices: OnceLock<Arc<dyn DeviceAdmin>>,
     pub screen: Arc<crate::screen::Screen>,
     pub push: Arc<crate::push::Push>,
+    pub automations: Arc<crate::automations::Automations>,
 }
 
 pub fn os_name() -> &'static str {
@@ -102,6 +103,7 @@ impl Host {
         let sessions = SessionManager::new(ctx.clone());
         let screen = crate::screen::Screen::new(ctx.clone());
         let push = crate::push::Push::new(ctx.clone(), secrets.clone());
+        let automations = crate::automations::Automations::new(ctx.clone(), sessions.clone(), secrets.clone())?;
         Ok(Arc::new(Host {
             ctx,
             sessions,
@@ -110,6 +112,7 @@ impl Host {
             devices: OnceLock::new(),
             screen,
             push,
+            automations,
         }))
     }
 

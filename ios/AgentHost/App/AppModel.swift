@@ -130,6 +130,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var connectors: [ConnectorInfo] = []
     /// What the host can show and whether this phone may watch (protocol 3).
     @Published var screenStatus: ScreenStatusModel?
+    /// The host's automations (protocol 5), loaded when Settings →
+    /// Automations is shown (nil until then) and kept current by
+    /// `automation.changed`. Not cached. See AppModel+Automations.swift.
+    @Published var automations: [AutomationModel]?
     /// Streaming side answers (`session.delta` with a `side_id`), by side id;
     /// replaced by the coalesced `side.message` event.
     @Published private(set) var sideStreaming: [String: String] = [:]
@@ -541,6 +545,7 @@ final class AppModel: ObservableObject {
         workspaces = []
         sessions = []
         archivedSessions = nil
+        automations = nil
         approvals = []
         deviceName = nil
         transcripts = [:]
@@ -740,6 +745,9 @@ final class AppModel: ObservableObject {
         await refreshApprovals()
         await refreshScreen()
         await refreshPushStatus()
+        if automations != nil {
+            await refreshAutomations()
+        }
         if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
             connectors = list
             iconCache = [:]
@@ -1094,6 +1102,8 @@ final class AppModel: ObservableObject {
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
         case RPC.nScreenChanged:
             screenStatus = try? JSONDecoder().decode(ScreenStatusModel.self, from: data)
+        case RPC.nAutomationChanged:
+            applyAutomationChanged(data)
         case RPC.nDeviceRevoked:
             deviceRemoved()
         default:
@@ -1300,7 +1310,8 @@ final class AppModel: ObservableObject {
         transcripts = d.transcripts
         connectors = d.connectors
         screenStatus = d.screenStatus
-        hostProtocolVersion = RPC.pushProtocolVersion
+        automations = d.automations
+        hostProtocolVersion = RPC.automationProtocolVersion
         notificationsEnabled = d.screen == .notifications
         pushPrefs = PushPrefsModel()
         pushStatus = d.pushStatus(for: d.screen)

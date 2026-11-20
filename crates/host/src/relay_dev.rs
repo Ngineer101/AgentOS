@@ -47,7 +47,15 @@ struct Room {
     pairings: HashMap<String, i64>,
     /// conn_id -> (sender to device socket, device key if any)
     conns: HashMap<String, (mpsc::UnboundedSender<Ctl>, Option<String>)>,
+    /// Webhooks: the key deliveries are sealed to, the allowed hook hashes,
+    /// and sealed deliveries the host hasn't acked (by delivery id, in order).
+    seal_key: Option<[u8; 32]>,
+    hooks: HashSet<String>,
+    hook_queue: std::collections::BTreeMap<String, String>,
 }
+
+/// Largest webhook body the relay takes.
+pub const MAX_HOOK_BODY: usize = 262_144;
 
 #[derive(Default)]
 struct State {
@@ -79,7 +87,13 @@ impl DevRelay {
             while let Ok((s, _)) = l.accept().await {
                 let rr = rr.clone();
                 tokio::spawn(async move {
-                    let _ = rr.serve(s).await;
+                    let mut head = [0u8; 5];
+                    let n = s.peek(&mut head).await.unwrap_or(0);
+                    if &head[..n] == b"POST " {
+                        let _ = rr.serve_http(s).await;
+                    } else {
+                        let _ = rr.serve(s).await;
+                    }
                 });
             }
         });
@@ -181,6 +195,14 @@ impl DevRelay {
                 }
                 _ => Some(4400),
             };
+            if fail.is_none() && role == "host" {
+                // Deliveries that waited for the host, oldest first.
+                for (id, sealed) in &room.hook_queue {
+                    let _ = tx.send(Ctl::Msg(Message::Text(
+                        json!({"type":"hook","delivery_id":id,"sealed":sealed}).to_string(),
+                    )));
+                }
+            }
             if fail.is_none() && role != "host" {
                 room.conns
                     .insert(conn_id.clone(), (tx.clone(), device_key.clone()));
@@ -366,6 +388,18 @@ impl DevRelay {
                     }
                 }
             }
+            Some("hooks.set") => {
+                let key = v["seal_key"].as_str().and_then(|k| unb64(k).ok()).and_then(|k| <[u8; 32]>::try_from(k).ok());
+                if let (Some(key), Some(hooks)) = (key, v["hooks"].as_array()) {
+                    room.seal_key = Some(key);
+                    room.hooks = hooks.iter().filter_map(|h| h.as_str().map(str::to_string)).collect();
+                }
+            }
+            Some("hook.ack") => {
+                if let Some(id) = v["delivery_id"].as_str() {
+                    room.hook_queue.remove(id);
+                }
+            }
             Some("ping") => {
                 if let Some((_, h)) = &room.host {
                     let _ = h.send(Ctl::Msg(Message::Text(r#"{"type":"pong"}"#.to_string())));
@@ -373,5 +407,104 @@ impl DevRelay {
             }
             _ => {}
         }
+    }
+    /// `POST /v1/hook/{relay_id}/{hook_id}`: seal the request to the host,
+    /// queue it, forward it if the host is connected. Returns the HTTP
+    /// status and the delivery id.
+    pub fn post_hook(&self, rid: &str, hook_id: &str, headers: &[(String, String)], body: &[u8]) -> (u16, Option<String>) {
+        if body.len() > MAX_HOOK_BODY {
+            return (413, None);
+        }
+        let mut st = self.state.lock().unwrap();
+        let Some(room) = st.rooms.get_mut(rid) else { return (404, None) };
+        let Some(key) = room.seal_key else { return (404, None) };
+        if !room.hooks.contains(&b64(&agenthost_proto::tunnel::sha256(hook_id.as_bytes()))) {
+            return (404, None);
+        }
+        if room.hook_queue.len() >= 200 {
+            return (503, None);
+        }
+        let now = crate::util::now_ms();
+        let id = format!("{now:013}-{}", crate::util::random_hex(8));
+        let env = agenthost_proto::hookseal::Envelope {
+            v: 1,
+            hook_id: hook_id.to_string(),
+            delivery_id: id.clone(),
+            received_at: now,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+                .filter(|(k, _)| !k.starts_with("cf-") && !matches!(k.as_str(), "cookie" | "x-forwarded-for" | "x-real-ip" | "true-client-ip"))
+                .collect(),
+            body: b64(body),
+        };
+        let sealed = b64(&agenthost_proto::hookseal::seal(&key, &id, &serde_json::to_vec(&env).unwrap()));
+        room.hook_queue.insert(id.clone(), sealed.clone());
+        if let Some((_, h)) = &room.host {
+            let _ = h.send(Ctl::Msg(Message::Text(json!({"type":"hook","delivery_id":id,"sealed":sealed}).to_string())));
+        }
+        (202, Some(id))
+    }
+
+    /// Deliveries the host hasn't acked yet.
+    pub fn queued_hooks(&self, rid: &str) -> usize {
+        self.state.lock().unwrap().rooms.get(rid).map_or(0, |r| r.hook_queue.len())
+    }
+
+    /// A minimal HTTP/1.1 server for webhook POSTs (`curl` against
+    /// `agenthostd dev-relay`).
+    async fn serve_http(&self, mut s: tokio::net::TcpStream) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = Vec::new();
+        let head_end = loop {
+            let mut chunk = [0u8; 4096];
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Ok(());
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i;
+            }
+            if buf.len() > 16 * 1024 {
+                return Ok(());
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+        let mut lines = head.split("\r\n");
+        let path = lines.next().unwrap_or_default().split(' ').nth(1).unwrap_or_default().to_string();
+        let headers: Vec<(String, String)> = lines
+            .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())))
+            .collect();
+        let len: usize = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+        let mut body = buf[head_end + 4..].to_vec();
+        let status = if len > MAX_HOOK_BODY {
+            (413, None)
+        } else {
+            while body.len() < len {
+                let mut chunk = vec![0u8; len - body.len()];
+                let n = s.read(&mut chunk).await?;
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..n]);
+            }
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            match parts.as_slice() {
+                ["v1", "hook", rid, hook] => self.post_hook(rid, hook, &headers, &body),
+                _ => (404, None),
+            }
+        };
+        let text = match status {
+            (202, Some(id)) => json!({"delivery_id": id}).to_string(),
+            (code, _) => json!({"error": code}).to_string(),
+        };
+        let resp = format!(
+            "HTTP/1.1 {} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+            status.0,
+            text.len()
+        );
+        s.write_all(resp.as_bytes()).await?;
+        Ok(())
     }
 }

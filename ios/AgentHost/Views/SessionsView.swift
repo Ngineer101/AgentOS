@@ -6,6 +6,9 @@ enum Route: Hashable {
     case archived
     /// Settings → Notifications (protocol 4 hosts).
     case notifications
+    /// Settings → Automations, and one automation (protocol 5 hosts).
+    case automations
+    case automation(String)
 }
 
 /// Sessions grouped by workspace (Quick tasks first) under a large title with
@@ -146,6 +149,10 @@ struct SessionsView: View {
                     ArchivedSessionsView()
                 case .notifications:
                     NotificationsSettingsView()
+                case .automations:
+                    AutomationsView()
+                case let .automation(id):
+                    AutomationDetailView(automationId: id)
                 }
             }
             .archiveFlow($archiving)
@@ -220,6 +227,9 @@ struct SessionsView: View {
         case .subagents: path = [.session(DemoData.subagentSession)]
         case .screen, .screenPicker: showScreen = true
         case .notifications: path = [.settings, .notifications]
+        case .automations, .automationNew: path = [.settings, .automations]
+        case .automation: path = [.settings, .automations, .automation(DemoData.upgradeAutomation)]
+        case .automationWebhook: path = [.settings, .automations, .automation(DemoData.sentryAutomation)]
         case .sessions, .pair, .pairNotifications, .pairAPNsKey: break
         }
     }
@@ -423,6 +433,13 @@ struct SessionRow: View {
                         .font(.footnote)
                         .foregroundStyle(subtitleColor)
                         .lineLimit(1)
+                    if session.automationId != nil {
+                        // A run of an automation.
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.caption2)
+                            .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                            .accessibilityLabel("Automation")
+                    }
                 }
                 if let reason = session.stateReason, session.state == SessionStateName.failed {
                     Text(reason)

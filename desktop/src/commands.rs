@@ -148,12 +148,20 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             return true;
         }
     }
+    // ⌘↩ / Ctrl+Enter saves the automation being edited.
+    if s.auto_open && s.confirm_delete_auto.is_none() {
+        let save = if look.mac() { "super+enter" } else { "ctrl+enter" };
+        if Chord::parse(save).is_ok_and(|c| c.matches_tx(ev, tx)) {
+            s.save_automation();
+            return true;
+        }
+    }
     if s.menu.is_some() && ev.key == rune::Key::Escape {
         s.menu = None;
         return true;
     }
     // Escape closes the agent panel when nothing over it takes the key.
-    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() {
+    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() && !s.auto_open {
         s.close_agent();
         return true;
     }
@@ -353,6 +361,7 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Copy Branch Name"), Some("Session"), None, |s, tx| run(s, Cmd::CopyBranch, tx)),
         (Some("Show Session Folder in Finder"), Some("Session"), Some("alt+cmd+r"), |s, tx| run(s, Cmd::ShowFolder, tx)),
         (Some("Archive Session…"), Some("Session"), Some("ctrl+cmd+a"), |s, tx| run(s, Cmd::Archive, tx)),
+        (Some("Automations"), Some("View"), None, |s, _| s.open_automations()),
         (Some("Archived Sessions…"), Some("View"), None, |s, _| s.open_settings(Tab::Archived)),
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
         (Some("Toggle Side Questions"), Some("View"), Some("alt+cmd+i"), |s, tx| run(s, Cmd::ToggleSide, tx)),

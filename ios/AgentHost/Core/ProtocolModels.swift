@@ -165,6 +165,8 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var configOptions: [SessionConfigOption]? = nil
     /// The agent answers side questions (`/btw`, `session.side_ask`).
     var sideQuestions: Bool? = nil
+    /// The automation this session is a run of (protocol 5).
+    var automationId: String? = nil
 
     var id: String { sessionId }
     var isArchived: Bool { archivedAt != nil }
@@ -196,6 +198,7 @@ struct SessionInfo: Codable, Identifiable, Hashable {
         case worktree
         case configOptions = "config_options"
         case sideQuestions = "side_questions"
+        case automationId = "automation_id"
     }
 }
 

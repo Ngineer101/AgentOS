@@ -190,6 +190,22 @@ impl Uploads {
         Ok(att)
     }
 
+    /// Store bytes the host has itself (a webhook's payload) as an upload.
+    pub fn put(&self, name: &str, mime: &str, bytes: &[u8]) -> Result<Attachment, RpcError> {
+        use base64::Engine as _;
+        let b = self.begin(UploadBeginParams { name: name.into(), size: bytes.len() as u64, mime: Some(mime.into()) })?;
+        let mut offset = 0u64;
+        for piece in bytes.chunks(UPLOAD_CHUNK_BYTES) {
+            self.append(UploadAppendParams {
+                upload_id: b.upload_id.clone(),
+                offset,
+                data: base64::engine::general_purpose::STANDARD.encode(piece),
+            })?;
+            offset += piece.len() as u64;
+        }
+        self.finish(&b.upload_id)
+    }
+
     /// A finished upload and the path of its bytes.
     pub fn get(&self, id: &str) -> Result<(Attachment, PathBuf), RpcError> {
         if !valid_id(id) {

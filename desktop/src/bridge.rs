@@ -60,6 +60,18 @@ pub enum Tag {
     /// `session.prompt` of this prompt in this session: the pending bubble goes when the
     /// host records it, or back into the composer if it refuses.
     Prompt { session: String, prompt_id: String },
+    /// `automation.list`.
+    Automations,
+    /// `automation.create` or `automation.update` from the editor: errors show in it.
+    AutomationSaved,
+    /// A quick `automation.update` (on/off, a new webhook URL): answered with the automation.
+    AutomationUpdated { what: String },
+    /// `automation.runs` of this automation.
+    AutomationRuns(String),
+    /// `automation.run_now` of this automation: answered with the run.
+    AutomationRan(String),
+    /// `automation.check_schedule` of this cron expression.
+    ScheduleCheck(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -74,6 +86,7 @@ pub enum Refresh {
     HostInfo,
     ProjectRoots,
     Archived,
+    Automations,
 }
 
 pub enum ToHost {

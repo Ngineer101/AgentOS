@@ -92,6 +92,62 @@ What a notification says is encrypted to the phone; Apple only sees
 "A session needs you". `agenthost push status` and `agenthost push test`
 show and check it.
 
+## Automations
+
+An automation is a saved session that starts by itself: on a schedule
+(routine maintenance, upgrading dependencies), when a webhook arrives (a
+Sentry alert to investigate), or when you press Run Now. Each run is an
+ordinary session, so its transcript is the run's output; the run list shows
+when it ran, why, how it ended and the agent's last words. The newest run's
+session stays open for follow-up questions until the next run starts. Set
+them up on the desktop (Automations in the sidebar), on the phone (Settings →
+Automations; schedules and Run Now, not webhooks or pre-approved tools), or:
+
+```sh
+agenthost automation add "Upgrade dependencies" -w ~/code/myproject -a claude \
+  --cron "0 3 * * 1" --auto-approve create_pull_request,git_push \
+  --prompt "Upgrade dependencies, run the tests, open a pull request."
+agenthost automation ls                         # next run, last result
+agenthost automation run <id> --wait            # now, and print the summary
+agenthost automation runs <id>                  # history; each run names its session
+```
+
+Schedules are cron in this computer's time (at most every 5 minutes). The
+host only runs while the computer is awake: a time missed by up to 12 hours
+runs once when it's back, an older one is recorded as skipped. A run still
+going after its time limit (60 minutes by default) is stopped, and a
+scheduled run is skipped while the previous one is still going. An
+automation may let its runs open pull requests and push their own branch
+without asking (desktop only; a force-push still asks); anything else asks as
+usual, and your phone gets 12 hours to answer instead of 10 minutes.
+
+**Webhooks** (desktop only) come in through your relay: each webhook
+automation gets a URL `https://<your-relay>/v1/hook/<relay id>/<hook id>`.
+The relay seals each request to the host the moment it arrives, keeps it
+(sealed, for up to a day) until the host has it, and answers the sender at
+once; the host checks the sender's signature, filters and dedupes, then
+starts a run. This is the one place the relay sees plaintext: the request
+while it seals it, in memory, on your Cloudflare account (see
+[docs/relay-protocol.md](docs/relay-protocol.md#webhooks)). For Sentry:
+
+1. Connect the Sentry MCP connector (Settings → Connectors) and switch it on
+   for the workspace, so runs can read the issue.
+2. `agenthost automation add "Investigate Sentry alerts" -w ~/code/myproject -a claude --webhook sentry --secret <client secret>`
+   (or New Automation → Webhook → Sentry on the desktop) and copy its webhook URL.
+3. In Sentry: Settings → Developer Settings → Custom Integrations → New
+   Internal Integration. Paste the URL as the Webhook URL, turn on **Alert
+   Rule Action**, save, and copy its Client Secret into the automation.
+4. In the alert rules you want investigated, add the action "Send a
+   notification via" your integration.
+
+Issue alerts, new issues and metric alerts (not resolved ones) start a run;
+the same issue starts at most one run a day. Alert text is passed to the agent
+as untrusted data, never as instructions. GitHub webhooks (`--webhook github`,
+signed with the webhook's secret) and any other sender (`--webhook generic`,
+optionally with a bearer token) work the same way; the payload is attached to
+the run as `webhook.json` and fields can go in the prompt as
+`{{payload.some.field}}`.
+
 ## Security model in one paragraph
 
 Every session runs in a sandbox (bubblewrap + seccomp on Linux, Seatbelt on

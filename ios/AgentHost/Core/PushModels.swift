@@ -22,17 +22,22 @@ struct PushPrefsModel: Codable, Hashable {
     var turnDone = false
     /// A session failed.
     var failed = false
+    /// An automation's run finished or failed (protocol 5; on by default).
+    /// Older hosts ignore it.
+    var automations = true
 
     enum CodingKeys: String, CodingKey {
         case approvals
         case turnDone = "turn_done"
         case failed
+        case automations
     }
 
-    init(approvals: Bool = true, turnDone: Bool = false, failed: Bool = false) {
+    init(approvals: Bool = true, turnDone: Bool = false, failed: Bool = false, automations: Bool = true) {
         self.approvals = approvals
         self.turnDone = turnDone
         self.failed = failed
+        self.automations = automations
     }
 
     init(from decoder: Decoder) throws {
@@ -40,11 +45,12 @@ struct PushPrefsModel: Codable, Hashable {
         approvals = try c.decodeIfPresent(Bool.self, forKey: .approvals) ?? true
         turnDone = try c.decodeIfPresent(Bool.self, forKey: .turnDone) ?? false
         failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
+        automations = try c.decodeIfPresent(Bool.self, forKey: .automations) ?? true
     }
 
     /// As JSON-RPC params.
     var params: [String: Any] {
-        ["approvals": approvals, "turn_done": turnDone, "failed": failed]
+        ["approvals": approvals, "turn_done": turnDone, "failed": failed, "automations": automations]
     }
 }
 

@@ -187,7 +187,7 @@ fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
 // Pieces
 // ---------------------------------------------------------------------------
 
-fn section(t: &Theme, title: &str, note: Option<String>, content: El) -> El {
+pub(crate) fn section(t: &Theme, title: &str, note: Option<String>, content: El) -> El {
     let mut head = row().w_full().gap(8.0).center_y().child(t.section_title(title)).child(el().grow(1.0));
     if let Some(n) = note {
         head = head.child(t.faint(n));
@@ -196,7 +196,7 @@ fn section(t: &Theme, title: &str, note: Option<String>, content: El) -> El {
 }
 
 /// A form row: a title (and detail under it) at the start, `trailing` at the end.
-fn form_row(t: &Theme, title: &str, detail: Option<String>, trailing: El) -> El {
+pub(crate) fn form_row(t: &Theme, title: &str, detail: Option<String>, trailing: El) -> El {
     let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(t.label(title.to_string()));
     if let Some(d) = detail {
         names = names.child(t.small(d).wrap());
@@ -204,7 +204,7 @@ fn form_row(t: &Theme, title: &str, detail: Option<String>, trailing: El) -> El 
     row().w_full().gap(10.0).px(if t.mac() { 12.0 } else { 14.0 }).py(if t.mac() { 8.0 } else { 12.0 }).center_y().child(names).child(trailing)
 }
 
-fn footnote(t: &Theme, msg: &str) -> El {
+pub(crate) fn footnote(t: &Theme, msg: &str) -> El {
     text(msg.to_string()).font(TextStyle::new(if t.mac() { 11.0 } else { 13.0 }, 400.0).lh(if t.mac() { 16.0 } else { 19.0 })).color(t.text3).wrap()
 }
 
@@ -276,7 +276,7 @@ fn pick_policy(s: &mut App, tx: &mut Tx, key: String, cid: String, which: String
     }
 }
 
-fn popup_button(t: &Theme, key: String, label: &str) -> El {
+pub(crate) fn popup_button(t: &Theme, key: String, label: &str) -> El {
     let mac = t.mac();
     row()
         .key(key)

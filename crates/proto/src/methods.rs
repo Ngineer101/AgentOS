@@ -117,6 +117,20 @@ pub const PUSH_UNREGISTER: &str = "push.unregister";
 pub const PUSH_SET_PREFS: &str = "push.set_prefs";
 pub const PUSH_TEST: &str = "push.test";
 
+/// Automations: saved sessions that run on a schedule, from a webhook or by
+/// hand. Phones may manage them, except webhook triggers and pre-approved
+/// tools, which the host checks per field (admin only).
+pub const AUTOMATION_LIST: &str = "automation.list";
+pub const AUTOMATION_GET: &str = "automation.get";
+pub const AUTOMATION_CREATE: &str = "automation.create";
+pub const AUTOMATION_UPDATE: &str = "automation.update";
+pub const AUTOMATION_DELETE: &str = "automation.delete";
+pub const AUTOMATION_RUN_NOW: &str = "automation.run_now";
+/// Runs of one automation, newest first.
+pub const AUTOMATION_RUNS: &str = "automation.runs";
+/// Check a cron expression: in words, and its next times.
+pub const AUTOMATION_CHECK_SCHEDULE: &str = "automation.check_schedule";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -139,6 +153,9 @@ pub const N_VOICE_CHANGED: &str = "voice.changed";
 /// Screen sharing started, stopped or its policy changed. Params are a
 /// [`crate::ScreenStatus`]. Sent to every connection.
 pub const N_SCREEN_CHANGED: &str = "screen.changed";
+/// An automation changed or a run of it started or finished. Params are an
+/// [`crate::AutomationChanged`]. Sent to every connection.
+pub const N_AUTOMATION_CHANGED: &str = "automation.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -180,7 +197,8 @@ pub fn required_capability(method: &str) -> Option<Capability> {
     Some(match method {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST
-        | SCREEN_STATUS | PUSH_STATUS => Read,
+        | SCREEN_STATUS | PUSH_STATUS | AUTOMATION_LIST | AUTOMATION_GET | AUTOMATION_RUNS
+        | AUTOMATION_CHECK_SCHEDULE => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
@@ -190,7 +208,10 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         // Bounded by the screen policy, which only an admin sets.
         | SCREEN_START | SCREEN_STOP | SCREEN_ATTACH
         // A device's own notifications; the key only lets the host talk to Apple.
-        | PUSH_SET_KEY | PUSH_REGISTER | PUSH_UNREGISTER | PUSH_SET_PREFS | PUSH_TEST => Sessions,
+        | PUSH_SET_KEY | PUSH_REGISTER | PUSH_UNREGISTER | PUSH_SET_PREFS | PUSH_TEST
+        // A deferred session.create + session.prompt. Webhook triggers and
+        // pre-approved tools widen policy: the host requires admin for those.
+        | AUTOMATION_CREATE | AUTOMATION_UPDATE | AUTOMATION_DELETE | AUTOMATION_RUN_NOW => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
@@ -264,6 +285,14 @@ mod tests {
             PUSH_UNREGISTER,
             PUSH_SET_PREFS,
             PUSH_TEST,
+            AUTOMATION_LIST,
+            AUTOMATION_GET,
+            AUTOMATION_CREATE,
+            AUTOMATION_UPDATE,
+            AUTOMATION_DELETE,
+            AUTOMATION_RUN_NOW,
+            AUTOMATION_RUNS,
+            AUTOMATION_CHECK_SCHEDULE,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

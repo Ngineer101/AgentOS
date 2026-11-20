@@ -1263,3 +1263,410 @@ fn a_multi_line_command_shows_its_first_line() {
     assert_eq!(crate::session::one_line("python3 - <<'EOF'\np='x'\nEOF"), "python3 - <<'EOF' …");
     assert_eq!(crate::session::one_line("  ls -la  "), "ls -la");
 }
+
+// ---- automations -------------------------------------------------------------------------
+
+fn auto_note(ch: AutomationChanged) -> bridge::FromHost {
+    bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: agenthost_proto::methods::N_AUTOMATION_CHANGED.into(), params: serde_json::to_value(ch).unwrap() })
+}
+
+fn agents_of(app: &model::App) -> Vec<AgentStatus> {
+    app.info.as_ref().unwrap().agents.clone()
+}
+
+#[test]
+fn schedule_presets_build_cron_and_read_back() {
+    use model::{parse_time, preset_cron, preset_of, Preset};
+    assert_eq!(parse_time("09:00"), Some((9, 0)));
+    assert_eq!(parse_time(" 9:5 "), Some((9, 5)));
+    assert_eq!(parse_time("21.15"), Some((21, 15)));
+    assert_eq!(parse_time("7"), Some((7, 0)));
+    for bad in ["24:00", "9:60", "nine", "", "9:"] {
+        assert_eq!(parse_time(bad), None, "{bad:?}");
+    }
+    assert_eq!(preset_cron(Preset::Hourly, "", 0, "", ""), Ok("0 * * * *".into()));
+    assert_eq!(preset_cron(Preset::Daily, "09:30", 0, "", ""), Ok("30 9 * * *".into()));
+    assert_eq!(preset_cron(Preset::Weekdays, "7:05", 0, "", ""), Ok("5 7 * * 1-5".into()));
+    assert_eq!(preset_cron(Preset::Weekly, "18:00", 5, "", ""), Ok("0 18 * * 5".into()));
+    assert_eq!(preset_cron(Preset::Monthly, "02:00", 0, " 15 ", ""), Ok("0 2 15 * *".into()));
+    assert!(preset_cron(Preset::Monthly, "02:00", 0, "32", "").is_err());
+    assert!(preset_cron(Preset::Monthly, "02:00", 0, "0", "").is_err());
+    assert!(preset_cron(Preset::Daily, "25:00", 0, "", "").is_err());
+    assert_eq!(preset_cron(Preset::Custom, "", 0, "", "  0  9 * *   1-5 "), Ok("0 9 * * 1-5".into()), "spaces tidied");
+    assert!(preset_cron(Preset::Custom, "", 0, "", "  ").is_err());
+    // An existing cron opens as the preset that makes it; anything else as Custom.
+    for (p, time, wd, day) in [(Preset::Daily, "09:30", 1, "1"), (Preset::Weekdays, "07:05", 1, "1"), (Preset::Weekly, "18:00", 5, "1"), (Preset::Monthly, "02:00", 1, "15")] {
+        let cron = preset_cron(p, time, wd, day, "").unwrap();
+        assert_eq!(preset_of(&cron), (p, time.to_string(), wd, day.to_string()), "{cron}");
+    }
+    assert_eq!(preset_of("0 * * * *").0, Preset::Hourly);
+    assert_eq!(preset_of("0 9 * * 7"), (Preset::Weekly, "09:00".into(), 0, "1".into()), "7 is Sunday too");
+    for other in ["*/15 * * * *", "@daily", "0 9 1 6 *", "0 9 * * 1,3", "0 9-17 * * *", "nonsense"] {
+        assert_eq!(preset_of(other).0, Preset::Custom, "{other}");
+    }
+}
+
+#[test]
+fn the_automation_editor_checks_its_fields_and_builds_params() {
+    use model::{draft_params, TriggerKind};
+    let mut app = demo("automations");
+    app.new_automation();
+    assert!(app.auto_open);
+    // The first folder and its default login.
+    assert_eq!(app.draft.workspace.as_deref(), Some("ws_relay"));
+    assert_eq!(app.draft.login.as_deref(), Some("prof_work"));
+    app.save_automation();
+    assert_eq!(app.draft.error.as_deref(), Some("Give the automation a name."));
+    app.draft.name.replace_text("Nightly");
+    app.save_automation();
+    assert_eq!(app.draft.error.as_deref(), Some("Say what each run should do."));
+    // An example fills the prompt and keeps the typed name.
+    app.draft_use_example(0);
+    assert_eq!(app.draft.prompt.text, SCHEDULE_EXAMPLES[0].1);
+    assert_eq!(app.draft.name.text, "Nightly");
+    app.draft.max_minutes.replace_text("721");
+    app.save_automation();
+    assert!(app.draft.error.as_deref().is_some_and(|e| e.contains("1 to 720")), "{:?}", app.draft.error);
+    app.draft.max_minutes.replace_text("90");
+    app.draft_toggle_approve("git_push");
+    app.draft_toggle_approve("create_pull_request");
+    let p = draft_params(&app.draft, &agents_of(&app)).unwrap();
+    assert_eq!(p.trigger, AutomationTrigger::Schedule { cron: "0 9 * * *".into() });
+    assert_eq!((p.agent, p.profile_id.as_deref(), p.max_minutes), (AgentKind::Claude, Some("prof_work"), Some(90)));
+    assert_eq!(p.auto_approve, vec!["create_pull_request", "git_push"], "in the host's order");
+    assert_eq!(p.webhook_secret, None);
+    // A webhook: its secret goes, and filters are field = value lines.
+    app.draft_set_trigger(TriggerKind::Webhook);
+    app.draft.secret.replace_text("  s3cret ");
+    app.draft.filters.replace_text("payload.action = opened\n\nnot a rule");
+    assert!(draft_params(&app.draft, &agents_of(&app)).unwrap_err().contains("not a rule"));
+    app.draft.filters.replace_text("payload.action = opened\n headers.x-github-event=issues ");
+    let p = draft_params(&app.draft, &agents_of(&app)).unwrap();
+    let AutomationTrigger::Webhook { source, filter, dedupe_key, cooldown_minutes } = &p.trigger else { panic!("{:?}", p.trigger) };
+    assert_eq!((*source, dedupe_key, *cooldown_minutes), (WebhookSource::Sentry, &None, 1440));
+    assert_eq!(filter, &vec![WebhookMatch { path: "payload.action".into(), equals: "opened".into() }, WebhookMatch { path: "headers.x-github-event".into(), equals: "issues".into() }]);
+    assert_eq!(p.webhook_secret.as_deref(), Some("s3cret"));
+    // By hand: the webhook's prompt goes, and so does the secret typed for it.
+    app.draft_set_trigger(TriggerKind::Manual);
+    assert_eq!(app.draft.prompt.text, "");
+    app.draft.prompt.replace_text("Summarise this week's commits.");
+    let p = draft_params(&app.draft, &agents_of(&app)).unwrap();
+    assert_eq!((p.trigger, p.webhook_secret), (AutomationTrigger::Manual, None));
+}
+
+#[test]
+fn a_new_webhook_gets_its_senders_prompt_until_you_write_your_own() {
+    use model::TriggerKind;
+    let mut app = demo("automations");
+    app.new_automation();
+    app.draft_set_trigger(TriggerKind::Webhook);
+    assert_eq!(app.draft.prompt.text, SENTRY_PROMPT);
+    app.draft_set_source(WebhookSource::Github);
+    assert_eq!(app.draft.prompt.text, GITHUB_PROMPT);
+    // Back to a schedule: the webhook prompt goes (its {{fields}} mean nothing there).
+    app.draft_set_trigger(TriggerKind::Schedule);
+    assert_eq!(app.draft.prompt.text, "");
+    // An example counts as untouched too.
+    app.draft_use_example(1);
+    app.draft_set_trigger(TriggerKind::Webhook);
+    assert_eq!(app.draft.prompt.text, GITHUB_PROMPT);
+    // Words of your own stay.
+    app.draft.prompt.replace_text("Triage the issue and label it.");
+    app.draft_set_source(WebhookSource::Generic);
+    app.draft_set_trigger(TriggerKind::Schedule);
+    assert_eq!(app.draft.prompt.text, "Triage the issue and label it.");
+    // Editing an existing automation never rewrites its prompt.
+    app.edit_automation("auto_sentry");
+    app.draft_set_source(WebhookSource::Github);
+    assert_eq!(app.draft.prompt.text, SENTRY_PROMPT);
+}
+
+#[test]
+fn an_update_sends_only_what_changed() {
+    use model::{draft_params, update_diff};
+    let mut app = demo("automations");
+    let a = app.automation("auto_deps").unwrap().clone();
+    app.edit_automation("auto_deps");
+    assert_eq!(app.draft.preset, model::Preset::Daily);
+    assert_eq!(app.draft.time.text, "03:00");
+    let none = AutomationUpdateParams { automation_id: "auto_deps".into(), ..Default::default() };
+    assert_eq!(update_diff(&a, &draft_params(&app.draft, &agents_of(&app)).unwrap(), false), none, "nothing changed");
+    // Saving no change just closes the editor.
+    app.save_automation();
+    assert!(!app.auto_open && !app.draft.saving);
+    // A new time and the agent's own login: the trigger and the profile, nothing else.
+    app.edit_automation("auto_deps");
+    app.draft.time.replace_text("04:15");
+    app.draft.login = Some("claude".into());
+    let u = update_diff(&a, &draft_params(&app.draft, &agents_of(&app)).unwrap(), false);
+    let v = serde_json::to_value(&u).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["automation_id", "profile_id", "trigger"], "{v}");
+    assert_eq!(u.trigger, Some(AutomationTrigger::Schedule { cron: "15 4 * * *".into() }));
+    assert_eq!(u.profile_id.as_deref(), Some("claude"));
+    // Another agent: its kind and its login go together.
+    app.draft.login = Some("codex".into());
+    let u = update_diff(&a, &draft_params(&app.draft, &agents_of(&app)).unwrap(), false);
+    assert_eq!((u.agent, u.profile_id.as_deref()), (Some(AgentKind::Codex), Some("codex")));
+    // The default login stored as no profile reads the same as its key.
+    let weekly = app.automation("auto_tidy").unwrap().clone();
+    app.edit_automation("auto_tidy");
+    assert_eq!(app.draft.login.as_deref(), Some("claude"));
+    assert_eq!(app.draft.preset, model::Preset::Weekly);
+    assert!(!app.draft.enabled);
+    let u = update_diff(&weekly, &draft_params(&app.draft, &agents_of(&app)).unwrap(), false);
+    assert_eq!(u, AutomationUpdateParams { automation_id: "auto_tidy".into(), ..Default::default() });
+    // The secret: blank keeps it, Remove clears it, a new one replaces it.
+    let sentry = app.automation("auto_sentry").unwrap().clone();
+    app.edit_automation("auto_sentry");
+    assert!(!app.draft.advanced, "dedupe and filters stay folded when unused");
+    let diff = |app: &model::App, remove| update_diff(&sentry, &draft_params(&app.draft, &agents_of(app)).unwrap(), remove);
+    assert_eq!(diff(&app, false), AutomationUpdateParams { automation_id: "auto_sentry".into(), ..Default::default() });
+    assert_eq!(diff(&app, true).webhook_secret.as_deref(), Some(""));
+    app.draft.secret.replace_text("new-secret");
+    assert_eq!(diff(&app, true).webhook_secret.as_deref(), Some("new-secret"));
+    assert_eq!(diff(&app, false).trigger, None);
+}
+
+#[test]
+fn saving_shows_the_hosts_refusal_in_the_editor() {
+    let mut app = demo("automations");
+    app.new_automation();
+    app.draft.name.replace_text("Nightly");
+    app.draft_use_example(0);
+    app.save_automation();
+    assert!(app.draft.saving && app.draft.error.is_none());
+    let refused = agenthost_proto::jsonrpc::RpcError { code: -32602, message: "a webhook trigger needs the desktop".into(), data: None };
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::AutomationSaved, result: Err(refused) });
+    assert!(app.auto_open, "the editor stays open to fix it");
+    assert_eq!(app.draft.error.as_deref(), Some("a webhook trigger needs the desktop"));
+    assert!(!app.draft.saving);
+    // Saved: the editor closes on the new automation.
+    let mut a = app.automation("auto_deps").unwrap().clone();
+    a.automation_id = "auto_new".into();
+    a.name = "Nightly".into();
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::AutomationSaved, result: Ok(serde_json::to_value(&a).unwrap()) });
+    assert!(!app.auto_open);
+    assert_eq!(app.screen, Screen::Automations);
+    assert_eq!(app.selected_automation().map(|a| a.name.as_str()), Some("Nightly"));
+    assert_eq!(app.automations.len(), 4);
+}
+
+#[test]
+fn the_schedule_check_keeps_only_the_answer_for_whats_typed() {
+    let mut app = demo("automations");
+    app.new_automation();
+    assert_eq!(app.draft.checked, "0 9 * * *");
+    let reply = |cron: &str, text: &str| bridge::FromHost::Reply { tag: bridge::Tag::ScheduleCheck(cron.into()), result: Ok(serde_json::json!({"text": text, "next": [1, 2]})) };
+    app.apply(reply("0 8 * * *", "Every day at 08:00"));
+    assert!(app.draft.check.is_none(), "an answer for an older schedule is dropped");
+    app.apply(reply("0 9 * * *", "Every day at 09:00"));
+    assert_eq!(app.draft.check.as_ref().and_then(|c| c.text.as_deref()), Some("Every day at 09:00"));
+    // A time that makes no cron says so at once, and Save won't go.
+    app.draft.time.replace_text("25:00");
+    app.recheck_schedule();
+    assert!(app.draft.check.as_ref().and_then(|c| c.error.as_deref()).is_some_and(|e| e.contains("HH:MM")));
+    app.draft.time.replace_text("10:00");
+    app.recheck_schedule();
+    assert_eq!(app.draft.checked, "0 10 * * *");
+    assert!(app.draft.check.is_none(), "waiting for the host");
+    // The host refuses a custom cron: its words show, and Save stops on them.
+    app.draft_set_preset(model::Preset::Custom);
+    assert_eq!(app.draft.cron.text, "0 10 * * *", "Custom starts from the preset's cron");
+    app.draft.cron.replace_text("0 25 * * *");
+    app.recheck_schedule();
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::ScheduleCheck("0 25 * * *".into()), result: Ok(serde_json::json!({"error": "hour 25 is out of range"})) });
+    app.draft.name.replace_text("x");
+    app.draft.prompt.replace_text("y");
+    app.save_automation();
+    assert_eq!(app.draft.error.as_deref(), Some("hour 25 is out of range"));
+    assert!(!app.draft.saving);
+}
+
+#[test]
+fn automation_changes_update_the_list_and_its_runs() {
+    let mut app = demo("automations");
+    assert!(app.can_run_now(app.automation("auto_deps").unwrap()));
+    // A run starts: the row says so, its runs list leads with it, Run Now waits.
+    let mut a = app.automation("auto_deps").unwrap().clone();
+    let run = AutomationRun { run_id: "run_d4".into(), automation_id: "auto_deps".into(), session_id: Some("ses_r5".into()), trigger: RunTrigger::Manual, scheduled_for: None, started_at: crate::view::now_ms(), finished_at: None, outcome: RunOutcome::Running, summary: None, detail: None };
+    a.last_run = Some(run.clone());
+    app.apply(auto_note(AutomationChanged { automation_id: "auto_deps".into(), automation: Some(a.clone()), removed: false }));
+    assert_eq!(app.runs["auto_deps"][0].run_id, "run_d4");
+    assert_eq!(app.runs["auto_deps"].len(), 4);
+    assert_eq!(app.automations_running(), 1);
+    assert!(!app.can_run_now(app.automation("auto_deps").unwrap()));
+    assert_eq!(crate::automations::summary(&app), "3 automations · 1 running");
+    // It finishes: the same run, updated in place.
+    let done = AutomationRun { outcome: RunOutcome::Succeeded, finished_at: Some(run.started_at + 60_000), ..run };
+    a.last_run = Some(done);
+    app.apply(auto_note(AutomationChanged { automation_id: "auto_deps".into(), automation: Some(a), removed: false }));
+    assert_eq!(app.runs["auto_deps"].len(), 4);
+    assert_eq!(app.runs["auto_deps"][0].outcome, RunOutcome::Succeeded);
+    assert!(app.can_run_now(app.automation("auto_deps").unwrap()));
+    // One made elsewhere (the CLI, a phone) joins the list.
+    let mut other = app.automation("auto_tidy").unwrap().clone();
+    other.automation_id = "auto_cli".into();
+    app.apply(auto_note(AutomationChanged { automation_id: "auto_cli".into(), automation: Some(other), removed: false }));
+    assert_eq!(app.automations.len(), 4);
+    // Deleted elsewhere while you edit it: it goes, and so does the editor.
+    app.edit_automation("auto_deps");
+    app.apply(auto_note(AutomationChanged { automation_id: "auto_deps".into(), automation: None, removed: true }));
+    assert!(app.automation("auto_deps").is_none() && !app.runs.contains_key("auto_deps"));
+    assert!(!app.auto_open && app.notice.is_some());
+    assert_eq!(app.selected_automation().map(|a| a.automation_id.as_str()), Some("auto_sentry"), "the next one shows");
+}
+
+#[test]
+fn delete_and_new_url_ask_first() {
+    let mut app = demo("automations-webhook");
+    app.delete_automation("auto_sentry");
+    assert_eq!(app.confirm_delete_auto.as_deref(), Some("auto_sentry"));
+    assert!(app.automation("auto_sentry").is_some(), "nothing yet");
+    app.delete_automation("auto_sentry");
+    assert!(app.confirm_delete_auto.is_none() && app.automation("auto_sentry").is_none());
+    let mut app = demo("automations-webhook");
+    app.rotate_webhook("auto_sentry");
+    assert_eq!(app.confirm_rotate.as_deref(), Some("auto_sentry"));
+    app.rotate_webhook("auto_sentry");
+    assert!(app.confirm_rotate.is_none());
+}
+
+#[test]
+fn automation_rows_say_what_starts_them_and_when() {
+    use crate::look::Look;
+    use crate::view::when_label;
+    let now = 1_800_000_000_000;
+    assert_eq!(when_label(now + 30_000, now, Look::Mac), "now");
+    assert_eq!(when_label(now + 5 * 60_000, now, Look::Mac), "in 5m");
+    assert_eq!(when_label(now + (4 * 60 + 10) * 60_000, now, Look::Mac), "in 4h 10m");
+    assert_eq!(when_label(now + 7 * 3_600_000, now, Look::Mac), "in 7h");
+    assert_eq!(when_label(now - 2 * 3_600_000 - 5 * 60_000, now, Look::Mac), "2h ago");
+    assert_eq!(when_label(now + 3 * 86_400_000, now, Look::Gnome), "in 3 d");
+    assert_eq!(when_label(now - 19 * 3_600_000, now, Look::Gnome), "19 h ago");
+    let app = demo("automations");
+    let line = |id: &str| model::trigger_line(app.automation(id).unwrap());
+    assert_eq!(line("auto_deps"), "Every day at 03:00");
+    assert_eq!(line("auto_sentry"), "Sentry webhook");
+    let mut a = app.automation("auto_sentry").unwrap().clone();
+    a.trigger = AutomationTrigger::Webhook { source: WebhookSource::Generic, filter: vec![], dedupe_key: None, cooldown_minutes: 10 };
+    assert_eq!(model::trigger_line(&a), "Webhook");
+    a.trigger = AutomationTrigger::Manual;
+    assert_eq!(model::trigger_line(&a), "By hand");
+    a.trigger = AutomationTrigger::Schedule { cron: "0 9 * * 1-5".into() };
+    a.schedule_text = None;
+    assert_eq!(model::trigger_line(&a), "0 9 * * 1-5", "the cron when the host gave no words");
+    // Runs are sessions; the sidebar knows which.
+    assert!(app.sessions.iter().any(|x| x.automation_id.as_deref() == Some("auto_deps")));
+}
+
+#[test]
+fn opening_a_run_opens_its_session() {
+    let mut app = demo("automations");
+    app.open_run("ses_r3");
+    assert_eq!(app.screen, Screen::Session("ses_r3".into()));
+    app.open_automations();
+    assert_eq!(app.screen, Screen::Automations);
+    assert_eq!(app.sel_auto.as_deref(), Some("auto_deps"), "back where you were");
+    // An older host: no automations to show.
+    let mut old = demo("automations");
+    old.info.as_mut().unwrap().protocol_version = 4;
+    assert!(!old.host_has_automations());
+}
+
+#[test]
+fn every_automation_scene_builds() {
+    for (name, _) in crate::demo::SCENES.iter().filter(|(n, _)| n.starts_with("automation")) {
+        let app = demo(name);
+        assert!(app.screen == Screen::Automations, "{name}");
+    }
+}
+
+/// The Automations screens lay out in both looks (the headless runtime needs no GPU), and
+/// clicking through them does what it says.
+#[test]
+fn automation_screens_lay_out_and_click_through() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str]); 10] = [
+        ("automations", &["nav-automations", "automation-list", "auto-auto_deps", "auto-enabled-auto_deps", "automation-detail", "run-now", "edit-automation", "runs", "run-run_d3", "run-run_d1", "ses_r3"]),
+        ("automations-webhook", &["webhook", "webhook-url", "copy-url", "rotate-url", "last-delivery"]),
+        ("automations-empty", &["empty-new-automation"]),
+        ("automation-new", &["automation-editor", "auto-name", "auto-ws", "auto-login", "auto-preset", "auto-time", "schedule-check", "schedule-examples", "auto-prompt", "approve-git_push", "auto-max", "save-automation"]),
+        ("automation-new-cron-error", &["auto-cron", "schedule-error"]),
+        ("automation-new-webhook", &["auto-source", "auto-secret", "editor-webhook-url", "auto-advanced"]),
+        ("automation-edit-webhook", &["editor-copy-url", "editor-rotate-url", "secret-remove", "auto-dedupe", "auto-cooldown", "auto-filters", "delete-automation"]),
+        ("automation-picker", &["auto-preset-menu"]),
+        ("automation-confirm-delete", &["delete-alert", "confirm-delete-alert"]),
+        ("automation-confirm-rotate", &["rotate-alert", "confirm-rotate-alert"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, keys) in scenes {
+            let ui = open(scene, look);
+            for k in keys {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+        }
+    }
+    let state = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let mut ui = open("automations", Look::Gnome);
+    // A run opens its session; the sidebar brings the screen back.
+    click(&mut ui, "run-run_d3");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_r3".into())));
+    click(&mut ui, "nav-automations");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Automations));
+    click(&mut ui, "auto-auto_sentry");
+    assert!(state(&mut ui, &|s| s.sel_auto.as_deref() == Some("auto_sentry")));
+    assert!(ui.find("webhook-url").is_some());
+    // New Automation, a webhook: Sentry's prompt; GitHub's when the sender changes.
+    click(&mut ui, "new-automation");
+    assert!(state(&mut ui, &|s| s.auto_open && s.draft.id.is_none()));
+    click(&mut ui, "auto-trigger-webhook");
+    assert!(state(&mut ui, &|s| s.draft.trigger == model::TriggerKind::Webhook && s.draft.prompt.text == SENTRY_PROMPT));
+    click(&mut ui, "auto-source-github");
+    assert!(state(&mut ui, &|s| s.draft.prompt.text == GITHUB_PROMPT));
+    // The in-app picker (no native menus here) opens under its button and picks.
+    click(&mut ui, "auto-trigger-schedule");
+    if !rune::popup_menu_supported() {
+        click(&mut ui, "auto-preset");
+        assert!(ui.find("auto-preset-menu").is_some());
+    }
+    ui.update(|s, _| s.draft_set_preset(model::Preset::Weekly));
+    ui.frame(0.016);
+    assert!(ui.find("auto-weekday").is_some() && ui.find("auto-time").is_some());
+    // Saving with no name says so in the editor.
+    click(&mut ui, "save-automation");
+    assert!(state(&mut ui, &|s| s.auto_open && s.draft.error.as_deref() == Some("Give the automation a name.")));
+    assert!(ui.find("auto-error").is_some());
+    click(&mut ui, "cancel-automation");
+    assert!(state(&mut ui, &|s| !s.auto_open));
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
