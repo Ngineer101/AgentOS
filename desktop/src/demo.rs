@@ -322,18 +322,24 @@ fn agent(kind: AgentKind, name: &str, version: &str, id: Option<&str>, profile: 
 
 fn transcript(s: &mut App) {
     let sid = "ses_1";
-    let events = vec![
-        ev(sid, 1, 0, EventType::SessionState, json!({"state": "created"})),
-        ev(sid, 2, 1_000, EventType::Prompt, json!({"text": "The resume test fails about one run in ten on CI. Find out why and fix it.", "device": "iPhone"})),
-        ev(sid, 3, 2_000, EventType::AgentThought, json!({"text": "Look at the test first, then the actor's restart path."})),
-        ev(sid, 4, 14_000, EventType::ToolCall, json!({"tool_call_id": "t1", "name": "cargo test -p agenthost-host resume", "kind": "execute", "arguments": {"command": "cargo test -p agenthost-host resume"}, "source": "sandbox"})),
-        ev(sid, 5, 22_400, EventType::ToolResult, json!({"tool_call_id": "t1", "status": "completed", "output": "running 1 test\ntest resume_after_host_restart_keeps_history ... ok\n\ntest result: ok. 1 passed; 0 failed; finished in 3.21s"})),
-        ev(sid, 6, 23_000, EventType::NetDenied, json!({"host": "index.crates.io", "port": 443, "reason": "host is not on the allow list"})),
-        ev(sid, 7, 30_000, EventType::AgentMessage, json!({"text": "The test passes locally. The flake comes from a race: `wait_state` polls before the resumed session writes its first event, so a slow CI runner sees the old state. I made the helper wait for the event instead and opened an issue to track the timeout."})),
-        ev(sid, 8, 31_000, EventType::ToolCall, json!({"tool_call_id": "t2", "name": "Edited crates/host/tests/common/mod.rs", "kind": "edit", "arguments": {"path": "crates/host/tests/common/mod.rs"}, "source": "sandbox"})),
-        ev(sid, 9, 31_600, EventType::ToolResult, json!({"tool_call_id": "t2", "status": "completed", "output": "1 file changed, 12 insertions(+), 3 deletions(-)"})),
-        ev(sid, 10, 33_000, EventType::ApprovalRequested, json!({"approval_id": "apr_1", "connector_name": "GitHub", "tool": "create_issue", "arguments": {"repo": "nico/relay", "title": "Resume test: wait for the first event, not the state", "body": "Flake seen in 1 of 10 CI runs …"}})),
+    // (time, kind, payload); seqs follow the order.
+    let rows = vec![
+        (0, EventType::SessionState, json!({"state": "created"})),
+        (1_000, EventType::Prompt, json!({"text": "The resume test fails about one run in ten on CI. Find out why and fix it.", "device": "iPhone"})),
+        (2_000, EventType::AgentThought, json!({"text": "Look at the test first, then the actor's restart path."})),
+        (5_000, EventType::ToolCall, json!({"tool_call_id": "t0", "name": "Read crates/host/tests/resume.rs", "kind": "read", "arguments": {"path": "crates/host/tests/resume.rs"}, "source": "sandbox"})),
+        (5_100, EventType::ToolResult, json!({"tool_call_id": "t0", "status": "completed"})),
+        (7_000, EventType::ToolCall, json!({"tool_call_id": "tg", "name": "grep -rn \"fn wait_state\" crates/host/tests", "kind": "execute", "arguments": {"command": "grep -rn \"fn wait_state\" crates/host/tests"}, "source": "sandbox"})),
+        (7_300, EventType::ToolResult, json!({"tool_call_id": "tg", "status": "completed", "output": "crates/host/tests/common/mod.rs:88:pub async fn wait_state("})),
+        (14_000, EventType::ToolCall, json!({"tool_call_id": "t1", "name": "cargo test -p agenthost-host resume", "kind": "execute", "arguments": {"command": "cargo test -p agenthost-host resume"}, "source": "sandbox"})),
+        (22_400, EventType::ToolResult, json!({"tool_call_id": "t1", "status": "completed", "output": "running 1 test\ntest resume_after_host_restart_keeps_history ... ok\n\ntest result: ok. 1 passed; 0 failed; finished in 3.21s"})),
+        (23_000, EventType::NetDenied, json!({"host": "index.crates.io", "port": 443, "reason": "host is not on the allow list"})),
+        (30_000, EventType::AgentMessage, json!({"text": "The test passes locally. The flake comes from a race: `wait_state` polls before the resumed session writes its first event, so a slow CI runner sees the old state. I made the helper wait for the event instead and opened an issue to track the timeout."})),
+        (31_000, EventType::ToolCall, json!({"tool_call_id": "t2", "name": "Edited crates/host/tests/common/mod.rs", "kind": "edit", "arguments": {"path": "crates/host/tests/common/mod.rs"}, "source": "sandbox"})),
+        (31_600, EventType::ToolResult, json!({"tool_call_id": "t2", "status": "completed", "output": "1 file changed, 12 insertions(+), 3 deletions(-)"})),
+        (33_000, EventType::ApprovalRequested, json!({"approval_id": "apr_1", "connector_name": "GitHub", "tool": "create_issue", "arguments": {"repo": "nico/relay", "title": "Resume test: wait for the first event, not the state", "body": "Flake seen in 1 of 10 CI runs …"}})),
     ];
+    let events: Vec<Event> = rows.into_iter().enumerate().map(|(i, (at, kind, p))| ev(sid, i as i64 + 1, at, kind, p)).collect();
     let t = s.transcripts.entry(sid.into()).or_default();
     t.last_seq = events.len() as i64;
     t.events = events;
@@ -348,6 +354,7 @@ fn transcript(s: &mut App) {
         expires_at: now() + 570_000,
         summary: None,
     }];
+    s.expanded.insert("act-3".into());
     s.expanded.insert("t1".into());
 }
 

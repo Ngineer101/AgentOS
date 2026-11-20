@@ -1246,3 +1246,20 @@ fn always_allowing_a_command_names_it_and_settings_can_undo_it() {
     assert!(app.toasts.is_empty());
     assert_eq!(app.error.as_deref(), Some("Could not change the setting: bash always asks"));
 }
+
+#[test]
+fn a_run_of_tool_calls_is_summed_up_in_one_line() {
+    let call = |kind: &str, source: &str| Event { session_id: "s".into(), seq: 1, kind: EventType::ToolCall, payload: serde_json::json!({"kind": kind, "source": source}), ts: 0 };
+    let (a, b, c, d, e) = (call("execute", "sandbox"), call("execute", "sandbox"), call("read", "sandbox"), call("edit", "sandbox"), call("other", "mcp"));
+    assert_eq!(crate::session::activity_title(&[&a, &b, &c, &d, &e]), "Ran 2 commands, read 1 file, edited 1 file, used 1 tool");
+    assert_eq!(crate::session::activity_title(&[&c]), "Read 1 file");
+    // A connector's read is a tool, not a file.
+    assert_eq!(crate::session::activity_title(&[&call("read", "mcp")]), "Used 1 tool");
+    assert_eq!(crate::session::activity_title(&[]), "Thought");
+}
+
+#[test]
+fn a_multi_line_command_shows_its_first_line() {
+    assert_eq!(crate::session::one_line("python3 - <<'EOF'\np='x'\nEOF"), "python3 - <<'EOF' …");
+    assert_eq!(crate::session::one_line("  ls -la  "), "ls -la");
+}

@@ -70,11 +70,22 @@ pub fn screen(s: &App, id: &str, t: &Theme, k: &Kit) -> El {
         agents.clear();
         lines.child(g)
     };
+    // Tool calls and thoughts in a row fold into one line; see `activity`.
+    let mut run: Vec<(&Event, Option<i64>)> = vec![];
+    let fold = |lines: El, run: &mut Vec<(&Event, Option<i64>)>| {
+        if run.is_empty() {
+            return lines;
+        }
+        let rows = activity(s, sess, run, &results, t, k);
+        run.clear();
+        rows.into_iter().fold(lines, |l, r| l.child(r))
+    };
     for (i, e) in events.iter().enumerate() {
         if crate::model::is_child_event(e) {
             continue;
         }
         if e.kind == EventType::ToolCall && crate::model::is_subagent_call(&e.payload) {
+            lines = fold(lines, &mut run);
             if agents.is_empty() {
                 agents_key = format!("ev-{}", e.seq);
             }
@@ -82,12 +93,19 @@ pub fn screen(s: &App, id: &str, t: &Theme, k: &Kit) -> El {
             continue;
         }
         let next_ts = events.get(i + 1).map(|n| n.ts);
+        if matches!(e.kind, EventType::ToolCall | EventType::AgentThought) {
+            lines = flush(lines, &mut agents, &agents_key);
+            run.push((e, next_ts));
+            continue;
+        }
         if let Some(r) = event_row(s, sess, e, next_ts, &results, t, k) {
             lines = flush(lines, &mut agents, &agents_key);
+            lines = fold(lines, &mut run);
             lines = lines.child(r.key(format!("ev-{}", e.seq)));
         }
     }
     lines = flush(lines, &mut agents, &agents_key);
+    lines = fold(lines, &mut run);
     let live = tr.map(|t| t.live.as_str()).filter(|l| !l.is_empty());
     if let Some(live) = live {
         lines = lines.child(reply(live, true, t, k).key("live"));
@@ -878,6 +896,94 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
     })
 }
 
+/// A tool call's title on one line: a heredoc or a multi-line script shows its first line.
+pub(crate) fn one_line(name: &str) -> String {
+    let mut lines = name.trim().lines();
+    let first = lines.next().unwrap_or("").trim_end();
+    if lines.next().is_some() {
+        format!("{first} …")
+    } else {
+        first.to_string()
+    }
+}
+
+/// "Ran 3 commands, read 2 files, used 1 tool".
+pub(crate) fn activity_title(calls: &[&Event]) -> String {
+    let count = |kinds: &[&str]| calls.iter().filter(|e| e.payload["source"] != "mcp" && kinds.contains(&e.payload["kind"].as_str().unwrap_or(""))).count();
+    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    let mut parts = vec![];
+    let mut known = 0;
+    for (kinds, verb, one, many) in [
+        (&["execute"][..], "ran", "command", "commands"),
+        (&["read"][..], "read", "file", "files"),
+        (&["edit", "delete", "move"][..], "edited", "file", "files"),
+        (&["search"][..], "ran", "search", "searches"),
+        (&["fetch"][..], "opened", "page", "pages"),
+    ] {
+        let n = count(kinds);
+        known += n;
+        if n > 0 {
+            parts.push(format!("{verb} {}", plural(n, one, many)));
+        }
+    }
+    let other = calls.len() - known;
+    if other > 0 {
+        parts.push(format!("used {}", plural(other, "tool", "tools")));
+    }
+    let s = parts.join(", ");
+    let mut cs = s.chars();
+    cs.next().map(|c| c.to_uppercase().collect::<String>() + cs.as_str()).unwrap_or_else(|| "Thought".into())
+}
+
+/// A run of tool calls and thoughts. Two or more, with at least one call,
+/// fold into a single line ("Ran 7 commands, edited 2 files") that opens to
+/// show each step, as the iPhone app does; while a call runs, the line says
+/// what it is doing. A lone call or thought shows as it is.
+fn activity(s: &App, sess: &Session, run: &[(&Event, Option<i64>)], results: &HashMap<&str, &Event>, t: &Theme, k: &Kit) -> Vec<El> {
+    let each = |&(e, next): &(&Event, Option<i64>)| event_row(s, sess, e, next, results, t, k).map(|r| r.key(format!("ev-{}", e.seq)));
+    let calls: Vec<&Event> = run.iter().map(|(e, _)| *e).filter(|e| e.kind == EventType::ToolCall).collect();
+    if run.len() < 2 || calls.is_empty() {
+        return run.iter().filter_map(each).collect();
+    }
+    let mac = t.mac();
+    let key = format!("act-{}", run[0].0.seq);
+    let open = s.expanded.contains(&key);
+    let title = activity_title(&calls);
+    let running = calls.iter().rev().find(|e| !results.contains_key(e.payload["tool_call_id"].as_str().unwrap_or("")));
+    let size = if mac { 12.0 } else { 13.5 };
+    let (lead, label) = match running {
+        Some(e) => (
+            icon(&ic::SPINNER, 13.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9)),
+            text(clip(&one_line(&str_of(&e.payload["name"])), 140)).font(TextStyle::new(t.fs_mono * 0.9, 400.0).mono()),
+        ),
+        None => (icon(&ic::STEPS, 14.0).color(t.text2), text(title.clone()).font(TextStyle::new(size, 400.0))),
+    };
+    let k2 = key.clone();
+    let head = row()
+        .w_full()
+        .gap(if mac { 6.0 } else { 8.0 })
+        .center_y()
+        .py(2.0)
+        .role("button")
+        .label(title)
+        .help(if open { "Hide the steps" } else { "Show each step" })
+        .focusable(true)
+        .on_press(move |s: &mut App| {
+            if !s.expanded.remove(&k2) {
+                s.expanded.insert(k2.clone());
+            }
+        })
+        .child(lead)
+        .child(label.color(t.text2).truncate().shrink().min_w(0.0))
+        .child(icon(if open { &ic::CHEVRON_D } else { &ic::CHEVRON_R }, 10.0).color(t.text3));
+    let mut c = col().key(key).w_full().gap(6.0).child(head);
+    if open {
+        let steps = run.iter().filter_map(each).fold(col().w_full().gap(2.0), |c, r| c.child(r));
+        c = c.child(steps.ml(6.0).pl(10.0).border_sides([0.0, 0.0, 0.0, 1.0], Color::WHITE.alpha(0.1)));
+    }
+    vec![c]
+}
+
 fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> El {
     let mac = t.mac();
     let p = &e.payload;
@@ -907,7 +1013,7 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
         "denied" => "Denied",
         _ => "Failed",
     };
-    let mono_name = text(clip(&name, 140)).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text).truncate();
+    let mono_name = text(clip(&one_line(&name), 140)).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text).truncate();
     let mut head = row()
         .w_full()
         .center_y()
@@ -924,7 +1030,7 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
         head = head
             .gap(9.0)
             .px(12.0)
-            .py(if open { 8.0 } else { 7.0 })
+            .py(if open { 7.0 } else { 5.0 })
             .child(icon(if open { &ic::CHEVRON_D } else { &ic::CHEVRON_R }, 10.0).color(t.text2))
             .child(icon(kind_icon, 14.0).color(t.text2))
             .child(mono_name.shrink().min_w(0.0))
@@ -939,15 +1045,16 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
             None => word.to_string(),
         };
         // A quiet line, not a card: a long session reads as prompts and replies at a glance.
-        let bad = word == "Failed" || word == "Denied";
+        // Only a denial stands out: a failed call (a grep with no match) is routine.
+        let tone = if word == "Denied" { t.warn } else { t.text3 };
         head = head
             .gap(8.0)
             .px(10.0)
-            .py(if open { 8.0 } else { 4.0 })
+            .py(if open { 6.0 } else { 3.0 })
             .radius(t.row_radius)
             .child(icon(kind_icon, 13.0).color(t.text3))
             .child(mono_name.font(TextStyle::new(t.fs_mono * 0.9, 400.0).mono()).color(t.text2).shrink().min_w(0.0))
-            .child(text(sub).font(t.font_small()).color(if bad { t.danger } else { t.text3 }))
+            .child(text(sub).font(t.font_small()).color(tone))
             .child(el().grow(1.0))
             .child(icon(if open { &ic::CHEVRON_UP } else { &ic::CHEVRON_DOWN }, 11.0).color(t.text3));
     }
