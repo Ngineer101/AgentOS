@@ -100,7 +100,7 @@ struct ArchivedSessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(session.title ?? model.agentLabel(session))
+            Text(model.sessionTitle(session))
                 .lineLimit(1)
             Text(detail)
                 .font(.footnote)

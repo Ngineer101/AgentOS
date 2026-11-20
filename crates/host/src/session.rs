@@ -10,6 +10,7 @@ use crate::bus::BusMsg;
 use crate::ctx::Ctx;
 use crate::proxy::{EgressProxy, ProxyHooks};
 use crate::sandbox::{self, SandboxPolicy};
+use crate::title::{self, TitleSource};
 use crate::util::{now_ms, truncate};
 use agenthost_proto::jsonrpc::RpcError;
 use agenthost_proto::*;
@@ -81,6 +82,23 @@ pub enum Cmd {
         side_id: String,
         result: Result<Value, RpcError>,
     },
+    /// A step of asking the agent for a title (see [`Actor::ask_title`]).
+    Title {
+        ask: u64,
+        step: TitleStep,
+        result: Result<Value, RpcError>,
+    },
+}
+
+/// Where asking the agent for a session's title has got to.
+#[derive(Debug, Clone, Copy)]
+pub enum TitleStep {
+    /// Its conversation exists (`session/new`).
+    Created,
+    /// It is on its quickest model (`session/set_config_option`).
+    ModelSet,
+    /// It has answered (`session/prompt`).
+    Answered,
 }
 
 #[derive(Clone)]
@@ -345,6 +363,16 @@ impl SessionManager {
             });
         };
         self.ctx.bus.publish(BusMsg::Event(ev));
+        // Until the agent names it, a session is named by its first message
+        // (kept under a title the user gives it, for if they clear theirs).
+        let t = title::from_prompt(&p.text).or_else(|| attachments.first().and_then(|a| title::from_prompt(&a.name)));
+        if let Some(t) = t {
+            match self.ctx.store.session_set_auto_title(&p.session_id, &t, TitleSource::Prompt) {
+                Ok(true) => self.ctx.publish_session(&p.session_id),
+                Ok(false) => {}
+                Err(e) => tracing::warn!(session = %p.session_id, "title from the first message: {e:#}"),
+            }
+        }
         let h = self
             .handle(&p.session_id)
             .ok_or_else(|| RpcError::invalid_state("session is not running"))?;
@@ -797,6 +825,25 @@ struct Actor {
     sides: HashMap<String, Side>,
     /// The fork's ACP session id → side id.
     side_routes: HashMap<String, String>,
+    /// The agent can close a conversation (`session/close`).
+    can_close: bool,
+    /// The agent has been asked for a title since this actor started (once is enough).
+    title_asked: bool,
+    /// The title being asked for.
+    title_ask: Option<TitleAsk>,
+}
+
+/// Asking the agent for a title, in a conversation of its own that no client
+/// sees: no tools, no connectors, just the session's first message.
+struct TitleAsk {
+    /// Tells this ask's answers from an earlier one's (before a restart).
+    id: u64,
+    /// The conversation, once it exists.
+    acp_id: Option<String>,
+    /// The message asking for the title.
+    prompt: String,
+    /// The answer so far.
+    text: String,
 }
 
 /// A side conversation: a fork of the session the agent answers in.
@@ -904,6 +951,9 @@ impl Actor {
             repo_path,
             sides: HashMap::new(),
             side_routes: HashMap::new(),
+            can_close: false,
+            title_asked: false,
+            title_ask: None,
         }
     }
 
@@ -1153,6 +1203,9 @@ impl Actor {
             .get("fork")
             .map(|f| !f.is_null())
             .unwrap_or(false);
+        self.can_close = init["agentCapabilities"]["sessionCapabilities"]
+            .get("close")
+            .is_some_and(|c| !c.is_null());
         if can_fork != self.session.side_questions {
             self.ctx
                 .store
@@ -1505,6 +1558,9 @@ impl Actor {
                 Step::Cmd(Some(Cmd::SideDone { side_id, result })) => {
                     self.side_done(&side_id, result)
                 }
+                Step::Cmd(Some(Cmd::Title { ask, step, result })) => {
+                    self.title_step(ask, step, result).await
+                }
                 Step::Cmd(Some(Cmd::Approval { waiting })) => {
                     if waiting && self.state == SessionState::Running {
                         self.set_state(
@@ -1780,7 +1836,123 @@ impl Actor {
         }));
     }
 
+    /// Ask the agent for a title for the session, unless it has a good one
+    /// already (the user's, or the agent's own). The session's first message
+    /// is what's titled; `fallback` (this message) if none is recorded.
+    async fn ask_title(&mut self, fallback: &str) {
+        self.title_asked = true;
+        let sid = self.session.session_id.clone();
+        match self.ctx.store.session_wants_title(&sid) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(session = %sid, "title: {e:#}");
+                return;
+            }
+        }
+        let first = self.ctx.store.first_prompt_text(&sid).ok().flatten();
+        let request = first.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback.to_string());
+        if request.trim().is_empty() {
+            return; // only files: the name from the first message stands
+        }
+        let id = self.title_ask.as_ref().map_or(1, |a| a.id + 1);
+        self.title_ask = Some(TitleAsk {
+            id,
+            acp_id: None,
+            prompt: title::ask(&request),
+            text: String::new(),
+        });
+        let mut params = json!({"cwd": self.workspace.path, "mcpServers": []});
+        if let Some(m) = &self.spec.session_meta {
+            params["_meta"] = m.clone();
+        }
+        self.request_then("session/new", params, move |result| Cmd::Title {
+            ask: id,
+            step: TitleStep::Created,
+            result,
+        })
+        .await;
+    }
+
+    async fn title_step(&mut self, ask: u64, step: TitleStep, result: Result<Value, RpcError>) {
+        let Some(a) = self.title_ask.as_mut().filter(|a| a.id == ask) else {
+            return; // from before a restart
+        };
+        let sid = self.session.session_id.clone();
+        let then = move |step| move |result| Cmd::Title { ask, step, result };
+        match step {
+            TitleStep::Created => {
+                let Some(acp_id) = result.as_ref().ok().and_then(|v| v["sessionId"].as_str()).map(str::to_string) else {
+                    tracing::info!(session = %sid, "could not ask the agent for a title: {:?}", result.err().map(|e| e.message));
+                    self.title_ask = None;
+                    return;
+                };
+                a.acp_id = Some(acp_id.clone());
+                let options = result.ok().and_then(|v| parse_config_options(&v["configOptions"])).unwrap_or_default();
+                match title::quick_model(&options) {
+                    Some((config_id, value)) => {
+                        let params = json!({"sessionId": acp_id, "configId": config_id, "value": value});
+                        self.request_then("session/set_config_option", params, then(TitleStep::ModelSet)).await;
+                    }
+                    None => self.title_prompt(ask).await,
+                }
+            }
+            // On its own model if it couldn't switch: a title is still wanted.
+            TitleStep::ModelSet => self.title_prompt(ask).await,
+            TitleStep::Answered => {
+                let a = self.title_ask.take().expect("checked above");
+                if let Some(acp_id) = a.acp_id.filter(|_| self.can_close) {
+                    // Done with: closed, its answer ignored (asks are numbered from 1).
+                    self.request_then("session/close", json!({"sessionId": acp_id}), |_| Cmd::Title {
+                        ask: 0,
+                        step: TitleStep::Answered,
+                        result: Ok(Value::Null),
+                    })
+                    .await;
+                }
+                if let Err(e) = &result {
+                    tracing::info!(session = %sid, "the agent did not give a title: {}", e.message);
+                    return;
+                }
+                let Some(t) = title::from_answer(&a.text) else {
+                    tracing::info!(session = %sid, "the agent's title answer had no title in it");
+                    return;
+                };
+                self.set_auto_title(&t, TitleSource::Asked);
+            }
+        }
+    }
+
+    async fn title_prompt(&mut self, ask: u64) {
+        let Some((acp_id, prompt)) = self
+            .title_ask
+            .as_ref()
+            .and_then(|a| Some((a.acp_id.clone()?, a.prompt.clone())))
+        else {
+            return;
+        };
+        self.request_then(
+            "session/prompt",
+            json!({"sessionId": acp_id, "prompt": [{"type": "text", "text": prompt}]}),
+            move |result| Cmd::Title { ask, step: TitleStep::Answered, result },
+        )
+        .await;
+    }
+
+    /// Record a title the host or agent came up with, and tell clients if it shows.
+    fn set_auto_title(&mut self, t: &str, source: TitleSource) {
+        let sid = &self.session.session_id;
+        match self.ctx.store.session_set_auto_title(sid, t, source) {
+            Ok(true) => self.ctx.publish_session(sid),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(session = %sid, "store the title: {e:#}"),
+        }
+    }
+
     async fn start_turn(&mut self, q: Queued) -> Result<()> {
+        if !self.title_asked {
+            self.ask_title(&q.text).await;
+        }
         let seq = q.seq;
         let acp_id = self.session.acp_session_id.clone().unwrap_or_default();
         let conn = self.agent.as_ref().unwrap().conn.clone();
@@ -1993,6 +2165,11 @@ impl Actor {
                     if from != main {
                         if let Some(side_id) = self.side_routes.get(from).cloned() {
                             self.on_side_update(&side_id, &n.params["update"]);
+                        } else if let Some(a) = self.title_ask.as_mut().filter(|a| a.acp_id.as_deref() == Some(from)) {
+                            let u = &n.params["update"];
+                            if u["sessionUpdate"] == "agent_message_chunk" && parent_tool_use_id(u).is_none() {
+                                a.text.push_str(&acp::content_text(&u["content"]));
+                            }
                         }
                         return;
                     }
@@ -2007,6 +2184,10 @@ impl Actor {
                 let result = match r.method.as_str() {
                     // Sandbox-local tools are approved automatically: the
                     // sandbox is the boundary.
+                    // Writing a title needs no tools.
+                    "session/request_permission" if self.is_title_conversation(&r.params) => {
+                        Ok(json!({"outcome": {"outcome": "cancelled"}}))
+                    }
                     "session/request_permission" => Ok(acp::auto_allow_outcome(&r.params)),
                     m => Err(RpcError::new(
                         jsonrpc::codes::METHOD_NOT_FOUND,
@@ -2022,6 +2203,11 @@ impl Actor {
             }
             Incoming::Closed(_) => {}
         }
+    }
+
+    fn is_title_conversation(&self, params: &Value) -> bool {
+        let from = params["sessionId"].as_str();
+        from.is_some() && self.title_ask.as_ref().is_some_and(|a| a.acp_id.as_deref() == from)
     }
 
     async fn on_update(&mut self, u: &Value) {
@@ -2041,6 +2227,12 @@ impl Actor {
             "config_option_update" => {
                 if let Some(opts) = parse_config_options(&u["configOptions"]) {
                     self.set_config_options(opts);
+                }
+            }
+            // The agent names the session itself: its name wins over the host's.
+            "session_info_update" => {
+                if let Some(t) = u["title"].as_str().and_then(title::from_agent) {
+                    self.set_auto_title(&t, TitleSource::Agent);
                 }
             }
             _ => {}
@@ -2257,6 +2449,7 @@ impl Actor {
     /// close stdin, then SIGTERM the runtime alone (it forwards the signal and
     /// removes its mount points), and only then kill the whole group.
     async fn stop_agent(&mut self) {
+        self.title_ask = None;
         let Some(mut a) = self.agent.take() else {
             if let Some(dir) = self.shared_folder.take() {
                 self.folders.release(&dir, self.started_at);
