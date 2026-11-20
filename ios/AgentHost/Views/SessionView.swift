@@ -163,112 +163,7 @@ struct SessionView: View {
     }
 
     var body: some View {
-        let rows = self.rows
-        let working = workingLabel(rows)
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if !model.link.isOnline {
-                        ConnectionStatusRow().statusCard()
-                    }
-                    if approvalBannerNeeded(rows) {
-                        ApprovalStatusRow(sessionId: sessionId) { first in
-                            if let a = first { approvalShown = a } else {
-                                Task { await model.refreshApprovals() }
-                            }
-                        }
-                        .statusCard()
-                    }
-                    if rows.isEmpty && pending.isEmpty {
-                        Group {
-                            if model.link.isOnline {
-                                if isTerminal || model.isDemo {
-                                    Text("No messages yet")
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    ProgressView()
-                                }
-                            } else {
-                                ContentUnavailableView(
-                                    "No Cached Transcript",
-                                    systemImage: "text.bubble",
-                                    description: Text("It will load when the host is reachable.")
-                                )
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
-                    }
-                    ForEach(groupActivity(rows)) { item in
-                        switch item {
-                        case let .row(row):
-                            TranscriptRowView(row: row, onApproval: { a in approvalShown = a },
-                                              onSubagent: { id in subagentShown = SubagentRef(id: id) })
-                        case let .activity(_, group):
-                            ActivityGroupRow(rows: group)
-                        }
-                    }
-                    if let s = model.streaming[sessionId] {
-                        StreamingRow(streaming: s)
-                    }
-                    ForEach(pending) { p in
-                        PendingPromptRow(prompt: p)
-                    }
-                    if let working {
-                        WorkingRow(label: working)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .startsAtBottom()
-            .onChange(of: rows.count) { old, new in
-                // A message or two arriving glides into view; the
-                // transcript loading (or a backlog replaying) jumps
-                // straight to its end instead of animating from the top.
-                proxy.scrollToBottom(animated: old > 0 && new - old <= 2)
-            }
-            .onChange(of: model.streaming[sessionId]?.text) { _, _ in
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-            // Sent: the message and "Working…" come into view at once.
-            .onChange(of: pending.count) { _, _ in
-                proxy.scrollToBottom(animated: true)
-            }
-            .onChange(of: working) { _, _ in
-                proxy.scrollToBottom(animated: true)
-            }
-            .onAppear {
-                // onAppear runs before the first layout, when scrollTo has
-                // nothing to scroll; wait a turn so it lands.
-                DispatchQueue.main.async { proxy.scrollToBottom(animated: false) }
-            }
-            .onDrop(of: [.image, .fileURL, .data], isTargeted: $dropTargeted) { providers in
-                guard canAttach else { return false }
-                reportSkipped(composer.addItemProviders(providers, model: model))
-                return true
-            }
-            .overlay {
-                if dropTargeted && canAttach {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                        .overlay(Label("Drop to Attach", systemImage: "paperclip").font(.headline))
-                        .padding(12)
-                        .allowsHitTesting(false)
-                }
-            }
-            .bottomGlassBar {
-                if isArchived {
-                    archivedBar
-                } else {
-                    promptBar
-                }
-            }
-        }
+        transcriptScroller
         .background(Color.black)
         .navigationBarTitleDisplayMode(.inline)
         .sessionTitleBar(title, subtitle: subtitle) { titleMenu }
@@ -608,6 +503,119 @@ struct SessionView: View {
         if let q = sideQuestion { return !q.isEmpty }
         guard !composer.isUploading else { return false }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.ready.isEmpty
+    }
+
+    /// The scrolling transcript with its drop target and the composer (or
+    /// archived bar) under it. Kept out of `body`, like `transcript`, so
+    /// each part is type-checked on its own.
+    private var transcriptScroller: some View {
+        let rows = self.rows
+        let working = workingLabel(rows)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                transcript(rows, working: working)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .startsAtBottom()
+            .modifier(FollowsBottom(
+                proxy: proxy, rowCount: rows.count,
+                streamingText: model.streaming[sessionId]?.text,
+                pendingCount: pending.count, working: working))
+            .onDrop(of: [UTType.image, .fileURL, .data], isTargeted: $dropTargeted, perform: attachDropped)
+            .overlay { dropOverlay }
+            .bottomGlassBar { bottomBar }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        if isArchived {
+            archivedBar
+        } else {
+            promptBar
+        }
+    }
+
+    /// The transcript itself: status cards, rows, what is streaming and
+    /// pending, and the bottom anchor `scrollToBottom` aims at. Kept out of
+    /// `body` so the compiler type-checks it on its own.
+    @ViewBuilder
+    private func transcript(_ rows: [TranscriptRow], working: String?) -> some View {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            if !model.link.isOnline {
+                ConnectionStatusRow().statusCard()
+            }
+            if approvalBannerNeeded(rows) {
+                ApprovalStatusRow(sessionId: sessionId) { first in
+                    if let a = first { approvalShown = a } else {
+                        Task { await model.refreshApprovals() }
+                    }
+                }
+                .statusCard()
+            }
+            if rows.isEmpty && pending.isEmpty {
+                Group {
+                    if model.link.isOnline {
+                        if isTerminal || model.isDemo {
+                            Text("No messages yet")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView()
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "No Cached Transcript",
+                            systemImage: "text.bubble",
+                            description: Text("It will load when the host is reachable.")
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            }
+            ForEach(groupActivity(rows)) { item in
+                switch item {
+                case let .row(row):
+                    TranscriptRowView(row: row, onApproval: { a in approvalShown = a },
+                                      onSubagent: { id in subagentShown = SubagentRef(id: id) })
+                case let .activity(_, group):
+                    ActivityGroupRow(rows: group)
+                }
+            }
+            if let s = model.streaming[sessionId] {
+                StreamingRow(streaming: s)
+            }
+            ForEach(pending) { p in
+                PendingPromptRow(prompt: p)
+            }
+            if let working {
+                WorkingRow(label: working)
+            }
+            Color.clear.frame(height: 1).id("bottom")
+        }
+    }
+
+    /// Images and files dropped on the session join the composer's attachments.
+    @MainActor
+    private func attachDropped(_ providers: [NSItemProvider]) -> Bool {
+        guard canAttach else { return false }
+        reportSkipped(composer.addItemProviders(providers, model: model))
+        return true
+    }
+
+    @ViewBuilder
+    private var dropOverlay: some View {
+        if dropTargeted && canAttach {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay(Label("Drop to Attach", systemImage: "paperclip").font(.headline))
+                .padding(12)
+                .allowsHitTesting(false)
+        }
     }
 
     /// Attachments: hosts on protocol 2, while the session takes prompts.
@@ -2387,6 +2395,41 @@ enum DemoMenuOpener {
     }
 }
 #endif
+
+/// Keeps the transcript on its last message as rows, streamed text and
+/// sent prompts arrive.
+private struct FollowsBottom: ViewModifier {
+    let proxy: ScrollViewProxy
+    let rowCount: Int
+    let streamingText: String?
+    let pendingCount: Int
+    let working: String?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: rowCount) { old, new in
+                // A message or two arriving glides into view; the
+                // transcript loading (or a backlog replaying) jumps
+                // straight to its end instead of animating from the top.
+                proxy.scrollToBottom(animated: old > 0 && new - old <= 2)
+            }
+            .onChange(of: streamingText) { _, _ in
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            // Sent: the message and "Working…" come into view at once.
+            .onChange(of: pendingCount) { _, _ in
+                proxy.scrollToBottom(animated: true)
+            }
+            .onChange(of: working) { _, _ in
+                proxy.scrollToBottom(animated: true)
+            }
+            .onAppear {
+                // onAppear runs before the first layout, when scrollTo has
+                // nothing to scroll; wait a turn so it lands.
+                DispatchQueue.main.async { proxy.scrollToBottom(animated: false) }
+            }
+    }
+}
 
 extension ScrollViewProxy {
     /// Scrolls to the `"bottom"` marker at the end of a conversation.
