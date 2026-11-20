@@ -29,7 +29,7 @@ struct DemoData {
         case config
         /// An image pasted into the composer (an attachment chip).
         case paste
-        /// An untitled quick task (titled "Quick task", no worktree).
+        /// An untitled quick task (called "New session", no worktree).
         case quick
         /// An untitled session in a project without a worktree.
         case plain
@@ -216,7 +216,7 @@ struct DemoData {
             return s
         }
         sessions = [
-            // Untitled: called "Quick task".
+            // Untitled: called "New session".
             live(session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
                          nil, ago: 3, lastSeq: 4)),
             live(session(Self.flakySession, "ws-relay", "claude", "claude-work", SessionStateName.waitingApproval,

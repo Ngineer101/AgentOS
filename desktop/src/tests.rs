@@ -913,22 +913,22 @@ fn the_model_chip_drops_a_trailing_parenthetical() {
 }
 
 #[test]
-fn the_header_title_falls_back_to_the_workspace() {
+fn an_untitled_session_is_a_new_session() {
     let app = demo("header-titled");
     let x = app.session("ses_1").unwrap();
     assert_eq!(app.session_title(x), "Fix the flaky resume test");
     assert_eq!(app.session_context(x), "Claude Code · Work · relay");
     let app = demo("header-quick-untitled");
     let x = app.session("ses_q").unwrap();
-    assert_eq!(app.session_title(x), "Quick task");
-    assert_eq!(app.session_context(x), "Claude Code · Personal", "the title already says where");
+    assert_eq!(app.session_title(x), "New session");
+    assert_eq!(app.session_context(x), "Claude Code · Personal · Quick tasks");
     let app = demo("header-untitled");
     let x = app.session("ses_2").unwrap();
-    assert_eq!(app.session_title(x), "relay");
-    assert!(!app.session_title(x).contains("Codex"), "never the login");
+    assert_eq!(app.session_title(x), "New session");
+    assert!(app.session_context(x).ends_with("relay"), "{}", app.session_context(x));
     let mut blank = x.clone();
     blank.title = Some("   ".into());
-    assert_eq!(app.session_title(&blank), "relay");
+    assert_eq!(app.session_title(&blank), "New session");
     // Ended sessions keep the workspace and branch.
     let app = demo("header-ended");
     let x = app.session("ses_1").unwrap();
@@ -1007,7 +1007,7 @@ fn session_rename_round_trips_through_the_host() {
     app.start_from_sheet();
     pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
     let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
-    assert_eq!(app.session_title(app.session(&sid).unwrap()), "Quick task");
+    assert_eq!(app.session_title(app.session(&sid).unwrap()), "New session");
     commands::run(&mut app, Cmd::RenameSession, &mut tx);
     app.title_edit.replace_text("  Tidy the build  ");
     app.save_session_rename();
@@ -1016,7 +1016,7 @@ fn session_rename_round_trips_through_the_host() {
     app.title_edit.replace_text("");
     app.save_session_rename();
     pump(&mut app, |a| a.session_rename.is_none() && a.session(&sid).is_some_and(|s| s.title.is_none()));
-    assert_eq!(app.session_title(app.session(&sid).unwrap()), "Quick task");
+    assert_eq!(app.session_title(app.session(&sid).unwrap()), "New session");
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 

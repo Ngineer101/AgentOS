@@ -76,7 +76,7 @@ struct SessionView: View {
         return waiting.contains { !shown.contains($0.approvalId) }
     }
 
-    /// The session's own title, else its workspace ("Quick task").
+    /// The session's title, else "New session".
     private var title: String {
         guard let s = session else { return "Session" }
         return model.sessionTitle(s)
@@ -262,7 +262,7 @@ struct SessionView: View {
             model.sessionHidden(sessionId)
         }
         .alert("Rename Session", isPresented: $renaming) {
-            TextField(session.map { model.isQuickTasks($0.workspaceId) ? "Quick task" : model.workspaceName($0.workspaceId) } ?? "Title",
+            TextField(session.map { model.sessionTitle($0) } ?? "Title",
                       text: $renameText)
                 .submitLabel(.done)
             Button("Cancel", role: .cancel) {}
