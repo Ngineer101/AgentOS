@@ -1,0 +1,21 @@
+ios/AgentHost/Views/NewSessionView.swift
+  s_85802537de0c4d::t_222e9549b2ac53 15-18,62,64-66,91-92,117-120
+ios/README.md
+  s_85802537de0c4d::t_4df9e9276806a6 132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4acf280ba3f13ac9b7784076a22540b5edd32fa",
+  "prompts": {},
+  "sessions": {
+    "s_85802537de0c4d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_85802537de0c4d",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
