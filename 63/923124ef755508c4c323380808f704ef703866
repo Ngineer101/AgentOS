@@ -1,0 +1,55 @@
+crates/fake-agent/src/main.rs
+  s_b1aa590fc21b89::t_1bfb6bc1b64b2e 18-19,356-365,658-663
+crates/host/src/host.rs
+  s_b1aa590fc21b89::t_cae6880b160657 81-86
+crates/host/src/lib.rs
+  s_b1aa590fc21b89::t_a4f6dc0e84cd54 29
+crates/host/src/session.rs
+  s_b1aa590fc21b89::t_15eac8295c742e 13,85-101,366-375,828-846,954-956,1206-1208,1561-1563,1839-1951,1953-1955,2168-2172,2187-2190,2208-2212,2232-2237,2452
+crates/host/src/store.rs
+  s_b1aa590fc21b89::t_3785283d87834f 14,240-241,268-271,619,633-715,741,844,1366-1403
+crates/host/src/title.rs
+  s_b1aa590fc21b89::t_4f996228754ed1 1-257
+crates/host/tests/session_titles.rs
+  s_b1aa590fc21b89::t_13841b79f507ba 1-104
+crates/proto/src/methods.rs
+  s_b1aa590fc21b89::t_427c3bcf3ade92 28
+crates/proto/src/types.rs
+  s_b1aa590fc21b89::t_a4890b1940597a 383-385,444
+desktop/src/demo.rs
+  s_b1aa590fc21b89::t_b7f5190ac793ca 892,900
+desktop/src/model.rs
+  s_b1aa590fc21b89::t_f48b2290a57932 1854-1857,1860,1868,1871-1872
+desktop/src/tests.rs
+  s_b1aa590fc21b89::t_3753b43ebc1dd9 916,923-924,927-928,931,1010,1019
+desktop/src/view.rs
+  s_b1aa590fc21b89::t_d468a6c072d24a 354
+docs/status.md
+  s_b1aa590fc21b89::t_ba5362bee85c34 46
+ios/AgentHost/App/AppModel.swift
+  s_b1aa590fc21b89::t_9bc3656900b62b 261-263,266
+ios/AgentHost/App/DemoData.swift
+  s_b1aa590fc21b89::t_d88cfff1af8c34 32,219
+ios/AgentHost/Views/ArchivedSessionsView.swift
+  s_b1aa590fc21b89::t_ffbcd22b9444dc 103
+ios/AgentHost/Views/SessionView.swift
+  s_b1aa590fc21b89::t_b2cd47b09bdf64 79,265
+ios/AgentHost/Views/SessionsView.swift
+  s_b1aa590fc21b89::t_fe1a9b424efb37 441
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "63923124ef755508c4c323380808f704ef703866",
+  "prompts": {},
+  "sessions": {
+    "s_b1aa590fc21b89": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b1aa590fc21b89",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
