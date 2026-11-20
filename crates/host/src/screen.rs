@@ -159,21 +159,38 @@ fn which(name: &str) -> Option<PathBuf> {
 
 /// A browser for [`ScreenMode::Browser`], and the arguments it needs.
 fn browser(profile: &std::path::Path) -> Option<Vec<String>> {
-    let p = profile.display().to_string();
-    for name in ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave"] {
-        if let Some(bin) = which(name) {
-            return Some(vec![
-                bin.display().to_string(),
-                format!("--user-data-dir={p}"),
-                "--no-first-run".into(),
-                "--start-maximized".into(),
-            ]);
-        }
-    }
-    which("firefox").map(|bin| {
-        vec![bin.display().to_string(), "--no-remote".into(), "--profile".into(), p]
-    })
+    ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave", "firefox"]
+        .into_iter()
+        .find_map(which)
+        .map(|bin| browser_command(&bin, profile))
 }
+
+fn browser_command(bin: &std::path::Path, profile: &std::path::Path) -> Vec<String> {
+    let p = profile.display().to_string();
+    let b = bin.display().to_string();
+    if bin.file_name().is_some_and(|n| n == "firefox") {
+        return vec![b, "--no-remote".into(), "--profile".into(), p];
+    }
+    vec![
+        b,
+        format!("--user-data-dir={p}"),
+        "--no-first-run".into(),
+        // The browser desktop is X11. Chromium picks Wayland when the host
+        // runs under a Wayland session (Omarchy also asks for it in
+        // chromium-flags.conf) and exits, as that socket isn't there.
+        "--ozone-platform=x11".into(),
+        "--start-maximized".into(),
+    ]
+}
+
+/// The host often runs under a Wayland session, and the browser inherits its
+/// environment through screen-relay; make it use the X11 desktop instead.
+const BROWSER_ENV_REMOVE: [&str; 2] = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"];
+const BROWSER_ENV: [(&str, &str); 3] = [
+    ("XDG_SESSION_TYPE", "x11"),
+    ("GDK_BACKEND", "x11"),
+    ("MOZ_ENABLE_WAYLAND", "0"),
+];
 
 /// screen-relay's `--desktop` takes one command line; quote each word.
 fn command_line(words: &[String]) -> String {
@@ -414,6 +431,10 @@ impl Screen {
                 let words = browser(&profile).ok_or_else(|| anyhow!("no browser found"))?;
                 cmd.args(["--backend", "x11", "--desktop", &command_line(&words)]);
                 cmd.env("SCREEN_RELAY_RESOLUTION", BROWSER_RESOLUTION);
+                for name in BROWSER_ENV_REMOVE {
+                    cmd.env_remove(name);
+                }
+                cmd.envs(BROWSER_ENV);
             }
         }
         // A session left behind by a host that crashed holds the name.
@@ -664,6 +685,17 @@ mod tests {
         let e = br#"{"error":{"reason":"not_installed","message":"The engine is not built","next":"screen-relay install"}}"#;
         assert_eq!(screen_relay_error(e, b""), "The engine is not built (screen-relay install)");
         assert_eq!(screen_relay_error(b"line one\nboom\n", b""), "boom");
+    }
+
+    #[test]
+    fn browsers_are_told_to_use_x11() {
+        let profile = std::path::Path::new("/data/screen-browser");
+        let chromium = browser_command(std::path::Path::new("/usr/bin/chromium"), profile);
+        assert!(chromium.contains(&"--ozone-platform=x11".to_string()), "{chromium:?}");
+        assert_eq!(chromium[1], "--user-data-dir=/data/screen-browser");
+        let firefox = browser_command(std::path::Path::new("/usr/bin/firefox"), profile);
+        assert_eq!(firefox, ["/usr/bin/firefox", "--no-remote", "--profile", "/data/screen-browser"]);
+        assert!(BROWSER_ENV_REMOVE.contains(&"WAYLAND_DISPLAY"));
     }
 
     #[test]
