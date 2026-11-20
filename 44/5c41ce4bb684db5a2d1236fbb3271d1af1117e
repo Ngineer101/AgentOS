@@ -1,0 +1,19 @@
+crates/host/src/screen.rs
+  s_6734746af6fc79::t_9640a9de0b8fdd 162-168,170-172,174-183,186-194,434-437,690-700
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "445c41ce4bb684db5a2d1236fbb3271d1af1117e",
+  "prompts": {},
+  "sessions": {
+    "s_6734746af6fc79": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6734746af6fc79",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
