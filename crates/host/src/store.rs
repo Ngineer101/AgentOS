@@ -233,9 +233,13 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
             None => vec![],
         },
         side_questions: r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
+        pull_request: match (r.get::<_, Option<i64>>(16)?, r.get::<_, Option<String>>(17)?) {
+            (Some(n), Some(url)) => Some(SessionPullRequest { number: n as u64, url }),
+            _ => None,
+        },
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, pr_number, pr_url";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -261,6 +265,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("sessions", "worktree_subdir", "TEXT"),
     ("sessions", "config_options", "TEXT"),
     ("sessions", "side_questions", "INTEGER"),
+    ("sessions", "pr_number", "INTEGER"),
+    ("sessions", "pr_url", "TEXT"),
     ("connectors", "icon", "TEXT"),
 ];
 
@@ -582,7 +588,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -599,7 +605,9 @@ impl Store {
                 s.worktree.as_ref().map(|w| w.path.clone()),
                 s.worktree.as_ref().map(|w| w.branch.clone()),
                 serde_json::to_string(&s.config_options)?,
-                s.side_questions as i64
+                s.side_questions as i64,
+                s.pull_request.as_ref().map(|p| p.number as i64),
+                s.pull_request.as_ref().map(|p| p.url.clone())
             ],
         )?;
         Ok(())
@@ -693,6 +701,14 @@ impl Store {
             params![id, on as i64],
         )?;
         Ok(())
+    }
+
+    /// Record the pull request a session opened.
+    pub fn session_set_pull_request(&self, id: &str, pr: &SessionPullRequest) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET pr_number = ?2, pr_url = ?3 WHERE session_id = ?1",
+            params![id, pr.number as i64, pr.url],
+        )? > 0)
     }
 
     pub fn session_set_acp_id(&self, id: &str, acp_id: &str) -> Result<()> {
@@ -1240,6 +1256,7 @@ mod tests {
             worktree: None,
             config_options: vec![],
             side_questions: false,
+            pull_request: None,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -1271,6 +1288,16 @@ mod tests {
         // And opening again is a no-op.
         drop(st);
         Store::open(&path).unwrap();
+    }
+
+    #[test]
+    fn a_session_keeps_its_pull_request() {
+        let (st, sid) = setup();
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, None);
+        let pr = SessionPullRequest { number: 48483, url: "https://github.com/o/r/pull/48483".into() };
+        assert!(st.session_set_pull_request(&sid, &pr).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, Some(pr));
+        assert!(!st.session_set_pull_request("ses_none", &SessionPullRequest { number: 1, url: "u".into() }).unwrap());
     }
 
     #[test]

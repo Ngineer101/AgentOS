@@ -358,14 +358,23 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
     // "Working · 2 agents running" while subagents run.
     let agents = if status == Status::Working { s.running_work(&x.session_id).0 } else { 0 };
-    let sub = match crate::model::running_label(agents, 0) {
+    let line = match crate::model::running_label(agents, 0) {
         Some(r) => format!("{} · {r}", status.word()),
         None => {
             let word = (status != Status::YourTurn).then(|| status.word().to_string());
             word.into_iter().chain([profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)]).collect::<Vec<_>>().join(" · ")
         }
     };
-    let spoken = if status == Status::YourTurn { format!("{}, {sub}", status.word()) } else { sub.clone() };
+    // The pull request it opened leads the line, so it survives truncation ("#48 · Work · 3m").
+    let pr = x.pull_request.as_ref().map(|p| p.number);
+    let sub = match pr {
+        Some(n) => format!("#{n} · {line}"),
+        None => line.clone(),
+    };
+    let mut spoken = if status == Status::YourTurn { format!("{}, {line}", status.word()) } else { line };
+    if let Some(n) = pr {
+        spoken = format!("Pull request {n}, {spoken}");
+    }
     let (title_c, sub_c) = if selected && mac {
         (Color::WHITE, Color::WHITE.alpha(0.8))
     } else if ended {

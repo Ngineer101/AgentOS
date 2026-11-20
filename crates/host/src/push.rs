@@ -796,6 +796,7 @@ mod tests {
                     worktree: None,
                     config_options: vec![],
                     side_questions: false,
+                    pull_request: None,
                     state: SessionState::Running,
                     state_reason: None,
                     acp_session_id: None,

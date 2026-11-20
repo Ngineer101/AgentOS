@@ -401,7 +401,7 @@ struct ApprovalBanner: View {
 }
 
 /// A session in the list: the agent's icon, the title, and one status line
-/// ("● Your turn · 3m"). The workspace is the section header and the branch
+/// ("● Your turn · 3m", ending "· #48" once it opened a pull request). The workspace is the section header and the branch
 /// and login are in the session's title menu, so the row leaves them out.
 struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
@@ -445,8 +445,13 @@ struct SessionRow: View {
     }
 
     /// "Your turn · 3m", "Working · 2 agents running", "Needs approval"
-    /// (no age while it needs you).
+    /// (no age while it needs you), then the pull request it opened ("· #48").
     private var subtitle: String {
+        guard let pr = session.pullRequest else { return statusLine }
+        return "\(statusLine) · #\(pr.number)"
+    }
+
+    private var statusLine: String {
         if status == .needsYou { return status.label }
         if status == .working {
             let n = runningSubagentCount(model.transcripts[session.sessionId]?.events ?? [])

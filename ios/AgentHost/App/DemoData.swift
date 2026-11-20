@@ -204,10 +204,13 @@ struct DemoData {
                 id: "mode", name: "Mode", description: nil, category: "mode", currentValue: "default",
                 options: [SessionConfigValue(value: "default", name: "Default", description: nil)]),
         ]
-        func live(_ s: SessionInfo, branch: String? = nil) -> SessionInfo {
+        func live(_ s: SessionInfo, branch: String? = nil, pullRequest: Int? = nil) -> SessionInfo {
             var s = s
             if let branch {
                 s.worktree = SessionWorktree(path: "/home/nico/.agenthost/worktrees/\(branch)", branch: branch)
+            }
+            if let pullRequest {
+                s.pullRequest = SessionPullRequest(number: pullRequest, url: "https://github.com/nico/relay/pull/\(pullRequest)")
             }
             if s.agent == "claude" {
                 s.configOptions = claudeConfig
@@ -224,7 +227,8 @@ struct DemoData {
             live(session("demo-oauth", "ws-relay", "codex", "codex", SessionStateName.running,
                          "Add OAuth refresh", ago: 5), branch: "agenthost/oauth-refresh"),
             live(session("demo-review", "ws-relay", "opencode", "opencode", SessionStateName.idle,
-                         "Review the relay worker", ago: 120), branch: "agenthost/review-relay-worker"),
+                         "Review the relay worker", ago: 120), branch: "agenthost/review-relay-worker",
+                 pullRequest: 48483),
             live(session(Self.subagentSession, "ws-relay", "claude", "claude-work", SessionStateName.running,
                          "Audit the relay worker", ago: 0, lastSeq: 19), branch: "audit-relay"),
             // Untitled, no worktree (notes is not a git repository): called "notes".

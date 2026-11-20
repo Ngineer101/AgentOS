@@ -87,6 +87,7 @@ fn base(s: &mut App) {
         worktree: None,
         config_options: vec![],
         side_questions: false,
+        pull_request: None,
     };
     s.sessions = vec![
         sess("ses_q", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), SessionState::Idle, "What changed in Rust 1.92?", 180_000),
@@ -96,6 +97,9 @@ fn base(s: &mut App) {
         sess("ses_5", "ws_notes", AgentKind::Codex, None, SessionState::Failed, "Tidy the reading list", 1_500_000),
         sess("ses_4", "ws_notes", AgentKind::Claude, None, SessionState::Ended, "Weekly summary", 90_000_000),
     ];
+    if let Some(r) = s.sessions.iter_mut().find(|x| x.session_id == "ses_3") {
+        r.pull_request = Some(SessionPullRequest { number: 48483, url: "https://github.com/nico/relay/pull/48483".into() });
+    }
     if let Some(f) = s.sessions.iter_mut().find(|x| x.session_id == "ses_5") {
         f.state_reason = Some("codex exited with status 1: model rate limit reached".into());
     }
@@ -469,6 +473,7 @@ fn subagents(s: &mut App) {
             worktree: Some(SessionWorktree { path: "/home/nico/.local/share/agenthost/worktrees/ses_6".into(), branch: "agenthost/audit-relay".into() }),
             config_options: config_options(),
             side_questions: true,
+            pull_request: None,
         },
     );
     let call = |id: &str, parent: &str, name: &str, kind: &str, args: Value| json!({"tool_call_id": id, "name": name, "kind": kind, "arguments": args, "source": "sandbox", "tool_name": if kind == "execute" { "Bash" } else { "Read" }, "parent_tool_call_id": parent});
