@@ -146,7 +146,8 @@ struct CapsuleButtonStyle: ButtonStyle {
 
 // MARK: - Agents and session state
 
-/// A login's letter badge: the agent's initial on its colour.
+/// A login's badge: the agent's mark (Assets.xcassets/Agent*, from
+/// assets/agents/) on its colour, or its initial for an agent without one.
 struct AgentBadge: View {
     let agent: String
     var dimmed = false
@@ -154,25 +155,35 @@ struct AgentBadge: View {
 
     var body: some View {
         let style = Self.style(agent)
-        Text(style.letter)
-            .font(.system(size: size * 0.5, weight: .bold, design: .rounded))
-            .foregroundStyle(style.foreground)
-            .frame(width: size, height: size)
-            .background(style.background, in: RoundedRectangle(cornerRadius: size * 0.27, style: .continuous))
-            .opacity(dimmed ? 0.45 : 1)
-            .accessibilityHidden(true)
+        Group {
+            if let logo = style.logo {
+                Image(logo)
+                    .resizable()
+                    .renderingMode(.template)
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: size * 0.62, height: size * 0.62)
+            } else {
+                let letter = agentDisplayName(agent).prefix(1).uppercased()
+                Text(letter.isEmpty ? "?" : letter)
+                    .font(.system(size: size * 0.5, weight: .bold, design: .rounded))
+            }
+        }
+        .foregroundStyle(style.foreground)
+        .frame(width: size, height: size)
+        .background(style.background, in: RoundedRectangle(cornerRadius: size * 0.27, style: .continuous))
+        .opacity(dimmed ? 0.45 : 1)
+        .accessibilityHidden(true)
     }
 
-    private static func style(_ agent: String) -> (letter: String, foreground: Color, background: Color) {
+    private static func style(_ agent: String) -> (logo: String?, foreground: Color, background: Color) {
         switch agent {
-        case "claude": return ("C", .white, Color(red: 0.85, green: 0.47, blue: 0.34))
-        case "codex": return ("X", .black, .white)
-        case "gemini": return ("G", .white, Color(red: 0.26, green: 0.38, blue: 0.96))
-        case "opencode": return ("O", .white, Color(white: 0.32))
-        case "cursor": return ("C", .black, Color(white: 0.85))
-        default:
-            let letter = agentDisplayName(agent).prefix(1).uppercased()
-            return (letter.isEmpty ? "?" : letter, .white, Color(white: 0.32))
+        case "claude": return ("AgentClaude", .white, Color(red: 0.85, green: 0.47, blue: 0.34))
+        case "codex": return ("AgentCodex", .black, .white)
+        case "gemini": return ("AgentGemini", .white, Color(red: 0.26, green: 0.38, blue: 0.96))
+        case "opencode": return ("AgentOpenCode", .white, Color(white: 0.32))
+        case "cursor": return ("AgentCursor", .black, Color(white: 0.85))
+        default: return (nil, .white, Color(white: 0.32))
         }
     }
 }

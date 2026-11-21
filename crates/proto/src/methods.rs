@@ -25,7 +25,7 @@ pub const SESSION_END: &str = "session.end";
 pub const SESSION_ARCHIVE: &str = "session.archive";
 /// Show an archived session in the session list again.
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
-/// Give a session a title of its own (or clear it).
+/// Give a session a title of its own (or clear it, back to the host's).
 pub const SESSION_RENAME: &str = "session.rename";
 /// Change one of the agent's session settings (model, effort, …).
 pub const SESSION_SET_CONFIG: &str = "session.set_config";

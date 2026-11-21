@@ -380,6 +380,9 @@ pub struct Session {
     pub state_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp_session_id: Option<String>,
+    /// The session's name: the user's own (`session.rename`), else the
+    /// host's (the agent's title for it, or its first message until the
+    /// agent gives one). `None` only before the first message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub created_at: i64,
@@ -470,7 +473,7 @@ pub struct SessionConfigValue {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionRenameParams {
     pub session_id: String,
-    /// The new title; empty or omitted clears it.
+    /// The new title; empty or omitted clears it (the host's title shows again).
     #[serde(default)]
     pub title: Option<String>,
 }

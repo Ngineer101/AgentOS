@@ -15,6 +15,8 @@
 //! | `mcp-list`             | Lists the tools of the first MCP server                |
 //! | `hang <secs>`          | Waits, ignoring `session/cancel`                       |
 //! | `crash`                | Exits the process mid-turn                             |
+//! | `retitle <title>`      | Names the session (`session_info_update`)              |
+//! | `Name this conversation.…` | The host asking for a title: replies `Title: About <the request's first words>` |
 //! | anything else          | Thinks, then replies `echo: <prompt>` in chunks        |
 //!
 //! Sessions have two settings (`configOptions`): `model` (`fake-fast`,
@@ -351,6 +353,16 @@ async fn handle_request(
                 (s.cancel.clone(), s.cwd.clone(), s.mcp_servers.clone(), s.fork)
             };
             agent.append_history(&sid, "user", &text);
+            if text.starts_with("Name this conversation.") {
+                let request = text
+                    .split_once("<request>\n")
+                    .and_then(|(_, r)| r.split_once("\n</request>"))
+                    .map(|(r, _)| r)
+                    .unwrap_or_default();
+                let words = request.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+                say(agent, &sid, &format!("Title: About {words}")).await;
+                return Ok(json!({"stopReason": "end_turn"}));
+            }
             if fork {
                 // A side conversation: a look around (which the host must not
                 // put in the transcript), then the answer.
@@ -642,6 +654,12 @@ async fn run_prompt(
                 say(&a, &s, &msg).await;
             });
             say(agent, sid, "started it").await;
+        }
+        "retitle" => {
+            agent
+                .update(sid, json!({"sessionUpdate": "session_info_update", "title": rest}))
+                .await;
+            say(agent, sid, "retitled").await;
         }
         "crash" => {
             say(agent, sid, "about to crash").await;

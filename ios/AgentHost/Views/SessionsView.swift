@@ -438,11 +438,7 @@ struct SessionRow: View {
         .accessibilityValue(agentDisplayName(session.agent))
     }
 
-    /// The session's own title, else "New session".
-    private var title: String {
-        if let t = session.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
-        return "New session"
-    }
+    private var title: String { model.sessionTitle(session) }
 
     /// "Your turn · 3m", "Working · 2 agents running", "Needs approval"
     /// (no age while it needs you), then the pull request it opened ("· #48").

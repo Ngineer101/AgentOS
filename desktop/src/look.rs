@@ -493,7 +493,7 @@ pub enum Btn {
     Flat,
 }
 
-/// The colour an agent's letter badge has (Claude orange, Codex white, …).
+/// An agent's badge: its mark on its colour (Claude orange, Codex white, …), or its letter.
 pub fn agent_badge(t: &Theme, agent: agenthost_proto::AgentKind, size: f32, enabled: bool) -> El {
     use agenthost_proto::AgentKind as A;
     let name = agent.display_name();
@@ -505,8 +505,10 @@ pub fn agent_badge(t: &Theme, agent: agenthost_proto::AgentKind, size: f32, enab
         A::Cursor => (c("#111111"), Color::WHITE),
         A::Fake => (c("#5e5ce6"), Color::WHITE),
     };
-    let letter = if agent == A::Codex { 'X' } else { name.chars().next().unwrap_or('?').to_ascii_uppercase() };
-    let b = t.badge_letter(letter, bg, fg, size);
+    let b = match crate::icons::agent_logo(agent) {
+        Some(logo) => row().size(size, size).center().radius((size * 0.24).round()).fill(bg).child(icon(logo, (size * 0.62).round()).color(fg)),
+        None => t.badge_letter(name.chars().next().unwrap_or('?').to_ascii_uppercase(), bg, fg, size),
+    };
     if enabled {
         b
     } else {
