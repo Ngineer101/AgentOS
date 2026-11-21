@@ -1,0 +1,67 @@
+crates/cli/src/lib.rs
+  s_2f4e60d63d8437::t_9f229ae32190dd 300-324
+crates/host/src/api.rs
+  s_2f4e60d63d8437::t_05a1a837b55df5 449-450
+crates/host/src/session.rs
+  s_2f4e60d63d8437::t_fda954697cd915 388-393,1873-1880,2028
+crates/host/src/uploads.rs
+  s_2f4e60d63d8437::t_4828069b579d0c 9-12,42-43,52-53,56,238-288,304-309
+crates/host/tests/attachments_core.rs
+  s_2f4e60d63d8437::t_e68e9f69485802 1-124
+crates/proto/src/lib.rs
+  s_2f4e60d63d8437::t_612fe707329aae 28-29
+crates/proto/src/methods.rs
+  s_2f4e60d63d8437::t_1cb8557f725528 80-84,211,271
+crates/proto/src/types.rs
+  s_2f4e60d63d8437::t_e6fee0d76ab8b6 1142-1162
+desktop/README.md
+  s_2f4e60d63d8437::t_ac5c6d0c1c7a04 20-23
+desktop/src/bridge.rs
+  s_2f4e60d63d8437::t_2854584015d85c 98-99,129,332-335
+desktop/src/commands.rs
+  s_2f4e60d63d8437::t_73ffc84715356e 164
+desktop/src/demo.rs
+  s_2f4e60d63d8437::t_e1baf8b8b0bfe3 507-527,981-987
+desktop/src/main.rs
+  s_2f4e60d63d8437::t_9821817e1759b1 26,41
+desktop/src/model.rs
+  s_2f4e60d63d8437::t_cee334e7ca5924 444-461,550-553,580-585,697-701,1122,1126,1135-1154,1246-1278,1576-1577,1875-1884
+desktop/src/session.rs
+  s_2f4e60d63d8437::t_1061cf65883614 8,115,716-717,723-724,738-846,897
+desktop/src/tests.rs
+  s_2f4e60d63d8437::t_9bcd78c3b01473 1673-1761
+desktop/src/view.rs
+  s_2f4e60d63d8437::t_2f199afad8d588 50-52
+docs/status.md
+  s_2f4e60d63d8437::t_f3c6b0ea657d85 31
+ios/AgentHost/App/AppModel+Images.swift
+  s_2f4e60d63d8437::t_dbe3c0e40985ff 1-97
+ios/AgentHost/App/AppModel.swift
+  s_2f4e60d63d8437::t_a3289c9cde02c7 131-133,435,516,552,560
+ios/AgentHost/Core/ProtocolModels.swift
+  s_2f4e60d63d8437::t_8d25eb1d4ba09f 50-54,592-600
+ios/AgentHost/Core/TranscriptCache.swift
+  s_2f4e60d63d8437::t_dd163a269e796b 31-35,38,91-105
+ios/AgentHost/Views/Composer.swift
+  s_2f4e60d63d8437::t_ef92ca98586d01 177-184,376-381,445-446,512,524-557,802-803,805-824,845-1028
+ios/AgentHost/Views/SessionView.swift
+  s_2f4e60d63d8437::t_cd497502894e48 229-230,262-264,588,753,766,1459
+ios/README.md
+  s_2f4e60d63d8437::t_484ddc5b5dd522 124,126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "35ff39fb6003bdb6715f5301c23c0729fa55fa66",
+  "prompts": {},
+  "sessions": {
+    "s_2f4e60d63d8437": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2f4e60d63d8437",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
