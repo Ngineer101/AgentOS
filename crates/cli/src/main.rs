@@ -96,6 +96,9 @@ enum Cmd {
     /// Push notifications to paired iPhones (through Apple's APNs).
     #[command(subcommand)]
     Push(PushCmd),
+    /// Automations: sessions that run on a schedule, from a webhook or by hand.
+    #[command(subcommand, alias = "auto")]
+    Automation(AutoCmd),
     /// Send any protocol method.
     Raw {
         method: String,
@@ -222,6 +225,327 @@ enum PushCmd {
     RemoveKey,
 }
 
+#[derive(Subcommand)]
+enum AutoCmd {
+    /// List automations, their next run and last result.
+    Ls,
+    /// One automation, with its webhook URL if it has one.
+    Show { id: String },
+    /// Add an automation. Give one of --cron, --webhook or --manual.
+    Add {
+        name: String,
+        /// Workspace id, name or folder.
+        #[arg(long, short)]
+        workspace: String,
+        /// Agent, or agent:profile.
+        #[arg(long, short)]
+        agent: String,
+        /// What each run should do (a webhook's has a preset).
+        #[arg(long, short)]
+        prompt: Option<String>,
+        /// Read the prompt from a file.
+        #[arg(long, conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
+        /// Five-field cron in this computer's time ("0 3 * * *"), or @daily, @weekly…
+        #[arg(long, conflicts_with_all = ["webhook", "manual"])]
+        cron: Option<String>,
+        /// sentry, github or generic: runs start from POSTs to its URL.
+        #[arg(long, conflicts_with = "manual")]
+        webhook: Option<String>,
+        /// Only by hand (`agenthost automation run`).
+        #[arg(long)]
+        manual: bool,
+        /// The sender's secret: Sentry's client secret, GitHub's webhook
+        /// secret, or a bearer token for generic webhooks.
+        #[arg(long)]
+        secret: Option<String>,
+        /// Webhook rule FIELD=VALUE, e.g. payload.action=opened (repeatable).
+        #[arg(long = "filter")]
+        filter: Vec<String>,
+        /// Webhook dedupe key template, e.g. {{payload.issue.id}}.
+        #[arg(long)]
+        dedupe: Option<String>,
+        /// Minutes a dedupe key holds (default a day).
+        #[arg(long)]
+        cooldown: Option<u32>,
+        /// Tools its runs use without asking: create_pull_request, git_push.
+        #[arg(long, value_delimiter = ',')]
+        auto_approve: Vec<String>,
+        /// Stop a run after this many minutes (default 60).
+        #[arg(long)]
+        max_minutes: Option<u32>,
+        /// Add it switched off.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Change an automation.
+    Edit {
+        id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        cron: Option<String>,
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        #[arg(long)]
+        off: bool,
+        /// Replace the pre-approved tools ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        auto_approve: Option<Vec<String>>,
+        #[arg(long)]
+        secret: Option<String>,
+        /// Give the webhook a new URL; the old one stops working.
+        #[arg(long)]
+        rotate_webhook: bool,
+        #[arg(long)]
+        max_minutes: Option<u32>,
+    },
+    /// Start a run now.
+    Run {
+        id: String,
+        /// Wait for it to finish and print the summary.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Its runs, newest first.
+    Runs {
+        id: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Delete an automation (its runs' sessions stay).
+    Rm { id: String },
+    /// Check a cron expression and show its next times.
+    Check { cron: String },
+}
+
+/// "in 3h 20m", "5m ago".
+fn when(ts: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if ts <= now {
+        return ago(ts);
+    }
+    let m = (ts - now + 59_999) / 60_000;
+    match m {
+        m if m < 60 => format!("in {m}m"),
+        m if m < 1440 => format!("in {}h {}m", m / 60, m % 60),
+        m => format!("in {}d {}h", m / 1440, (m % 1440) / 60),
+    }
+}
+
+fn outcome_word(o: RunOutcome) -> &'static str {
+    match o {
+        RunOutcome::Running => "running",
+        RunOutcome::Succeeded => "done",
+        RunOutcome::Failed => "failed",
+        RunOutcome::Cancelled => "stopped",
+        RunOutcome::TimedOut => "timed out",
+        RunOutcome::Skipped => "skipped",
+    }
+}
+
+fn print_automation(a: &Automation, long: bool) {
+    let what = match &a.trigger {
+        AutomationTrigger::Manual => "by hand".to_string(),
+        AutomationTrigger::Schedule { .. } => a.schedule_text.clone().unwrap_or_default(),
+        AutomationTrigger::Webhook { source, .. } => format!("{} webhook", source.display_name()),
+    };
+    let state = if a.enabled { "" } else { "  (off)" };
+    let next = a.next_run_at.map(|t| format!("  next {}", when(t))).unwrap_or_default();
+    let last = a
+        .last_run
+        .as_ref()
+        .map(|r| format!("  last {} {}", outcome_word(r.outcome), ago(r.started_at)))
+        .unwrap_or_default();
+    println!("{}  {}  {what}{state}{next}{last}", a.automation_id, a.name);
+    if !long {
+        return;
+    }
+    println!("  agent: {}  workspace: {}  max {} min", a.agent.as_str(), a.workspace_id, a.max_minutes);
+    if !a.auto_approve.is_empty() {
+        println!("  runs without asking: {}", a.auto_approve.join(", "));
+    }
+    if let Some(w) = &a.webhook {
+        match &w.url {
+            Some(u) => println!("  webhook URL: {u}"),
+            None => println!("  webhook URL: none (the host has no relay; start it with --relay-url)"),
+        }
+        println!("  secret: {}", if w.has_secret { "stored" } else { "none" });
+        if let Some(d) = &w.last_delivery {
+            println!("  last delivery {}: {} — {}", ago(d.at), d.result, d.detail);
+        }
+    }
+    println!("  prompt:\n{}", a.prompt.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n"));
+}
+
+fn print_run(r: &AutomationRun) {
+    let trig = match r.trigger {
+        RunTrigger::Schedule => "schedule",
+        RunTrigger::CatchUp => "catch-up",
+        RunTrigger::Webhook => "webhook",
+        RunTrigger::Manual => "by hand",
+    };
+    println!(
+        "{}  {}  {}  {}  {}",
+        r.run_id,
+        ago(r.started_at),
+        trig,
+        outcome_word(r.outcome),
+        r.session_id.as_deref().unwrap_or("-")
+    );
+    if let Some(d) = &r.detail {
+        println!("    {d}");
+    }
+    if let Some(s) = &r.summary {
+        println!("    {s}");
+    }
+}
+
+async fn automation_cmd(c: &Client, cmd: AutoCmd, json_out: bool) -> Result<()> {
+    let show = |a: &Automation| -> Result<()> {
+        if json_out {
+            print_json(&serde_json::to_value(a)?);
+        } else {
+            print_automation(a, true);
+        }
+        Ok(())
+    };
+    match cmd {
+        AutoCmd::Ls => {
+            let list: Vec<Automation> = c.call(m::AUTOMATION_LIST, json!({})).await?;
+            if json_out {
+                print_json(&serde_json::to_value(&list)?);
+            } else if list.is_empty() {
+                println!("No automations. Add one with `agenthost automation add`.");
+            }
+            if !json_out {
+                for a in &list {
+                    print_automation(a, false);
+                }
+            }
+        }
+        AutoCmd::Show { id } => show(&c.call(m::AUTOMATION_GET, json!({"automation_id": id})).await?)?,
+        AutoCmd::Add {
+            name, workspace, agent, prompt, prompt_file, cron, webhook, manual, secret, filter, dedupe, cooldown,
+            auto_approve, max_minutes, off,
+        } => {
+            let ws = resolve_workspace(c, &workspace).await?;
+            let (agent, profile_id) = resolve_agent(c, &agent).await?;
+            let trigger = match (cron, webhook, manual) {
+                (Some(cron), None, false) => AutomationTrigger::Schedule { cron },
+                (None, Some(src), false) => {
+                    let source = match src.as_str() {
+                        "sentry" => WebhookSource::Sentry,
+                        "github" => WebhookSource::Github,
+                        "generic" => WebhookSource::Generic,
+                        other => bail!("unknown webhook source {other:?}; use sentry, github or generic"),
+                    };
+                    let filter = filter
+                        .iter()
+                        .map(|f| {
+                            f.split_once('=')
+                                .map(|(p, v)| WebhookMatch { path: p.trim().into(), equals: v.into() })
+                                .ok_or_else(|| anyhow!("a filter is FIELD=VALUE, not {f:?}"))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    AutomationTrigger::Webhook { source, filter, dedupe_key: dedupe, cooldown_minutes: cooldown.unwrap_or(24 * 60) }
+                }
+                (None, None, true) => AutomationTrigger::Manual,
+                _ => bail!("give one of --cron, --webhook or --manual"),
+            };
+            let prompt = match (prompt, prompt_file) {
+                (Some(p), _) => p,
+                (None, Some(f)) => std::fs::read_to_string(&f).with_context(|| format!("reading {}", f.display()))?,
+                (None, None) => match &trigger {
+                    AutomationTrigger::Webhook { source: WebhookSource::Sentry, .. } => SENTRY_PROMPT.into(),
+                    AutomationTrigger::Webhook { source: WebhookSource::Github, .. } => GITHUB_PROMPT.into(),
+                    AutomationTrigger::Webhook { .. } => GENERIC_PROMPT.into(),
+                    _ => bail!("say what each run should do with --prompt or --prompt-file"),
+                },
+            };
+            let p = AutomationCreateParams {
+                name,
+                workspace_id: ws.workspace_id,
+                agent,
+                profile_id,
+                prompt,
+                trigger,
+                auto_approve,
+                max_minutes,
+                enabled: !off,
+                webhook_secret: secret,
+            };
+            show(&c.call(m::AUTOMATION_CREATE, serde_json::to_value(&p)?).await?)?;
+        }
+        AutoCmd::Edit { id, name, prompt, cron, on, off, auto_approve, secret, rotate_webhook, max_minutes } => {
+            let p = AutomationUpdateParams {
+                automation_id: id,
+                name,
+                enabled: if on { Some(true) } else if off { Some(false) } else { None },
+                prompt,
+                trigger: cron.map(|cron| AutomationTrigger::Schedule { cron }),
+                auto_approve: auto_approve.map(|v| v.into_iter().filter(|t| !t.is_empty()).collect()),
+                max_minutes,
+                webhook_secret: secret,
+                rotate_webhook,
+                ..Default::default()
+            };
+            show(&c.call(m::AUTOMATION_UPDATE, serde_json::to_value(&p)?).await?)?;
+        }
+        AutoCmd::Run { id, wait } => {
+            let mut r: AutomationRun = c.call(m::AUTOMATION_RUN_NOW, json!({"automation_id": id})).await?;
+            while wait && r.outcome == RunOutcome::Running {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let runs: Vec<AutomationRun> = c.call(m::AUTOMATION_RUNS, json!({"automation_id": id, "limit": 20})).await?;
+                if let Some(now) = runs.into_iter().find(|x| x.run_id == r.run_id) {
+                    r = now;
+                }
+            }
+            if json_out {
+                print_json(&serde_json::to_value(&r)?);
+            } else {
+                print_run(&r);
+            }
+        }
+        AutoCmd::Runs { id, limit } => {
+            let runs: Vec<AutomationRun> = c.call(m::AUTOMATION_RUNS, json!({"automation_id": id, "limit": limit})).await?;
+            if json_out {
+                print_json(&serde_json::to_value(&runs)?);
+            } else if runs.is_empty() {
+                println!("No runs yet.");
+            }
+            if !json_out {
+                runs.iter().for_each(print_run);
+            }
+        }
+        AutoCmd::Rm { id } => {
+            c.request(m::AUTOMATION_DELETE, json!({"automation_id": id})).await?;
+            if !json_out {
+                println!("Deleted.");
+            }
+        }
+        AutoCmd::Check { cron } => {
+            let r: ScheduleCheck = c.call(m::AUTOMATION_CHECK_SCHEDULE, json!({"cron": cron})).await?;
+            if json_out {
+                print_json(&serde_json::to_value(&r)?);
+            } else if let Some(e) = &r.error {
+                bail!("{e}");
+            } else {
+                println!("{}", r.text.unwrap_or_default());
+                for t in r.next {
+                    println!("  {}", when(t));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `AuthKey_ABC123DEFG.p8` → `ABC123DEFG`.
 fn key_id_from_file_name(path: &std::path::Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
@@ -279,6 +603,9 @@ async fn push_cmd(c: &Client, cmd: PushCmd, json_out: bool) -> Result<()> {
         }
         if d.prefs.failed {
             what.push("failures");
+        }
+        if d.prefs.automations {
+            what.push("automations");
         }
         let what = if what.is_empty() { "nothing".to_string() } else { what.join(", ") };
         print!("{}  {}  {}  {}", d.device_id, d.name, d.environment.as_str(), what);
@@ -646,6 +973,7 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.cmd {
         Cmd::Screen(cmd) => screen_cmd(&c, cmd, remote_state.as_deref(), json_out).await?,
         Cmd::Push(cmd) => push_cmd(&c, cmd, json_out).await?,
+        Cmd::Automation(cmd) => automation_cmd(&c, cmd, json_out).await?,
         Cmd::Status => {
             let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
             if json_out {

@@ -182,6 +182,9 @@ pub async fn serve_connection(
                     Ok(BusMsg::ScreenChanged(s)) if conn.greeted => {
                         conn.notify(m::N_SCREEN_CHANGED, serde_json::to_value(s).unwrap()).await;
                     }
+                    Ok(BusMsg::AutomationChanged(a)) if conn.greeted => {
+                        conn.notify(m::N_AUTOMATION_CHANGED, serde_json::to_value(a).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -506,6 +509,34 @@ impl Conn {
             }
             m::VOICE_STREAM_APPEND => to_value(VoiceStreamText { text: h.ctx.voice.stream_append(params(p)?).await? }),
             m::VOICE_STREAM_FINISH => to_value(VoiceStreamText { text: h.ctx.voice.stream_finish(params(p)?).await? }),
+
+            m::AUTOMATION_LIST => to_value(h.automations.list()?),
+            m::AUTOMATION_GET => {
+                let r: AutomationRef = params(p)?;
+                to_value(h.automations.get(&r.automation_id)?)
+            }
+            m::AUTOMATION_CREATE => {
+                let admin = self.principal.capabilities.contains(&Capability::Admin);
+                to_value(h.automations.create(params(p)?, admin)?)
+            }
+            m::AUTOMATION_UPDATE => {
+                let admin = self.principal.capabilities.contains(&Capability::Admin);
+                to_value(h.automations.update(params(p)?, admin)?)
+            }
+            m::AUTOMATION_DELETE => {
+                let r: AutomationRef = params(p)?;
+                h.automations.delete(&r.automation_id)?;
+                Ok(json!({"removed": true}))
+            }
+            m::AUTOMATION_RUN_NOW => {
+                let r: AutomationRef = params(p)?;
+                to_value(h.automations.run_now(&r.automation_id).await?)
+            }
+            m::AUTOMATION_RUNS => to_value(h.automations.runs(&params(p)?)?),
+            m::AUTOMATION_CHECK_SCHEDULE => {
+                let sp: ScheduleCheckParams = params(p)?;
+                to_value(h.automations.check_schedule(&sp.cron))
+            }
 
             m::DEVICE_LIST
             | m::DEVICE_PAIR_START

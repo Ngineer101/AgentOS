@@ -60,6 +60,17 @@ pub struct Remote {
     conns: Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>,
     pairing: Mutex<Option<Pairing>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The last `hooks.set` sent on this relay connection.
+    hooks_sent: Mutex<Option<String>>,
+}
+
+/// Stops a task when the connection it belongs to ends, however it ends.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Load or create a key in the secret store.
@@ -111,6 +122,7 @@ impl Remote {
             conns: Mutex::new(HashMap::new()),
             pairing: Mutex::new(None),
             task: Mutex::new(None),
+            hooks_sent: Mutex::new(None),
         }))
     }
 
@@ -163,6 +175,33 @@ impl Remote {
         if !matches!(tokio::time::timeout(Duration::from_secs(5), rx).await, Ok(Ok(()))) {
             tracing::warn!("relay did not confirm pending control messages");
         }
+    }
+
+    /// Tell the relay which webhooks may deliver and the key to seal them
+    /// to, if that changed since the last time on this connection.
+    fn send_hooks(&self) {
+        let Some(host) = self.host.upgrade() else { return };
+        let msg = host.automations.relay_hooks().to_string();
+        let mut sent = self.hooks_sent.lock().unwrap();
+        if sent.as_deref() != Some(msg.as_str()) {
+            self.send(Out::Text(msg.clone()));
+            *sent = Some(msg);
+        }
+    }
+
+    /// A webhook delivery from the relay: hand it to automations, then ack
+    /// it so the relay drops its sealed copy.
+    fn on_hook(self: &Arc<Self>, v: &Value) {
+        let (Some(id), Some(sealed)) = (v["delivery_id"].as_str(), v["sealed"].as_str()) else {
+            return;
+        };
+        let Some(host) = self.host.upgrade() else { return };
+        let (id, sealed) = (id.to_string(), sealed.to_string());
+        let me = self.clone();
+        tokio::spawn(async move {
+            host.automations.deliver(&id, &sealed).await;
+            me.control(json!({"type": "hook.ack", "delivery_id": id}));
+        });
     }
 
     fn device_keys_b64(&self) -> Vec<String> {
@@ -223,6 +262,22 @@ impl Remote {
         }
         tracing::info!(relay_id = %self.relay_id, "relay connected");
         self.control(json!({"type":"devices.set","public_keys": self.device_keys_b64()}));
+        *self.hooks_sent.lock().unwrap() = None;
+        self.send_hooks();
+        // Automations that gain, lose or rotate a webhook update the relay.
+        let hooks_watch = AbortOnDrop({
+            let me = self.clone();
+            let mut bus = self.ctx.bus.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    match bus.recv().await {
+                        Ok(BusMsg::AutomationChanged(_)) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => me.send_hooks(),
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Ok(_) => {}
+                    }
+                }
+            })
+        });
         // Re-open a pairing slot that is still live.
         if let Some(p) = self
             .pairing
@@ -262,6 +317,7 @@ impl Remote {
             let msg = match tokio::time::timeout(RELAY_SILENCE, stream.next()).await {
                 Err(_) => {
                     writer.abort();
+                    drop(hooks_watch);
                     bail!("the relay stopped answering; reconnecting");
                 }
                 Ok(None) => break,
@@ -286,6 +342,7 @@ impl Remote {
                                 let _ = done.send(());
                             }
                         }
+                        Some("hook") => self.on_hook(&v),
                         Some("error") => tracing::warn!("relay error: {}", v["message"]),
                         _ => {}
                     }
@@ -315,6 +372,7 @@ impl Remote {
             }
         }
         writer.abort();
+        drop(hooks_watch);
         Ok(())
     }
 

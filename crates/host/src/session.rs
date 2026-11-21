@@ -160,6 +160,26 @@ impl SessionManager {
         p: SessionCreateParams,
         origin: Option<&str>,
     ) -> Result<Session, RpcError> {
+        self.create_inner(p, origin, None).await
+    }
+
+    /// Create a session as a run of an automation. Only the host does this
+    /// (never a client), because an automation's runs may use the tools it
+    /// pre-approves.
+    pub async fn create_for_automation(
+        self: &Arc<Self>,
+        p: SessionCreateParams,
+        automation_id: &str,
+    ) -> Result<Session, RpcError> {
+        self.create_inner(p, Some("automation"), Some(automation_id)).await
+    }
+
+    async fn create_inner(
+        self: &Arc<Self>,
+        p: SessionCreateParams,
+        origin: Option<&str>,
+        automation_id: Option<&str>,
+    ) -> Result<Session, RpcError> {
         let ws = self
             .ctx
             .store
@@ -218,6 +238,7 @@ impl SessionManager {
             worktree: worktree.as_ref().map(|(w, _)| w.clone()),
             config_options: vec![],
             side_questions: false,
+            automation_id: None,
             state: SessionState::Created,
             state_reason: None,
             acp_session_id: None,
@@ -226,6 +247,7 @@ impl SessionManager {
             updated_at: now,
             last_seq: 0,
         };
+        let s = Session { automation_id: automation_id.map(str::to_string), ..s };
         self.ctx
             .store
             .session_insert(&s)

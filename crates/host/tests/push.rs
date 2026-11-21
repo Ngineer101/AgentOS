@@ -229,7 +229,7 @@ async fn a_phone_sets_up_notifications_and_gets_sealed_ones_when_a_session_needs
     assert_eq!(e.code, codes::INVALID_PARAMS);
     let st: PushStatus = phone.call(m::PUSH_REGISTER, reg.clone()).await.unwrap();
     let me = st.this_device.unwrap();
-    assert_eq!(me.prefs, PushPrefs { approvals: true, turn_done: false, failed: false });
+    assert_eq!(me.prefs, PushPrefs { approvals: true, turn_done: false, failed: false, automations: true });
     let all: PushStatus = desk.call(m::PUSH_STATUS, json!({})).await.unwrap();
     assert_eq!(all.devices.len(), 1);
     assert_eq!(all.devices[0].name, "Test phone");

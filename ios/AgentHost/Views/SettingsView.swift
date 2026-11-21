@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings: the host and its connection, Notifications (protocol 4), Security (Require Face ID, off by
+/// Settings: the host and its connection, Automations (protocol 5), Notifications (protocol 4), Security (Require Face ID, off by
 /// default), the agents on the host (read only), this iPhone, and Unpair.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
@@ -12,6 +12,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             hostSection
+            if model.hostSupportsAutomations { automationsSection }
             if model.hostSupportsPush { notificationsSection }
             if model.hostSharesScreen { screenSection }
             Section {
@@ -50,6 +51,7 @@ struct SettingsView: View {
         .refreshable { await model.refreshAll() }
         .task {
             if model.archivedSessions == nil { await model.refreshArchived() }
+            if model.hostSupportsAutomations && model.automations == nil { await model.refreshAutomations() }
         }
         .fullScreenCover(isPresented: $showScreen) {
             HostScreenView().environmentObject(model)
@@ -113,6 +115,23 @@ struct SettingsView: View {
                     Text(model.notificationsSummary).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private var automationsSection: some View {
+        Section {
+            NavigationLink(value: Route.automations) {
+                HStack(spacing: 12) {
+                    SettingsIcon(systemName: "clock.arrow.circlepath", color: .purple)
+                    Text("Automations")
+                    Spacer(minLength: 8)
+                    if let n = model.automations?.count {
+                        Text("\(n)").foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } footer: {
+            Text("Sessions that start on a schedule, from a webhook or by hand.")
         }
     }
 

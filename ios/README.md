@@ -29,7 +29,7 @@ state and calls `RemoteClient.call(method:paramsJson:)`.
 | `AgentHost/Core` | Protocol models, Keychain + Secure Enclave store, transcript model and cache |
 | `Shared` | `PushCrypto.swift`, compiled into the app and the extension: the notification key in the shared Keychain group and the code that opens a notification's content |
 | `AgentHostNotifications` | Notification Service Extension (`dev.agenthost.ios.notifications`): decrypts each push before it is shown |
-| `AgentHost/Views` | The screens: Pair, Sessions, Session, New session (with the project folder picker), Approval, Settings, Notifications. Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout, with iOS 26 Liquid Glass controls (`Glass.swift`: `.glassEffect`, `.glassProminent`, the bottom search toolbar) and a material look-alike on iOS 17–25; designs in the project's nano.design file |
+| `AgentHost/Views` | The screens: Pair, Sessions, Session, New session (with the project folder picker), Approval, Settings, Notifications, Automations (list, detail with runs, editor; hosts on protocol 5). Dark only (`UIUserInterfaceStyle: Dark` plus `.preferredColorScheme(.dark)`), standard SwiftUI controls and system colours throughout, with iOS 26 Liquid Glass controls (`Glass.swift`: `.glassEffect`, `.glassProminent`, the bottom search toolbar) and a material look-alike on iOS 17–25; designs in the project's nano.design file |
 
 ## Building on a Mac
 
@@ -64,7 +64,7 @@ must be reachable from the phone.
 
 For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
 transcripts and an approval; no pairing, lock or network) and optionally
-`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair|notifications|pair-notifications|pair-apns-key`
+`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair|notifications|pair-notifications|pair-apns-key|automations|automation|automation-webhook|automation-new`
 (`App/DemoData.swift`; compiled out of Release builds):
 
 ```sh

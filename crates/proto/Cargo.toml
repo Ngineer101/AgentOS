@@ -17,3 +17,6 @@ sha2 = "0.10"
 base64 = "0.22"
 hex = "0.4"
 url = "2"
+# Webhook deliveries sealed by the relay (see hookseal.rs).
+aes-gcm = "0.10"
+hkdf = "0.12"

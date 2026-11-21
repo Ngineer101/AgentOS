@@ -406,6 +406,9 @@ pub struct Session {
     /// command) in a fork of the conversation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub side_questions: bool,
+    /// The automation this session is a run of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_id: Option<String>,
 }
 
 /// Where a session's worktree is and which branch it is on.
@@ -1342,6 +1345,9 @@ pub struct PushPrefs {
     /// A session failed.
     #[serde(default)]
     pub failed: bool,
+    /// An automation's run finished or failed.
+    #[serde(default = "yes")]
+    pub automations: bool,
 }
 
 fn yes() -> bool {
@@ -1354,6 +1360,7 @@ impl Default for PushPrefs {
             approvals: true,
             turn_done: false,
             failed: false,
+            automations: true,
         }
     }
 }
