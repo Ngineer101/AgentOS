@@ -128,6 +128,14 @@ struct RootView: View {
     /// One automatic Face ID prompt per return to the foreground; after a
     /// cancel the user taps Unlock (avoids a prompt loop).
     @State private var autoUnlockTried = false
+    /// The cover stays up after the scene turns active until its exit
+    /// animation (the logo spins away) has played. Up at launch, so the logo
+    /// is on the first frame.
+    @State private var cover: CoverState = .shown
+    /// Bumped whenever the cover starts or cuts short an exit, so an exit
+    /// that was interrupted (the scene left active mid-animation) doesn't
+    /// hide the cover when its animation completes.
+    @State private var coverExit = 0
 
     var body: some View {
         ZStack {
@@ -146,9 +154,12 @@ struct RootView: View {
             case .removed:
                 RemovedView()
             }
-            if scenePhase != .active {
-                PrivacyCover()
+            // Derived from scenePhase as well as `cover`, so the cover is up
+            // in the same frame the scene stops being active.
+            if scenePhase != .active || cover != .hidden {
+                PrivacyCover(leaving: scenePhase == .active && cover == .leaving)
                     .transition(.identity)
+                    .allowsHitTesting(cover != .leaving)
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -156,14 +167,44 @@ struct RootView: View {
             case .background:
                 model.enterBackground()
                 autoUnlockTried = false
+                showCover()
             case .active:
                 tryAutoUnlock()
                 model.enterForeground()
+                dismissCover()
             default:
-                break
+                showCover()
             }
         }
-        .onAppear { tryAutoUnlock() }
+        .onAppear {
+            tryAutoUnlock()
+            // The scene can already be active on the first frame, with no
+            // onChange to follow.
+            if scenePhase == .active { dismissCover() }
+        }
+    }
+
+    private enum CoverState { case shown, leaving, hidden }
+
+    /// Back up at once, without animating (privacy), cutting short any exit.
+    private func showCover() {
+        coverExit += 1
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { cover = .shown }
+    }
+
+    /// Plays the cover's exit (the logo spins and shrinks away over the app as
+    /// the backdrop fades), then takes it out.
+    private func dismissCover() {
+        guard cover == .shown else { return }
+        coverExit += 1
+        let exit = coverExit
+        withAnimation(PrivacyCover.exitAnimation) {
+            cover = .leaving
+        } completion: {
+            if coverExit == exit { cover = .hidden }
+        }
     }
 
     private func tryAutoUnlock() {
@@ -173,19 +214,33 @@ struct RootView: View {
     }
 }
 
-/// Shown instead of any content while the scene is inactive or in the background.
+/// Shown instead of any content while the scene is inactive or in the
+/// background, and as the splash at launch. `leaving` is its exit: the logo
+/// spins as it shrinks away while the backdrop fades and the app shows through
+/// (with Reduce Motion the logo fades instead).
 struct PrivacyCover: View {
+    var leaving = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let exitAnimation = Animation.easeIn(duration: 0.7)
+
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+                .opacity(leaving ? 0 : 1)
             VStack(spacing: 12) {
                 Image("Logo")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 96, height: 96)
+                    .rotationEffect(.degrees(leaving && !reduceMotion ? 360 : 0))
+                    .scaleEffect(leaving && !reduceMotion ? 0.01 : 1)
+                    .opacity(leaving && reduceMotion ? 0 : 1)
                 Text("AgentHost")
                     .font(.headline)
                     .foregroundStyle(.secondary)
+                    .opacity(leaving ? 0 : 1)
             }
         }
         .accessibilityHidden(true)
