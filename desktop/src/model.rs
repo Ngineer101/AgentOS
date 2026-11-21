@@ -12,6 +12,8 @@ pub enum Screen {
     /// No session open: the empty state.
     Home,
     Session(String),
+    /// The automations: the list, the selected one and its runs.
+    Automations,
 }
 
 /// A Settings tab (macOS) or Preferences page (GNOME).
@@ -54,6 +56,8 @@ pub enum Menu {
     Section(String, f32, f32),
     /// The composer's model popover: model, effort and fast mode.
     Model,
+    /// A pop-up picker in the automation editor (where there's no native menu), by its key.
+    Pick(&'static str),
 }
 
 /// One status vocabulary everywhere: the sidebar, the toolbar capsule, the header.
@@ -606,6 +610,19 @@ pub struct App {
     pub agent_open: Option<(String, String)>,
     /// The agent panel shows the task's whole prompt.
     pub agent_task_open: bool,
+    /// Automations (protocol 5), as the host lists them.
+    pub automations: Vec<Automation>,
+    /// The automation shown on the Automations screen.
+    pub sel_auto: Option<String>,
+    /// Runs of automations, newest first, by automation (once asked for).
+    pub runs: HashMap<String, Vec<AutomationRun>>,
+    /// The automation editor is open, on `draft`.
+    pub auto_open: bool,
+    pub draft: AutoDraft,
+    /// An automation waiting for Delete to be confirmed.
+    pub confirm_delete_auto: Option<String>,
+    /// An automation waiting for "New URL" to be confirmed (the old one stops working).
+    pub confirm_rotate: Option<String>,
 }
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
@@ -701,6 +718,13 @@ pub fn init() -> App {
         agent_open: None,
         agent_task_open: false,
         effort_drag: None,
+        automations: vec![],
+        sel_auto: None,
+        runs: HashMap::new(),
+        auto_open: false,
+        draft: AutoDraft::blank(),
+        confirm_delete_auto: None,
+        confirm_rotate: None,
     }
 }
 
@@ -844,13 +868,16 @@ impl App {
         self.shortcuts_open = false;
         self.menu = None;
         self.confirm_archive = None;
+        self.auto_open = false;
+        self.confirm_delete_auto = None;
+        self.confirm_rotate = None;
     }
 
     /// The open session.
     pub fn current(&self) -> Option<&Session> {
         match &self.screen {
             Screen::Session(id) => self.session(id),
-            Screen::Home => None,
+            Screen::Home | Screen::Automations => None,
         }
     }
 
@@ -1045,11 +1072,12 @@ impl App {
             Refresh::HostInfo => self.call(Tag::HostInfo, m::HOST_INFO, json!({})),
             Refresh::ProjectRoots => self.call(Tag::ProjectRoots, m::PROJECT_BROWSE, json!({})),
             Refresh::Archived => self.call(Tag::Archived, m::SESSION_LIST, json!({"archived": true})),
+            Refresh::Automations => self.call(Tag::Automations, m::AUTOMATION_LIST, json!({})),
         }
     }
 
     pub fn refresh_all(&self) {
-        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals, Refresh::ProjectRoots] {
+        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals, Refresh::ProjectRoots, Refresh::Automations] {
             self.refresh(r);
         }
     }
@@ -1458,6 +1486,8 @@ impl App {
                 self.sub_ids.clear();
                 self.behind.clear();
                 self.error = None;
+                // Runs may have started or finished while away.
+                self.runs.clear();
                 self.refresh_all();
                 self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
                 self.call(Tag::Screen, m::SCREEN_STATUS, json!({}));
@@ -1663,13 +1693,79 @@ impl App {
                     }
                     self.error = Some(format!("Send prompt failed: {}", e.message));
                 }
+                (Tag::Automations, Ok(v)) => {
+                    self.automations = parse(v).unwrap_or_default();
+                    // On screen without its runs (the first list, a reconnect): fetch them.
+                    if self.screen == Screen::Automations {
+                        if let Some(id) = self.selected_automation().map(|a| a.automation_id.clone()).filter(|id| !self.runs.contains_key(id)) {
+                            self.select_automation(&id);
+                        }
+                    }
+                }
+                // An older host without automations: the screen says to update it.
+                (Tag::Automations, Err(_)) => self.automations.clear(),
+                (Tag::AutomationSaved, Ok(v)) => {
+                    self.draft.saving = false;
+                    self.draft.secret = TextEdit::new("").secure();
+                    if let Some(a) = parse::<Automation>(v) {
+                        let id = a.automation_id.clone();
+                        self.upsert_automation(a);
+                        self.auto_open = false;
+                        self.menu = None;
+                        self.screen = Screen::Automations;
+                        self.select_automation(&id);
+                    }
+                }
+                // The editor stays open with what was typed, and says what the host refused.
+                (Tag::AutomationSaved, Err(e)) => {
+                    self.draft.saving = false;
+                    self.draft.error = Some(e.message);
+                }
+                (Tag::AutomationUpdated { .. }, Ok(v)) => {
+                    if let Some(a) = parse::<Automation>(v) {
+                        self.upsert_automation(a);
+                    }
+                }
+                (Tag::AutomationUpdated { what }, Err(e)) => {
+                    self.error = Some(format!("{what} failed: {}", e.message));
+                    self.refresh(Refresh::Automations);
+                }
+                (Tag::AutomationRuns(id), Ok(v)) => {
+                    self.runs.insert(id, parse(v).unwrap_or_default());
+                }
+                (Tag::AutomationRuns(_), Err(e)) => self.error = Some(format!("Could not load the runs: {}", e.message)),
+                (Tag::AutomationRan(id), Ok(v)) => {
+                    if let Some(r) = parse::<AutomationRun>(v) {
+                        if let Some(a) = self.automations.iter_mut().find(|a| a.automation_id == id) {
+                            a.last_run = Some(r.clone());
+                        }
+                        upsert_run(self.runs.entry(id).or_default(), r);
+                    }
+                }
+                (Tag::AutomationRan(_), Err(e)) => self.error = Some(format!("Could not start the run: {}", e.message)),
+                (Tag::ScheduleCheck(cron), Ok(v)) => {
+                    if self.draft.checked == cron {
+                        self.draft.check = parse(v);
+                    }
+                }
+                (Tag::ScheduleCheck(cron), Err(e)) => {
+                    if self.draft.checked == cron {
+                        self.draft.check = Some(ScheduleCheck { error: Some(e.message), text: None, next: vec![] });
+                    }
+                }
                 (Tag::Quiet, _) => {}
                 (Tag::Action { refresh, .. }, Ok(_)) => self.refresh(refresh),
                 (Tag::Subscribed(id), Err(e)) => {
                     self.subscribed.remove(&id);
                     self.error = Some(format!("Could not open the session: {}", e.message));
                 }
-                (Tag::Action { what, .. }, Err(e)) => self.error = Some(format!("{what} failed: {}", e.message)),
+                (Tag::Action { what, refresh }, Err(e)) => {
+                    self.error = Some(format!("{what} failed: {}", e.message));
+                    // A delete already took it off the list: put it back.
+                    if refresh == Refresh::Automations {
+                        self.refresh(refresh);
+                    }
+                }
                 (Tag::PairStart, Err(e)) => self.error = Some(format!("Pairing could not start: {}", e.message)),
                 (Tag::SessionCreated, Err(e)) => self.error = Some(format!("Could not start the session: {}", e.message)),
                 (_, Err(e)) => self.error = Some(e.message),
@@ -2195,7 +2291,7 @@ impl App {
         let now = std::time::Instant::now();
         let here = match &self.screen {
             Screen::Session(id) => Some(id.clone()),
-            Screen::Home => None,
+            Screen::Home | Screen::Automations => None,
         };
         let fresh: Vec<PendingApproval> = self.approvals.iter().filter(|a| !self.toasted_approvals.contains(&a.approval_id)).cloned().collect();
         for a in fresh {
@@ -2321,6 +2417,11 @@ impl App {
                 }
             }
             m::N_CONNECTOR_CHANGED => self.refresh(Refresh::Connectors),
+            m::N_AUTOMATION_CHANGED => {
+                if let Some(ch) = parse::<AutomationChanged>(n.params) {
+                    self.on_automation_changed(ch);
+                }
+            }
             m::N_SCREEN_CHANGED => {
                 if let Some(st) = parse::<ScreenStatus>(n.params) {
                     self.screen_share = Some(st);
@@ -2384,4 +2485,692 @@ pub fn stop_at(n: usize, x: f32, span: f32) -> usize {
 pub fn allow_rule(a: &PendingApproval) -> Option<Vec<String>> {
     let rule: Vec<String> = a.arguments["allow_rule"].as_array()?.iter().map(|x| x.as_str().map(str::to_string)).collect::<Option<_>>()?;
     (!rule.is_empty()).then_some(rule)
+}
+
+// ---------------------------------------------------------------------------
+// Automations
+// ---------------------------------------------------------------------------
+
+/// What starts an automation, as the editor offers it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TriggerKind {
+    Schedule,
+    Webhook,
+    Manual,
+}
+
+impl TriggerKind {
+    pub const ALL: [TriggerKind; 3] = [TriggerKind::Schedule, TriggerKind::Webhook, TriggerKind::Manual];
+    pub fn title(self) -> &'static str {
+        match self {
+            TriggerKind::Schedule => "Schedule",
+            TriggerKind::Webhook => "Webhook",
+            TriggerKind::Manual => "By hand",
+        }
+    }
+    pub fn of(t: &AutomationTrigger) -> TriggerKind {
+        match t {
+            AutomationTrigger::Schedule { .. } => TriggerKind::Schedule,
+            AutomationTrigger::Webhook { .. } => TriggerKind::Webhook,
+            AutomationTrigger::Manual => TriggerKind::Manual,
+        }
+    }
+}
+
+/// The schedule editor's simple choices; each builds a cron expression.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Preset {
+    Hourly,
+    Daily,
+    Weekdays,
+    Weekly,
+    Monthly,
+    Custom,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 6] = [Preset::Hourly, Preset::Daily, Preset::Weekdays, Preset::Weekly, Preset::Monthly, Preset::Custom];
+    pub fn title(self) -> &'static str {
+        match self {
+            Preset::Hourly => "Every hour",
+            Preset::Daily => "Every day",
+            Preset::Weekdays => "Weekdays",
+            Preset::Weekly => "Every week",
+            Preset::Monthly => "Every month",
+            Preset::Custom => "Custom (cron)",
+        }
+    }
+    pub fn id(self) -> &'static str {
+        match self {
+            Preset::Hourly => "hourly",
+            Preset::Daily => "daily",
+            Preset::Weekdays => "weekdays",
+            Preset::Weekly => "weekly",
+            Preset::Monthly => "monthly",
+            Preset::Custom => "custom",
+        }
+    }
+    pub fn of_id(id: &str) -> Option<Preset> {
+        Preset::ALL.into_iter().find(|p| p.id() == id)
+    }
+}
+
+/// Days of the week as cron numbers them (0 is Sunday).
+pub const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/// A time of day as typed: "09:00", "9:30", "9" or "21.15".
+pub fn parse_time(s: &str) -> Option<(u32, u32)> {
+    let s = s.trim();
+    let (h, m) = match s.split_once([':', '.']) {
+        Some((h, m)) => (h.trim(), m.trim()),
+        None => (s, "0"),
+    };
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some((h, m))
+}
+
+/// The cron expression a preset makes ("30 9 * * 1-5"), or what to fix in its fields.
+pub fn preset_cron(p: Preset, time: &str, weekday: u8, day: &str, custom: &str) -> Result<String, String> {
+    if p == Preset::Hourly {
+        return Ok("0 * * * *".into());
+    }
+    if p == Preset::Custom {
+        let c = custom.split_whitespace().collect::<Vec<_>>().join(" ");
+        return if c.is_empty() { Err("Type a cron expression: minute, hour, day of month, month, day of week.".into()) } else { Ok(c) };
+    }
+    let (h, m) = parse_time(time).ok_or("Type the time as HH:MM, like 09:00.")?;
+    Ok(match p {
+        Preset::Daily => format!("{m} {h} * * *"),
+        Preset::Weekdays => format!("{m} {h} * * 1-5"),
+        Preset::Weekly => format!("{m} {h} * * {}", weekday.min(6)),
+        _ => {
+            let d: u32 = day.trim().parse().ok().filter(|d| (1..=31).contains(d)).ok_or("Type the day of the month, 1 to 31.")?;
+            format!("{m} {h} {d} * *")
+        }
+    })
+}
+
+/// How the editor shows an existing cron: the preset that makes it, with its time ("09:00"),
+/// weekday and day of the month; anything else is Custom.
+pub fn preset_of(cron: &str) -> (Preset, String, u8, String) {
+    let f: Vec<&str> = cron.split_whitespace().collect();
+    let num = |s: &str, max: u32| s.parse::<u32>().ok().filter(|n| *n <= max);
+    let custom = (Preset::Custom, "09:00".to_string(), 1, "1".to_string());
+    if f == ["0", "*", "*", "*", "*"] {
+        return (Preset::Hourly, "09:00".into(), 1, "1".into());
+    }
+    let [m, h, dom, mon, dow] = f.as_slice() else { return custom };
+    let (Some(m), Some(h)) = (num(m, 59), num(h, 23)) else { return custom };
+    let time = format!("{h:02}:{m:02}");
+    match (*dom, *mon, *dow) {
+        ("*", "*", "*") => (Preset::Daily, time, 1, "1".into()),
+        ("*", "*", "1-5") => (Preset::Weekdays, time, 1, "1".into()),
+        ("*", "*", d) if num(d, 7).is_some() => (Preset::Weekly, time, (num(d, 7).unwrap_or(0) % 7) as u8, "1".into()),
+        (d, "*", "*") if num(d, 31).is_some_and(|d| d >= 1) => (Preset::Monthly, time, 1, d.to_string()),
+        _ => custom,
+    }
+}
+
+/// The prompt a new automation starts with for a webhook source.
+pub fn source_prompt(src: WebhookSource) -> &'static str {
+    match src {
+        WebhookSource::Sentry => SENTRY_PROMPT,
+        WebhookSource::Github => GITHUB_PROMPT,
+        WebhookSource::Generic => GENERIC_PROMPT,
+    }
+}
+
+/// The prompt is empty or one the app filled in (a webhook preset or a schedule example), so
+/// changing the trigger may replace it.
+pub fn prompt_is_preset(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || [SENTRY_PROMPT, GITHUB_PROMPT, GENERIC_PROMPT].iter().chain(SCHEDULE_EXAMPLES.iter().map(|(_, p)| p)).any(|p| p.trim() == t)
+}
+
+/// What starts an automation, in a few words: its schedule, "Sentry webhook", or "By hand".
+pub fn trigger_line(a: &Automation) -> String {
+    match &a.trigger {
+        AutomationTrigger::Schedule { cron } => a.schedule_text.clone().unwrap_or_else(|| cron.clone()),
+        AutomationTrigger::Webhook { source: WebhookSource::Generic, .. } => "Webhook".into(),
+        AutomationTrigger::Webhook { source, .. } => format!("{} webhook", source.display_name()),
+        AutomationTrigger::Manual => "By hand".into(),
+    }
+}
+
+pub fn outcome_word(o: RunOutcome) -> &'static str {
+    match o {
+        RunOutcome::Running => "Running",
+        RunOutcome::Succeeded => "Succeeded",
+        RunOutcome::Failed => "Failed",
+        RunOutcome::Cancelled => "Cancelled",
+        RunOutcome::TimedOut => "Timed out",
+        RunOutcome::Skipped => "Skipped",
+    }
+}
+
+pub fn run_trigger_word(t: RunTrigger) -> &'static str {
+    match t {
+        RunTrigger::Schedule => "Scheduled",
+        RunTrigger::CatchUp => "Catch-up",
+        RunTrigger::Webhook => "Webhook",
+        RunTrigger::Manual => "By hand",
+    }
+}
+
+/// The two tools an automation may run without asking, as the editor names them.
+pub fn auto_approve_title(tool: &str) -> &'static str {
+    match tool {
+        "create_pull_request" => "Open pull requests",
+        "git_push" => "Push its own branch",
+        _ => "Use a tool",
+    }
+}
+
+/// The automation editor's fields.
+pub struct AutoDraft {
+    /// The automation being edited; `None` for a new one.
+    pub id: Option<String>,
+    pub name: TextEdit,
+    pub workspace: Option<String>,
+    /// The login ([`login_key`]).
+    pub login: Option<String>,
+    pub prompt: TextEdit,
+    pub trigger: TriggerKind,
+    pub preset: Preset,
+    pub time: TextEdit,
+    pub weekday: u8,
+    pub day: TextEdit,
+    pub cron: TextEdit,
+    /// The host's word on the schedule, and the cron it is (being) checked for.
+    pub check: Option<ScheduleCheck>,
+    pub checked: String,
+    pub source: WebhookSource,
+    /// A new signing secret; blank keeps the stored one.
+    pub secret: TextEdit,
+    pub remove_secret: bool,
+    /// Dedupe, cooldown and filters are showing.
+    pub advanced: bool,
+    pub dedupe: TextEdit,
+    pub cooldown: TextEdit,
+    /// Filter rules, one `field = value` per line.
+    pub filters: TextEdit,
+    pub auto_approve: Vec<String>,
+    pub max_minutes: TextEdit,
+    pub enabled: bool,
+    /// Why the last Save didn't go through.
+    pub error: Option<String>,
+    pub saving: bool,
+}
+
+impl AutoDraft {
+    pub fn blank() -> AutoDraft {
+        AutoDraft {
+            id: None,
+            name: TextEdit::new(""),
+            workspace: None,
+            login: None,
+            prompt: TextEdit::new(""),
+            trigger: TriggerKind::Schedule,
+            preset: Preset::Daily,
+            time: TextEdit::new("09:00"),
+            weekday: 1,
+            day: TextEdit::new("1"),
+            cron: TextEdit::new(""),
+            check: None,
+            checked: String::new(),
+            source: WebhookSource::Sentry,
+            secret: TextEdit::new("").secure(),
+            remove_secret: false,
+            advanced: false,
+            dedupe: TextEdit::new(""),
+            cooldown: TextEdit::new("1440"),
+            filters: TextEdit::new(""),
+            auto_approve: vec![],
+            max_minutes: TextEdit::new("60"),
+            enabled: true,
+            error: None,
+            saving: false,
+        }
+    }
+
+    /// The editor on an existing automation.
+    pub fn of(a: &Automation) -> AutoDraft {
+        let mut d = AutoDraft::blank();
+        d.id = Some(a.automation_id.clone());
+        d.name = TextEdit::new(a.name.clone());
+        d.workspace = Some(a.workspace_id.clone());
+        d.login = Some(a.profile_id.clone().unwrap_or_else(|| a.agent.as_str().to_string()));
+        d.prompt = TextEdit::new(a.prompt.clone());
+        d.trigger = TriggerKind::of(&a.trigger);
+        match &a.trigger {
+            AutomationTrigger::Schedule { cron } => {
+                let (p, time, wd, day) = preset_of(cron);
+                d.preset = p;
+                d.time = TextEdit::new(time);
+                d.weekday = wd;
+                d.day = TextEdit::new(day);
+                d.cron = TextEdit::new(cron.clone());
+            }
+            AutomationTrigger::Webhook { source, filter, dedupe_key, cooldown_minutes } => {
+                d.source = *source;
+                d.dedupe = TextEdit::new(dedupe_key.clone().unwrap_or_default());
+                d.cooldown = TextEdit::new(cooldown_minutes.to_string());
+                d.filters = TextEdit::new(filter.iter().map(|f| format!("{} = {}", f.path, f.equals)).collect::<Vec<_>>().join("\n"));
+                d.advanced = dedupe_key.is_some() || !filter.is_empty() || *cooldown_minutes != 24 * 60;
+            }
+            AutomationTrigger::Manual => {}
+        }
+        d.auto_approve = a.auto_approve.clone();
+        d.max_minutes = TextEdit::new(a.max_minutes.to_string());
+        d.enabled = a.enabled;
+        d
+    }
+
+    /// The schedule's cron expression, for a schedule.
+    pub fn cron_expr(&self) -> Option<Result<String, String>> {
+        (self.trigger == TriggerKind::Schedule).then(|| preset_cron(self.preset, &self.time.text, self.weekday, &self.day.text, &self.cron.text))
+    }
+}
+
+/// The editor's fields as `automation.create` params, or what to fix first.
+pub fn draft_params(d: &AutoDraft, agents: &[AgentStatus]) -> Result<AutomationCreateParams, String> {
+    let name = d.name.text.trim().to_string();
+    if name.is_empty() {
+        return Err("Give the automation a name.".into());
+    }
+    let workspace_id = d.workspace.clone().ok_or("Pick the workspace it runs in.")?;
+    let login = d.login.as_deref().and_then(|k| agents.iter().find(|a| login_key(a) == k)).ok_or("Pick the agent login it runs as.")?;
+    let prompt = d.prompt.text.trim().to_string();
+    if prompt.is_empty() {
+        return Err("Say what each run should do.".into());
+    }
+    if prompt.chars().count() > MAX_AUTOMATION_PROMPT {
+        return Err(format!("The prompt is too long: at most {MAX_AUTOMATION_PROMPT} characters."));
+    }
+    let trigger = match d.trigger {
+        TriggerKind::Schedule => AutomationTrigger::Schedule { cron: d.cron_expr().unwrap_or_else(|| Err(String::new()))? },
+        TriggerKind::Manual => AutomationTrigger::Manual,
+        TriggerKind::Webhook => {
+            let mut filter = vec![];
+            for line in d.filters.text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                match line.split_once('=') {
+                    Some((p, v)) if !p.trim().is_empty() => filter.push(WebhookMatch { path: p.trim().into(), equals: v.trim().into() }),
+                    _ => return Err(format!("A filter is field = value, one per line, not \u{201c}{line}\u{201d}.")),
+                }
+            }
+            let dedupe = d.dedupe.text.trim();
+            let cooldown = d.cooldown.text.trim();
+            let cooldown_minutes = if cooldown.is_empty() { 24 * 60 } else { cooldown.parse().map_err(|_| "The cooldown is a number of minutes.")? };
+            AutomationTrigger::Webhook { source: d.source, filter, dedupe_key: (!dedupe.is_empty()).then(|| dedupe.to_string()), cooldown_minutes }
+        }
+    };
+    let max: u32 = d.max_minutes.text.trim().parse().ok().filter(|m| (1..=720).contains(m)).ok_or("The longest a run may take is 1 to 720 minutes.")?;
+    let secret = d.secret.text.trim();
+    Ok(AutomationCreateParams {
+        name,
+        workspace_id,
+        agent: login.agent,
+        profile_id: login.profile_id.clone(),
+        prompt,
+        trigger: trigger.clone(),
+        auto_approve: AUTO_APPROVABLE.iter().filter(|t| d.auto_approve.iter().any(|x| x == *t)).map(|t| t.to_string()).collect(),
+        max_minutes: Some(max),
+        enabled: d.enabled,
+        webhook_secret: (matches!(trigger, AutomationTrigger::Webhook { .. }) && !secret.is_empty()).then(|| secret.to_string()),
+    })
+}
+
+/// `automation.update` params with only what changed from `a`. `remove_secret` clears the
+/// stored secret (a new one in `p` wins).
+pub fn update_diff(a: &Automation, p: &AutomationCreateParams, remove_secret: bool) -> AutomationUpdateParams {
+    let mut u = AutomationUpdateParams { automation_id: a.automation_id.clone(), ..Default::default() };
+    if a.name != p.name {
+        u.name = Some(p.name.clone());
+    }
+    if a.enabled != p.enabled {
+        u.enabled = Some(p.enabled);
+    }
+    if a.workspace_id != p.workspace_id {
+        u.workspace_id = Some(p.workspace_id.clone());
+    }
+    // The login: an agent always goes with its profile (the old profile is another agent's).
+    let key = |agent: AgentKind, pid: &Option<String>| pid.clone().filter(|id| !id.is_empty()).unwrap_or_else(|| agent.as_str().to_string());
+    if a.agent != p.agent {
+        u.agent = Some(p.agent);
+    }
+    if a.agent != p.agent || key(a.agent, &a.profile_id) != key(p.agent, &p.profile_id) {
+        u.profile_id = Some(p.profile_id.clone().unwrap_or_default());
+    }
+    if a.prompt != p.prompt {
+        u.prompt = Some(p.prompt.clone());
+    }
+    if a.trigger != p.trigger {
+        u.trigger = Some(p.trigger.clone());
+    }
+    if a.auto_approve != p.auto_approve {
+        u.auto_approve = Some(p.auto_approve.clone());
+    }
+    if p.max_minutes.is_some_and(|m| m != a.max_minutes) {
+        u.max_minutes = p.max_minutes;
+    }
+    u.webhook_secret = match (&p.webhook_secret, remove_secret) {
+        (Some(s), _) => Some(s.clone()),
+        (None, true) => Some(String::new()),
+        (None, false) => None,
+    };
+    u
+}
+
+/// Put a run in a newest-first list (replacing its older copy).
+pub fn upsert_run(list: &mut Vec<AutomationRun>, r: AutomationRun) {
+    match list.iter_mut().find(|x| x.run_id == r.run_id) {
+        Some(x) => *x = r,
+        None => list.push(r),
+    }
+    list.sort_by_key(|x| std::cmp::Reverse(x.started_at));
+}
+
+/// Apply `automation.changed`: the automation is replaced, added or gone; a loaded run list
+/// takes its latest run.
+pub fn apply_automation_changed(list: &mut Vec<Automation>, runs: &mut HashMap<String, Vec<AutomationRun>>, ch: AutomationChanged) {
+    if ch.removed {
+        list.retain(|a| a.automation_id != ch.automation_id);
+        runs.remove(&ch.automation_id);
+        return;
+    }
+    let Some(a) = ch.automation else { return };
+    if let (Some(r), Some(rl)) = (&a.last_run, runs.get_mut(&a.automation_id)) {
+        upsert_run(rl, r.clone());
+    }
+    match list.iter_mut().find(|x| x.automation_id == a.automation_id) {
+        Some(x) => *x = a,
+        None => list.push(a),
+    }
+}
+
+impl App {
+    /// The host has automations (protocol 5).
+    pub fn host_has_automations(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.protocol_version >= 5)
+    }
+
+    pub fn automation(&self, id: &str) -> Option<&Automation> {
+        self.automations.iter().find(|a| a.automation_id == id)
+    }
+
+    /// The automation the screen shows: the chosen one, else the first.
+    pub fn selected_automation(&self) -> Option<&Automation> {
+        self.sel_auto.as_deref().and_then(|id| self.automation(id)).or(self.automations.first())
+    }
+
+    /// Open the Automations screen (on the automation chosen last, else the first).
+    pub fn open_automations(&mut self) {
+        self.close_overlays();
+        self.session_rename = None;
+        self.screen = Screen::Automations;
+        self.refresh(Refresh::Automations);
+        if let Some(id) = self.selected_automation().map(|a| a.automation_id.clone()) {
+            self.select_automation(&id);
+        }
+    }
+
+    /// Show an automation and fetch its runs.
+    pub fn select_automation(&mut self, id: &str) {
+        self.sel_auto = Some(id.to_string());
+        self.call(Tag::AutomationRuns(id.to_string()), m::AUTOMATION_RUNS, json!({"automation_id": id, "limit": 50}));
+    }
+
+    /// The New Automation editor: the last workspace picked for a session (else the first
+    /// folder), its default login (else the first that's ready), every day at 09:00.
+    pub fn new_automation(&mut self) {
+        self.close_overlays();
+        let mut d = AutoDraft::blank();
+        d.workspace = self
+            .new_ws
+            .clone()
+            .filter(|w| self.workspace(w).is_some_and(|w| w.kind != WorkspaceKind::Scratch))
+            .or_else(|| self.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).or(self.workspaces.first()).map(|w| w.workspace_id.clone()));
+        let agents = self.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
+        d.login = d.workspace.as_deref().and_then(|w| self.default_login(w)).or_else(|| agents.iter().find(|a| a.available).map(login_key));
+        self.draft = d;
+        self.draft.name.focused = true;
+        self.auto_open = true;
+        self.recheck_schedule();
+    }
+
+    pub fn edit_automation(&mut self, id: &str) {
+        let Some(a) = self.automation(id) else { return };
+        let d = AutoDraft::of(a);
+        self.close_overlays();
+        self.draft = d;
+        self.auto_open = true;
+        self.recheck_schedule();
+    }
+
+    pub fn close_automation_editor(&mut self) {
+        self.auto_open = false;
+        self.menu = None;
+    }
+
+    /// The editor's workspace: its default login comes with it.
+    pub fn draft_pick_workspace(&mut self, ws: &str) {
+        self.draft.workspace = Some(ws.to_string());
+        if let Some(key) = self.default_login(ws) {
+            self.draft.login = Some(key);
+        }
+    }
+
+    /// Change what starts it. A prompt the app filled in follows: a new webhook gets its
+    /// source's prompt, and a webhook prompt goes when the trigger stops being a webhook.
+    pub fn draft_set_trigger(&mut self, kind: TriggerKind) {
+        let d = &mut self.draft;
+        if d.trigger == kind {
+            return;
+        }
+        d.trigger = kind;
+        if d.id.is_none() && prompt_is_preset(&d.prompt.text) {
+            let webhook_preset = [SENTRY_PROMPT, GITHUB_PROMPT, GENERIC_PROMPT].iter().any(|p| p.trim() == d.prompt.text.trim());
+            if kind == TriggerKind::Webhook {
+                d.prompt.replace_text(source_prompt(d.source));
+            } else if webhook_preset {
+                d.prompt.replace_text("");
+            }
+        }
+        self.recheck_schedule();
+    }
+
+    /// Change the webhook's sender; on a new automation an untouched prompt becomes its preset.
+    pub fn draft_set_source(&mut self, src: WebhookSource) {
+        let d = &mut self.draft;
+        if d.source == src {
+            return;
+        }
+        d.source = src;
+        if d.id.is_none() && prompt_is_preset(&d.prompt.text) {
+            d.prompt.replace_text(source_prompt(src));
+        }
+    }
+
+    /// Start from one of [`SCHEDULE_EXAMPLES`]: its prompt, and its name if none is typed.
+    pub fn draft_use_example(&mut self, i: usize) {
+        let Some((name, prompt)) = SCHEDULE_EXAMPLES.get(i) else { return };
+        if self.draft.name.text.trim().is_empty() || SCHEDULE_EXAMPLES.iter().any(|(n, _)| *n == self.draft.name.text.trim()) {
+            self.draft.name.replace_text(*name);
+        }
+        self.draft.prompt.replace_text(*prompt);
+    }
+
+    pub fn draft_set_preset(&mut self, p: Preset) {
+        // Custom starts from what the preset made, to edit.
+        if p == Preset::Custom && self.draft.cron.text.trim().is_empty() {
+            if let Some(Ok(c)) = self.draft.cron_expr() {
+                self.draft.cron.replace_text(&c);
+            }
+        }
+        self.draft.preset = p;
+        self.recheck_schedule();
+    }
+
+    pub fn draft_set_weekday(&mut self, d: u8) {
+        self.draft.weekday = d.min(6);
+        self.recheck_schedule();
+    }
+
+    pub fn draft_toggle_approve(&mut self, tool: &str) {
+        let list = &mut self.draft.auto_approve;
+        if list.iter().any(|t| t == tool) {
+            list.retain(|t| t != tool);
+        } else {
+            list.push(tool.to_string());
+        }
+    }
+
+    /// Ask the host about the schedule as it now stands (each change; a stale answer is
+    /// dropped). A schedule that can't be built says why at once.
+    pub fn recheck_schedule(&mut self) {
+        match self.draft.cron_expr() {
+            None => {
+                self.draft.check = None;
+                self.draft.checked.clear();
+            }
+            Some(Err(e)) => {
+                self.draft.checked.clear();
+                self.draft.check = Some(ScheduleCheck { error: Some(e), text: None, next: vec![] });
+            }
+            Some(Ok(cron)) => {
+                if cron == self.draft.checked && self.draft.check.is_some() {
+                    return;
+                }
+                self.draft.checked = cron.clone();
+                self.draft.check = None;
+                if self.host_has_automations() {
+                    self.call(Tag::ScheduleCheck(cron.clone()), m::AUTOMATION_CHECK_SCHEDULE, json!({"cron": cron}));
+                }
+            }
+        }
+    }
+
+    /// Save: create it, or send only what changed. Problems show in the editor.
+    pub fn save_automation(&mut self) {
+        if self.draft.saving {
+            return;
+        }
+        let agents = self.info.as_ref().map(|i| i.agents.clone()).unwrap_or_default();
+        let p = match draft_params(&self.draft, &agents) {
+            Ok(p) => p,
+            Err(e) => {
+                self.draft.error = Some(e);
+                return;
+            }
+        };
+        if let Some(e) = self.draft.check.as_ref().and_then(|c| c.error.clone()).filter(|_| self.draft.trigger == TriggerKind::Schedule) {
+            self.draft.error = Some(e);
+            return;
+        }
+        self.draft.error = None;
+        let Some(id) = self.draft.id.clone() else {
+            self.draft.saving = true;
+            self.call(Tag::AutomationSaved, m::AUTOMATION_CREATE, json!(p));
+            return;
+        };
+        let Some(a) = self.automation(&id) else {
+            self.draft.error = Some("This automation was deleted.".into());
+            return;
+        };
+        let u = update_diff(a, &p, self.draft.remove_secret);
+        if u == (AutomationUpdateParams { automation_id: id, ..Default::default() }) {
+            self.close_automation_editor();
+            return;
+        }
+        self.draft.saving = true;
+        self.call(Tag::AutomationSaved, m::AUTOMATION_UPDATE, json!(u));
+    }
+
+    /// The on/off switch.
+    pub fn set_automation_enabled(&self, id: &str, on: bool) {
+        let what = if on { "Turn on the automation" } else { "Turn off the automation" };
+        self.call(Tag::AutomationUpdated { what: what.into() }, m::AUTOMATION_UPDATE, json!({"automation_id": id, "enabled": on}));
+    }
+
+    /// Run Now is offered unless a run is still going.
+    pub fn can_run_now(&self, a: &Automation) -> bool {
+        self.conn == Conn::Connected && a.last_run.as_ref().is_none_or(|r| r.outcome.is_done())
+    }
+
+    pub fn run_automation_now(&self, id: &str) {
+        if self.automation(id).is_some_and(|a| self.can_run_now(a)) {
+            self.call(Tag::AutomationRan(id.to_string()), m::AUTOMATION_RUN_NOW, json!({"automation_id": id}));
+        }
+    }
+
+    /// Delete…: asks first, then deletes.
+    pub fn delete_automation(&mut self, id: &str) {
+        if self.confirm_delete_auto.as_deref() != Some(id) {
+            self.menu = None;
+            self.confirm_delete_auto = Some(id.to_string());
+            return;
+        }
+        self.confirm_delete_auto = None;
+        if self.draft.id.as_deref() == Some(id) {
+            self.close_automation_editor();
+        }
+        self.automations.retain(|a| a.automation_id != id);
+        self.runs.remove(id);
+        if self.sel_auto.as_deref() == Some(id) {
+            self.sel_auto = None;
+        }
+        self.act("Delete automation", m::AUTOMATION_DELETE, json!({"automation_id": id}), Refresh::Automations);
+    }
+
+    /// New URL…: asks first (the old URL stops working), then rotates.
+    pub fn rotate_webhook(&mut self, id: &str) {
+        if self.confirm_rotate.as_deref() != Some(id) {
+            self.confirm_rotate = Some(id.to_string());
+            return;
+        }
+        self.confirm_rotate = None;
+        self.call(Tag::AutomationUpdated { what: "Make a new webhook URL".into() }, m::AUTOMATION_UPDATE, json!({"automation_id": id, "rotate_webhook": true}));
+    }
+
+    /// Open a run's session in the session view (an archived one once it's listed).
+    pub fn open_run(&mut self, session_id: &str) {
+        self.close_overlays();
+        if self.session(session_id).is_none() {
+            self.refresh(Refresh::Archived);
+        }
+        self.open_session(session_id);
+    }
+
+    /// Automations running now.
+    pub fn automations_running(&self) -> usize {
+        self.automations.iter().filter(|a| a.last_run.as_ref().is_some_and(|r| r.outcome == RunOutcome::Running)).count()
+    }
+
+    fn upsert_automation(&mut self, a: Automation) {
+        match self.automations.iter_mut().find(|x| x.automation_id == a.automation_id) {
+            Some(x) => *x = a,
+            None => self.automations.push(a),
+        }
+    }
+
+    fn on_automation_changed(&mut self, ch: AutomationChanged) {
+        let id = ch.automation_id.clone();
+        let removed = ch.removed;
+        let had_runs = self.runs.contains_key(&id);
+        apply_automation_changed(&mut self.automations, &mut self.runs, ch);
+        if removed {
+            if self.sel_auto.as_deref() == Some(id.as_str()) {
+                self.sel_auto = None;
+            }
+            if self.auto_open && self.draft.id.as_deref() == Some(id.as_str()) {
+                self.close_automation_editor();
+                self.notice = Some("The automation you were editing was deleted.".into());
+            }
+            return;
+        }
+        // A run started or finished: its list on screen catches up (details, older runs).
+        if had_runs && self.screen == Screen::Automations && self.sel_auto.as_deref() == Some(id.as_str()) {
+            self.select_automation(&id);
+        }
+    }
 }

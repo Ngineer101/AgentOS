@@ -410,6 +410,9 @@ pub struct Session {
     /// more than one). Clients show its number ("#48") in the session list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<SessionPullRequest>,
+    /// The automation this session is a run of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_id: Option<String>,
 }
 
 /// A pull request a session opened.
@@ -1374,6 +1377,9 @@ pub struct PushPrefs {
     /// A session failed.
     #[serde(default)]
     pub failed: bool,
+    /// An automation's run finished or failed.
+    #[serde(default = "yes")]
+    pub automations: bool,
 }
 
 fn yes() -> bool {
@@ -1386,6 +1392,7 @@ impl Default for PushPrefs {
             approvals: true,
             turn_done: false,
             failed: false,
+            automations: true,
         }
     }
 }

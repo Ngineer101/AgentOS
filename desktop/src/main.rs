@@ -1,6 +1,7 @@
 //! agenthost desktop app: the full control surface, over the host's Unix socket.
 
 mod audio;
+mod automations;
 mod brand;
 mod bridge;
 mod commands;

@@ -11,6 +11,7 @@ import {
   verifyEd25519,
 } from "./codec";
 import type { Env } from "./index";
+import { sealToHost } from "./seal";
 
 export type Role = "host" | "device" | "pair";
 
@@ -31,13 +32,34 @@ const MAX_HOST_FRAME = MAX_FRAME + 256;
 /** Upper bound on simultaneously open pairing slots per host. */
 export const MAX_PAIRING_SLOTS = 64;
 
+/** Webhook ingress limits. */
+export const MAX_HOOK_BODY = 262_144;
+export const MAX_HOOKS = 256;
+export const MAX_QUEUED_HOOKS = 200;
+export const HOOK_RATE_LIMIT = 60;
+export const HOOK_RATE_WINDOW_MS = 60_000;
+export const HOOK_TTL_MS = 24 * 60 * 60 * 1000;
+/** Request headers never put into a webhook envelope (besides any `cf-*`). */
+const DROPPED_HEADERS = new Set(["cookie", "x-forwarded-for", "x-real-ip", "true-client-ip"]);
+
 // Storage keys. Only these are ever written:
 //   host_key          the host relay public key (base64url)
 //   dev:<pubkey>      one entry per allowed device relay public key
 //   pair:<tokenhash>  open pairing slot -> expires_at (unix ms); deleted on use/close/expiry
+//   hook_key          the host's X25519 seal key for webhook deliveries (base64url)
+//   hook:<hash>       one entry per registered hook: base64url(sha256(hook_id))
+//   hookq:<id>        a sealed webhook delivery -> {sealed, at}; deleted on ack or after 24 h
 const HOST_KEY = "host_key";
 const DEV_PREFIX = "dev:";
 const PAIR_PREFIX = "pair:";
+const HOOK_KEY = "hook_key";
+const HOOK_PREFIX = "hook:";
+const HOOKQ_PREFIX = "hookq:";
+
+interface QueuedHook {
+  sealed: string;
+  at: number;
+}
 
 type Stage = "pending" | "authing" | "ready" | "closed";
 
@@ -61,6 +83,12 @@ const dec = new TextDecoder();
 export class RelayObject extends DurableObject<Env> {
   /** Messages that arrive while a socket's auth is being verified (awake only). */
   private queued = new Map<WebSocket, (string | ArrayBuffer)[]>();
+  /** Number of `hookq:` entries; loaded lazily, then kept in step (awake only). */
+  private hookQueueSize: number | null = null;
+  /** Recent request times per hook hash, for the rate limit (awake only). */
+  private hookHits = new Map<string, number[]>();
+  /** Last millisecond used in a delivery_id, so ids sort in arrival order. */
+  private lastDeliveryMs = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -74,6 +102,8 @@ export class RelayObject extends DurableObject<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const hook = /^\/v1\/hook\/([0-9a-f]{32})\/([A-Za-z0-9_-]{22,64})$/.exec(url.pathname);
+    if (hook) return this.ingestHook(request, hook[1]!, hook[2]!);
     const m = /^\/v1\/relay\/([0-9a-f]{32})\/(host|device|pair)$/.exec(url.pathname);
     if (!m) return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -158,7 +188,7 @@ export class RelayObject extends DurableObject<Env> {
     if (wasReady) this.afterClosed(att);
   }
 
-  /** Auth timeouts and pairing-slot expiry. */
+  /** Auth timeouts, pairing-slot expiry and expiry of undelivered webhooks. */
   override async alarm(): Promise<void> {
     const now = Date.now();
     let next = Infinity;
@@ -171,6 +201,15 @@ export class RelayObject extends DurableObject<Env> {
     for (const [key, expiresAt] of this.ctx.storage.kv.list<number>({ prefix: PAIR_PREFIX })) {
       if (expiresAt <= now) this.ctx.storage.kv.delete(key);
       else next = Math.min(next, expiresAt);
+    }
+    // Queue keys sort by arrival, so only a prefix of them can have expired.
+    for (const [key, entry] of this.ctx.storage.kv.list<QueuedHook>({ prefix: HOOKQ_PREFIX })) {
+      if (entry.at + HOOK_TTL_MS <= now) {
+        this.deleteQueued(key);
+      } else {
+        next = Math.min(next, entry.at + HOOK_TTL_MS);
+        break;
+      }
     }
     if (next !== Infinity) await this.ctx.storage.setAlarm(next);
   }
@@ -269,6 +308,15 @@ export class RelayObject extends DurableObject<Env> {
     att.publicKey = key;
     ws.serializeAttachment(att);
     safeSend(ws, JSON.stringify({ type: "ready", conn_id: att.connId }));
+    // Undelivered (or unacknowledged) webhooks, oldest first.
+    const cutoff = Date.now() - HOOK_TTL_MS;
+    for (const [k, entry] of this.ctx.storage.kv.list<QueuedHook>({ prefix: HOOKQ_PREFIX })) {
+      if (entry.at <= cutoff) {
+        this.deleteQueued(k);
+        continue;
+      }
+      safeSend(ws, hookFrame(k.slice(HOOKQ_PREFIX.length), entry.sealed));
+    }
   }
 
   private async consumePairingSlot(token: Uint8Array): Promise<boolean> {
@@ -387,6 +435,34 @@ export class RelayObject extends DurableObject<Env> {
         return;
       }
 
+      case "hooks.set": {
+        const sealKey = canonicalKey(msg.seal_key);
+        if (!sealKey) return error("hooks.set: invalid seal_key");
+        if (!Array.isArray(msg.hooks)) return error("hooks.set: hooks must be an array");
+        if (msg.hooks.length > MAX_HOOKS) return error(`hooks.set: at most ${MAX_HOOKS} hooks`);
+        const hashes = new Set<string>();
+        for (const h of msg.hooks) {
+          const c = canonicalKey(h);
+          if (!c) return error("hooks.set: invalid hook hash");
+          hashes.add(c);
+        }
+        if (kv.get(HOOK_KEY) !== sealKey) kv.put(HOOK_KEY, sealKey);
+        for (const [k] of kv.list({ prefix: HOOK_PREFIX })) {
+          if (!hashes.has(k.slice(HOOK_PREFIX.length))) kv.delete(k);
+        }
+        for (const h of hashes) {
+          if (kv.get(HOOK_PREFIX + h) === undefined) kv.put(HOOK_PREFIX + h, 1);
+        }
+        for (const h of this.hookHits.keys()) if (!hashes.has(h)) this.hookHits.delete(h);
+        return;
+      }
+
+      case "hook.ack": {
+        if (typeof msg.delivery_id !== "string") return error("hook.ack: invalid delivery_id");
+        this.deleteQueued(HOOKQ_PREFIX + msg.delivery_id); // unknown id: nothing to do
+        return;
+      }
+
       case "close": {
         if (typeof msg.conn_id !== "string") return error("close: invalid conn_id");
         let code = 4000;
@@ -403,6 +479,129 @@ export class RelayObject extends DurableObject<Env> {
 
       default:
         return error(`unknown control message: ${msg.type}`);
+    }
+  }
+
+  // ------------------------------------------------------------ webhooks
+
+  /**
+   * Webhook ingress. The plaintext request exists only in memory here: it is
+   * sealed to the host's seal key at once, and only the sealed form is stored
+   * and forwarded. Answers without waiting for the host.
+   */
+  private async ingestHook(request: Request, relayId: string, hookId: string): Promise<Response> {
+    const done = async (status: number, body: Record<string, unknown>, headers?: HeadersInit) => {
+      log(relayId, "hook", `${status === 202 ? "accepted" : "rejected"} ${status}`);
+      // Consume (at most the limit of) an unread body before replying; the
+      // runtime raises an error if the request stream is left unread.
+      if (request.body && !request.bodyUsed) await readLimited(request, MAX_HOOK_BODY).catch(() => null);
+      return jsonResponse(status, body, headers);
+    };
+    if (request.method !== "POST") {
+      return done(405, { error: "method not allowed" }, { allow: "POST" });
+    }
+    const kv = this.ctx.storage.kv;
+    const hash = b64urlEncode(await sha256(enc.encode(hookId)));
+    if (!this.hookRegistered(hash)) return done(404, { error: "unknown hook" });
+
+    const declared = request.headers.get("content-length");
+    if (declared !== null && !(Number(declared) <= MAX_HOOK_BODY)) {
+      return done(413, { error: "payload too large" });
+    }
+    if (!this.hookAllowed(hash)) {
+      return done(429, { error: "rate limited" }, { "retry-after": "60" });
+    }
+    if (this.queuedHookCount() >= MAX_QUEUED_HOOKS) {
+      return done(503, { error: "queue full" }, { "retry-after": "60" });
+    }
+
+    let body: Uint8Array | null;
+    try {
+      body = await readLimited(request, MAX_HOOK_BODY);
+    } catch {
+      return done(400, { error: "could not read body" });
+    }
+    if (!body) return done(413, { error: "payload too large" });
+
+    const receivedAt = Date.now();
+    const ms = Math.max(receivedAt, this.lastDeliveryMs + 1);
+    this.lastDeliveryMs = ms;
+    const deliveryId = `${String(ms).padStart(13, "0")}-${hex(randomBytes(8))}`;
+
+    const headers: [string, string][] = [];
+    for (const [name, value] of request.headers) {
+      const n = name.toLowerCase();
+      if (n.startsWith("cf-") || DROPPED_HEADERS.has(n)) continue;
+      headers.push([n, value]);
+    }
+    const envelope = enc.encode(
+      JSON.stringify({
+        v: 1,
+        hook_id: hookId,
+        delivery_id: deliveryId,
+        received_at: receivedAt,
+        headers,
+        body: b64urlEncode(body),
+      }),
+    );
+
+    // The seal key and hook set may have changed while we awaited the body;
+    // everything from here to the reply is synchronous.
+    let sealed: string;
+    for (;;) {
+      const sealKey = decodeFixed(kv.get(HOOK_KEY), 32);
+      if (!sealKey) return done(404, { error: "unknown hook" });
+      try {
+        sealed = b64urlEncode(await sealToHost(sealKey, deliveryId, envelope));
+      } catch {
+        return done(500, { error: "internal error" });
+      }
+      if (kv.get(HOOK_KEY) === b64urlEncode(sealKey)) break;
+    }
+    if (!this.hookRegistered(hash)) return done(404, { error: "unknown hook" });
+    if (this.queuedHookCount() >= MAX_QUEUED_HOOKS) {
+      return done(503, { error: "queue full" }, { "retry-after": "60" });
+    }
+
+    const entry: QueuedHook = { sealed, at: receivedAt };
+    kv.put(HOOKQ_PREFIX + deliveryId, entry); // before the 202: at-least-once
+    if (this.hookQueueSize !== null) this.hookQueueSize++;
+    const host = this.currentHost();
+    if (host) safeSend(host, hookFrame(deliveryId, sealed));
+    await this.scheduleAlarm(receivedAt + HOOK_TTL_MS);
+    return done(202, { delivery_id: deliveryId });
+  }
+
+  private hookRegistered(hash: string): boolean {
+    const kv = this.ctx.storage.kv;
+    return kv.get(HOOK_KEY) !== undefined && kv.get(HOOK_PREFIX + hash) !== undefined;
+  }
+
+  /** Sliding-window rate limit per hook; best effort (resets on eviction). */
+  private hookAllowed(hash: string): boolean {
+    const now = Date.now();
+    const hits = (this.hookHits.get(hash) ?? []).filter((t) => t > now - HOOK_RATE_WINDOW_MS);
+    if (hits.length >= HOOK_RATE_LIMIT) {
+      this.hookHits.set(hash, hits);
+      return false;
+    }
+    hits.push(now);
+    this.hookHits.set(hash, hits);
+    return true;
+  }
+
+  private queuedHookCount(): number {
+    if (this.hookQueueSize === null) {
+      let n = 0;
+      for (const _ of this.ctx.storage.kv.list({ prefix: HOOKQ_PREFIX })) n++;
+      this.hookQueueSize = n;
+    }
+    return this.hookQueueSize;
+  }
+
+  private deleteQueued(key: string): void {
+    if (this.ctx.storage.kv.delete(key) && this.hookQueueSize !== null) {
+      this.hookQueueSize = Math.max(0, this.hookQueueSize - 1);
     }
   }
 
@@ -522,6 +721,42 @@ function parseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+function hookFrame(deliveryId: string, sealed: string): string {
+  return JSON.stringify({ type: "hook", delivery_id: deliveryId, sealed });
+}
+
+/** Reads the whole body, or returns null as soon as it exceeds `limit` bytes. */
+async function readLimited(request: Request, limit: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
+    total += chunk.length;
+    if (total > limit) {
+      void reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(chunk);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+
+export function jsonResponse(status: number, body: unknown, headers?: HeadersInit): Response {
+  const h = new Headers(headers);
+  h.set("content-type", "application/json");
+  return new Response(JSON.stringify(body), { status, headers: h });
+}
+
 function canonicalKey(v: unknown): string | null {
   const b = decodeFixed(v, 32);
   return b ? b64urlEncode(b) : null;
@@ -535,7 +770,7 @@ function safeSend(ws: WebSocket, data: string | ArrayBuffer | Uint8Array): void 
   }
 }
 
-/** Connection lifecycle only. Never payloads, keys or tokens. */
-function log(relayId: string, role: Role, event: string): void {
+/** Connection and webhook lifecycle only. Never payloads, headers, hook ids, keys or tokens. */
+function log(relayId: string, role: Role | "hook", event: string): void {
   console.log(`relay=${relayId} role=${role} ${event}`);
 }

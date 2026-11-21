@@ -9,7 +9,8 @@ import Security
 /// The decrypted content of a notification: `PushContent` in
 /// `crates/proto/src/types.rs`.
 struct PushContent: Codable, Equatable {
-    /// `approval`, `turn_done`, `failed` or `test`.
+    /// `approval`, `turn_done`, `failed`, `automation` (title: the
+    /// automation's name; opens the run's session like the others) or `test`.
     var kind: String
     var title: String
     var body: String

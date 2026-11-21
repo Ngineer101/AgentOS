@@ -88,6 +88,7 @@ fn base(s: &mut App) {
         config_options: vec![],
         side_questions: false,
         pull_request: None,
+        automation_id: None,
     };
     s.sessions = vec![
         sess("ses_q", QUICK_WORKSPACE_ID, AgentKind::Claude, Some("prof_personal"), SessionState::Idle, "What changed in Rust 1.92?", 180_000),
@@ -208,7 +209,7 @@ fn base(s: &mut App) {
         host_id: "host_3f9a1c".into(),
         version: "0.1.0".into(),
         os: "linux".into(),
-        protocol_version: 2,
+        protocol_version: 5,
         agents: vec![
             agent(AgentKind::Claude, "Claude Code", "2.1.323", Some("claude"), None, None, true),
             agent(AgentKind::Claude, "Claude Code", "2.1.323", Some("prof_work"), Some("Work"), Some("/home/nico/.claude-work"), true),
@@ -239,6 +240,126 @@ fn base(s: &mut App) {
         relay: RelayStatus { configured: true, connected: true, url: Some("wss://relay.example.workers.dev".into()), error: None },
     });
     s.voice = Some(VoiceStatus { model: "NVIDIA Nemotron 3.5 ASR".into(), download_bytes: 475_271_763, ready: true, streaming: true, progress: None, error: None });
+    automations(s);
+}
+
+/// Three automations: a nightly dependency upgrade (its last run succeeded), a Sentry webhook
+/// that investigates alerts, and a weekly one that's off.
+fn automations(s: &mut App) {
+    let t = now();
+    const H: i64 = 3_600_000;
+    #[allow(clippy::too_many_arguments)]
+    fn run(id: &str, auto: &str, sid: Option<&str>, trigger: RunTrigger, started: i64, took: Option<i64>, outcome: RunOutcome, summary: Option<&str>, detail: Option<&str>) -> AutomationRun {
+        AutomationRun {
+            run_id: id.into(),
+            automation_id: auto.into(),
+            session_id: sid.map(String::from),
+            trigger,
+            scheduled_for: matches!(trigger, RunTrigger::Schedule | RunTrigger::CatchUp).then_some(started),
+            started_at: started,
+            finished_at: took.map(|d| started + d),
+            outcome,
+            summary: summary.map(String::from),
+            detail: detail.map(String::from),
+        }
+    }
+    let deps_runs = vec![
+        run("run_d3", "auto_deps", Some("ses_r3"), RunTrigger::Schedule, t - 21 * H, Some(14 * 60_000), RunOutcome::Succeeded, Some("Upgraded 14 dependencies (tokio 1.48, axum 0.9, serde 1.0.228). The build and all 212 tests pass. Opened pull request #418 from agenthost/upgrade-deps-1121."), None),
+        run("run_d2", "auto_deps", Some("ses_r2"), RunTrigger::CatchUp, t - 43 * H, Some(9 * 60_000), RunOutcome::Failed, Some("axum 0.9 changed its Router API; the relay's routes need rewriting. Left it at 0.8."), Some("The agent stopped with an error: cargo test failed")),
+        run("run_d1", "auto_deps", None, RunTrigger::Schedule, t - 69 * H, None, RunOutcome::Skipped, None, Some("The previous run was still going")),
+    ];
+    let sentry_runs = vec![run(
+        "run_s1",
+        "auto_sentry",
+        Some("ses_r4"),
+        RunTrigger::Webhook,
+        t - 2 * H,
+        Some(6 * 60_000),
+        RunOutcome::Succeeded,
+        Some("The TypeError comes from a pairing reply without a device name. Fixed the parser, added a test, and opened pull request #421."),
+        Some("Sentry alert: TypeError: Cannot read properties of undefined (reading 'name')"),
+    )];
+    let auto = |id: &str, name: &str, enabled: bool, trigger: AutomationTrigger, prompt: &str| Automation {
+        automation_id: id.into(),
+        name: name.into(),
+        enabled,
+        workspace_id: "ws_relay".into(),
+        agent: AgentKind::Claude,
+        profile_id: Some("prof_work".into()),
+        prompt: prompt.into(),
+        trigger,
+        auto_approve: vec![],
+        max_minutes: 60,
+        created_at: t - 30 * 24 * H,
+        updated_at: t - 24 * H,
+        schedule_text: None,
+        next_run_at: None,
+        last_run: None,
+        webhook: None,
+    };
+    let mut deps = auto("auto_deps", "Upgrade dependencies", true, AutomationTrigger::Schedule { cron: "0 3 * * *".into() }, SCHEDULE_EXAMPLES[0].1);
+    deps.schedule_text = Some("Every day at 03:00".into());
+    deps.next_run_at = Some(t + 5 * H + 20 * 60_000);
+    deps.last_run = deps_runs.first().cloned();
+    deps.auto_approve = vec!["create_pull_request".into(), "git_push".into()];
+    let sentry_trigger = AutomationTrigger::Webhook { source: WebhookSource::Sentry, filter: vec![], dedupe_key: None, cooldown_minutes: 24 * 60 };
+    let mut sentry = auto("auto_sentry", "Investigate Sentry alerts", true, sentry_trigger, SENTRY_PROMPT);
+    sentry.last_run = sentry_runs.first().cloned();
+    sentry.auto_approve = vec!["create_pull_request".into()];
+    sentry.max_minutes = 30;
+    sentry.webhook = Some(WebhookInfo {
+        url: Some("https://relay.example.workers.dev/hooks/ah_4f2c9e1b7d/wh_Zq81mXk3".into()),
+        has_secret: true,
+        last_delivery: Some(WebhookDelivery { at: t - 2 * H, result: "started".into(), detail: "Alert \u{201c}Errors in relay-worker\u{201d}: TypeError: Cannot read properties of undefined (reading 'name')".into() }),
+    });
+    let mut weekly = auto("auto_tidy", "Weekly maintenance", false, AutomationTrigger::Schedule { cron: "0 8 * * 1".into() }, SCHEDULE_EXAMPLES[1].1);
+    weekly.schedule_text = Some("Every Monday at 08:00".into());
+    weekly.workspace_id = "ws_notes".into();
+    weekly.profile_id = None;
+    s.automations = vec![deps, sentry, weekly];
+    s.runs.insert("auto_deps".into(), deps_runs);
+    s.runs.insert("auto_sentry".into(), sentry_runs);
+    s.runs.insert("auto_tidy".into(), vec![]);
+}
+
+/// The Automations screen on one automation. The newest runs' sessions are in the sidebar,
+/// open for follow-up questions.
+fn automations_screen(s: &mut App, id: &str) {
+    base(s);
+    s.screen = Screen::Automations;
+    s.sel_auto = Some(id.into());
+    let t = now();
+    const H: i64 = 3_600_000;
+    let run_session = |id: &str, auto: &str, title: &str, ago: i64| Session {
+        session_id: id.into(),
+        workspace_id: "ws_relay".into(),
+        agent: AgentKind::Claude,
+        profile_id: Some("prof_work".into()),
+        state: SessionState::Idle,
+        state_reason: None,
+        acp_session_id: Some("x".into()),
+        title: Some(title.into()),
+        created_at: t - ago,
+        updated_at: t - ago + 600_000,
+        last_seq: 0,
+        archived_at: None,
+        worktree: None,
+        config_options: vec![],
+        side_questions: false,
+        automation_id: Some(auto.into()),
+        pull_request: None,
+    };
+    s.sessions.push(run_session("ses_r3", "auto_deps", "Upgrade dependencies", 21 * H));
+    s.sessions.push(run_session("ses_r4", "auto_sentry", "Investigate Sentry alerts", 2 * H));
+}
+
+/// The editor on an existing automation (as Edit… opens it), its schedule checked.
+fn edit_automation(s: &mut App, id: &str) {
+    automations_screen(s, id);
+    s.edit_automation(id);
+    if s.draft.trigger == crate::model::TriggerKind::Schedule {
+        s.draft.check = Some(ScheduleCheck { error: None, text: Some("Every day at 03:00".into()), next: vec![now() + 5 * 3_600_000, now() + 29 * 3_600_000, now() + 53 * 3_600_000] });
+    }
 }
 
 /// Claude Code's settings as ACP reports them: a model, an effort and fast mode.
@@ -474,6 +595,7 @@ fn subagents(s: &mut App) {
             config_options: config_options(),
             side_questions: true,
             pull_request: None,
+            automation_id: None,
         },
     );
     let call = |id: &str, parent: &str, name: &str, kind: &str, args: Value| json!({"tool_call_id": id, "name": name, "kind": kind, "arguments": args, "source": "sandbox", "tool_name": if kind == "execute" { "Bash" } else { "Read" }, "parent_tool_call_id": parent});
@@ -958,6 +1080,55 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.approvals.clear();
         idle(s, "ses_1");
         s.notice = Some("Copied branch name".into());
+    }),
+    // Automations: the nightly upgrade with its runs, the Sentry webhook with its last
+    // delivery, and none yet.
+    ("automations", |s| automations_screen(s, "auto_deps")),
+    ("automations-webhook", |s| automations_screen(s, "auto_sentry")),
+    ("automations-empty", |s| {
+        base(s);
+        s.automations.clear();
+        s.screen = Screen::Automations;
+    }),
+    // A new schedule automation: a preset, the host's check, the example prompts.
+    ("automation-new", |s| {
+        automations_screen(s, "auto_deps");
+        s.new_automation();
+        s.draft.preset = crate::model::Preset::Weekdays;
+        s.draft.time = rune::TextEdit::new("07:30");
+        s.draft.check = Some(ScheduleCheck { error: None, text: Some("Weekdays at 07:30".into()), next: vec![now() + 9 * 3_600_000, now() + 33 * 3_600_000, now() + 57 * 3_600_000] });
+    }),
+    // A cron the host refuses.
+    ("automation-new-cron-error", |s| {
+        automations_screen(s, "auto_deps");
+        s.new_automation();
+        s.draft.preset = crate::model::Preset::Custom;
+        s.draft.cron = rune::TextEdit::new("0 25 * * *");
+        s.draft.check = Some(ScheduleCheck { error: Some("hour 25 is out of range (0 to 23)".into()), text: None, next: vec![] });
+    }),
+    // A new Sentry webhook: its preset prompt, and no URL until it's saved.
+    ("automation-new-webhook", |s| {
+        automations_screen(s, "auto_deps");
+        s.new_automation();
+        s.draft_set_trigger(crate::model::TriggerKind::Webhook);
+        s.draft.name = rune::TextEdit::new("Investigate Sentry alerts");
+    }),
+    ("automation-edit", |s| edit_automation(s, "auto_deps")),
+    ("automation-edit-webhook", |s| {
+        edit_automation(s, "auto_sentry");
+        s.draft.advanced = true;
+    }),
+    ("automation-picker", |s| {
+        edit_automation(s, "auto_deps");
+        s.menu = Some(Menu::Pick("auto-preset"));
+    }),
+    ("automation-confirm-delete", |s| {
+        automations_screen(s, "auto_deps");
+        s.confirm_delete_auto = Some("auto_deps".into());
+    }),
+    ("automation-confirm-rotate", |s| {
+        automations_screen(s, "auto_sentry");
+        s.confirm_rotate = Some("auto_sentry".into());
     }),
     ("offline-home", |s| {
         base(s);

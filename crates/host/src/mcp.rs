@@ -704,6 +704,13 @@ impl Gateway {
             expires_at: now + APPROVAL_TIMEOUT.as_millis() as i64,
             summary,
         };
+        // Nobody may be watching an automation's run: give them longer.
+        let timeout = if self.run_automation(session_id).is_some() {
+            crate::automations::RUN_APPROVAL_TIMEOUT
+        } else {
+            APPROVAL_TIMEOUT
+        };
+        let info = PendingApproval { expires_at: now + timeout.as_millis() as i64, ..info };
         let (tx, rx) = oneshot::channel();
         self.approvals.lock().unwrap().insert(
             approval_id.clone(),
@@ -718,7 +725,7 @@ impl Gateway {
             serde_json::to_value(&info).unwrap(),
         );
         self.set_waiting(session_id, 1);
-        let (decision, device) = match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+        let (decision, device) = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(d)) => d,
             _ => {
                 self.approvals.lock().unwrap().remove(&approval_id);
@@ -732,6 +739,19 @@ impl Gateway {
         );
         self.set_waiting(session_id, -1);
         decision
+    }
+
+    /// The automation a session is a run of.
+    fn run_automation(&self, session_id: &str) -> Option<Automation> {
+        let aid = self.ctx.store.session_get(session_id).ok()??.automation_id?;
+        Some(self.ctx.store.automation_get(&aid).ok()??.automation)
+    }
+
+    /// Whether the automation this session is a run of lets `tool` run
+    /// without asking; returns the automation's id.
+    fn automation_allows(&self, session_id: &str, tool: &str) -> Option<String> {
+        let a = self.run_automation(session_id)?;
+        a.auto_approve.iter().any(|t| t == tool).then_some(a.automation_id)
     }
 
     /// The host's own tools, as listed to agents.
@@ -860,8 +880,10 @@ impl Gateway {
             "ask_title": "Open a Pull Request?",
             "note": "Posts to GitHub as you, with your GitHub CLI login. Push the branch first.",
         });
-        // Settings can let pull requests open without asking.
-        let auto = self.builtin_policy(tool) == ToolPolicy::Auto;
+        // Settings can let pull requests open without asking, and so can the
+        // automation this session is a run of.
+        let by_automation = self.automation_allows(session_id, tool);
+        let auto = self.builtin_policy(tool) == ToolPolicy::Auto || by_automation.is_some();
         let decision = if auto {
             ApprovalDecision::Approve
         } else {
@@ -870,7 +892,7 @@ impl Gateway {
         };
         self.ctx.audit.log(
             "pr.decision",
-            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto}),
+            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto, "automation_id": by_automation}),
         );
         if decision != ApprovalDecision::Approve {
             finish("denied", "the user denied this pull request");
@@ -958,8 +980,18 @@ impl Gateway {
                 "ask_title": "Push?",
                 "note": note,
             });
-            // Settings can let pushes run without asking; a force-push always asks.
-            let auto = !plan.force && self.builtin_policy(tool) == ToolPolicy::Auto;
+            // Settings can let pushes run without asking; so can an
+            // automation, for its run's own branch. A force-push always asks.
+            let own_branch = self
+                .ctx
+                .store
+                .session_get(session_id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.worktree)
+                .is_some_and(|w| plan.branch.as_deref() == Some(w.branch.as_str()));
+            let by_automation = self.automation_allows(session_id, tool).filter(|_| own_branch);
+            let auto = !plan.force && (self.builtin_policy(tool) == ToolPolicy::Auto || by_automation.is_some());
             let decision = if auto {
                 ApprovalDecision::Approve
             } else {
@@ -968,7 +1000,7 @@ impl Gateway {
             };
             self.ctx.audit.log(
                 "git.decision",
-                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto}),
+                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto, "automation_id": by_automation}),
             );
             if decision != ApprovalDecision::Approve {
                 finish("denied", "the user denied this push");

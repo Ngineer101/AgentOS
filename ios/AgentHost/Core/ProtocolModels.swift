@@ -167,6 +167,8 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var sideQuestions: Bool? = nil
     /// The pull request the session opened (its newest). Absent on older hosts.
     var pullRequest: SessionPullRequest? = nil
+    /// The automation this session is a run of (protocol 5).
+    var automationId: String? = nil
 
     var id: String { sessionId }
     var isArchived: Bool { archivedAt != nil }
@@ -199,6 +201,7 @@ struct SessionInfo: Codable, Identifiable, Hashable {
         case configOptions = "config_options"
         case sideQuestions = "side_questions"
         case pullRequest = "pull_request"
+        case automationId = "automation_id"
     }
 }
 

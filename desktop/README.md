@@ -25,6 +25,15 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   first message in the session. Picking a workspace picks its default login
   (tagged "Default"; the first session in a workspace sets it). Another login
   offers "Make … the default for …".
+- **Automations** (the sidebar's Automations entry, View › Automations, or
+  GNOME's main menu): sessions that start on a schedule, from a webhook
+  (Sentry, GitHub, any sender) or by hand. The list shows what starts each,
+  its next and last run and an on/off switch; beside it the chosen one's
+  webhook URL (Copy, New URL…), last delivery, prompt and runs (click a run to
+  open its session). New Automation and Edit… open the editor: workspace,
+  login, prompt, schedule presets or a cron (checked by the host as you type),
+  webhook sender and secret, what runs without asking, and the longest a run
+  may take. Sessions that are runs show a small clock in the sidebar.
 - **Archive** (⌃⌘A / Ctrl+Alt+A, the Session and "…" menus, row context
   menus): hides a session; a live one asks first, since archiving ends it.
 - **Settings** (⌘, / Ctrl+,): General (host, sandbox, voice, relay, Re-run
@@ -47,6 +56,9 @@ AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.p
 #           settings-archived archived-open settings-general settings-agents settings-agents-add
 #           settings-workspaces settings-connectors settings-connectors-add settings-devices
 #           pairing pairing-confirm shortcuts offline offline-home
+#           automations automations-webhook automations-empty automation-new automation-new-cron-error
+#           automation-new-webhook automation-edit automation-edit-webhook automation-picker
+#           automation-confirm-delete automation-confirm-rotate
 cargo test      # drives a real in-process host through the app's model and bridge
 ```
 

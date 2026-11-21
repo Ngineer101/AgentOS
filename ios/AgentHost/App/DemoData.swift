@@ -10,7 +10,8 @@ import UIKit
 ///                                         pair | side | config | paste |
 ///                                         quick | plain | btw | subagents |
 ///                                         notifications | pair-notifications |
-///                                         pair-apns-key
+///                                         pair-apns-key | automations | automation |
+///                                         automation-webhook | automation-new
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 ///     -AgentHostDemoTitleMenu             the session opens with its title menu open
@@ -47,6 +48,14 @@ struct DemoData {
         case pairNotifications = "pair-notifications"
         /// Its "Add Your APNs Key" step (the host has no key yet).
         case pairAPNsKey = "pair-apns-key"
+        /// Settings → Automations.
+        case automations
+        /// A schedule automation with its runs.
+        case automation
+        /// A Sentry webhook automation (read-only trigger on a phone).
+        case automationWebhook = "automation-webhook"
+        /// The New Automation sheet.
+        case automationNew = "automation-new"
     }
 
     /// `push.status` for a screen: a key and this iPhone registered on
@@ -70,6 +79,7 @@ struct DemoData {
     var approvals: [PendingApprovalModel]
     var transcripts: [String: Transcript]
     var connectors: [ConnectorInfo] = []
+    var automations: [AutomationModel] = []
     var screenStatus = ScreenStatusModel(
         policy: ScreenPolicyModel(enabled: true, allowControl: true),
         installed: true,
@@ -89,6 +99,10 @@ struct DemoData {
     static let archivedSession = "demo-quic"
     static let plainSession = "demo-notes-tidy"
     static let subagentSession = "demo-audit"
+    static let upgradeSession = "demo-upgrade"
+    static let upgradeAutomation = "auto-upgrade"
+    static let sentryAutomation = "auto-sentry"
+    static let maintenanceAutomation = "auto-maintenance"
 
     /// The screen asked for on the command line (nil without `-AgentHostDemo`).
     static var requestedScreen: Screen? {
@@ -218,6 +232,10 @@ struct DemoData {
             }
             return s
         }
+        // The newest run of "Upgrade dependencies": open for follow-ups.
+        var upgradeRun = live(session(Self.upgradeSession, "ws-relay", "claude", "claude-work", SessionStateName.idle,
+                                      "Upgrade dependencies", ago: 4 * 24 * 60 + 9 * 60), branch: "agenthost/upgrade-deps")
+        upgradeRun.automationId = Self.upgradeAutomation
         sessions = [
             // Untitled: called "New session".
             live(session(Self.quickSession, "ws-quick", "claude", "claude-personal", SessionStateName.idle,
@@ -238,7 +256,9 @@ struct DemoData {
                     "Import old notes", ago: 50, reason: "The agent exited (code 1)"),
             session("demo-weekly", "ws-notes", "claude", nil, SessionStateName.ended,
                     "Weekly summary", ago: 26 * 60),
+            upgradeRun,
         ]
+        automations = Self.demoAutomations(now: now)
         archived = [
             session(Self.archivedSession, "ws-relay", "codex", "codex", SessionStateName.ended,
                     "Spike: QUIC transport", ago: 4 * 24 * 60, lastSeq: 3, archivedAgo: 3 * 24 * 60),
@@ -472,6 +492,90 @@ struct DemoData {
         transcripts = [Self.subagentSession: audit, Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
                        Self.plainSession: tidy]
     }
+
+    /// Three automations: a weekly schedule, a Sentry webhook (running) and
+    /// a weekday schedule that is off.
+    private static func demoAutomations(now: Int64) -> [AutomationModel] {
+        let min: Int64 = 60_000, day: Int64 = 24 * 60 * min
+        let monday = Self.next(weekday: 2, hour: 9)
+        let sentryRun = AutomationRunModel(
+            runId: "run-sentry-2", automationId: sentryAutomation, sessionId: quickSession,
+            trigger: RunTriggerName.webhook, scheduledFor: nil, startedAt: now - 4 * min, finishedAt: nil,
+            outcome: RunOutcomeName.running, summary: nil,
+            detail: "TypeError: Cannot read properties of undefined (reading 'id')")
+        return [
+            AutomationModel(
+                automationId: upgradeAutomation, name: "Upgrade dependencies", enabled: true,
+                workspaceId: "ws-relay", agent: "claude", profileId: "claude-work",
+                prompt: AutomationExamples.schedule[0].prompt, trigger: .schedule(cron: "0 9 * * 1"),
+                autoApprove: [AutomationTool.createPullRequest, AutomationTool.gitPush], maxMinutes: 60,
+                createdAt: now - 30 * day, updatedAt: now - 30 * day, scheduleText: "Every Monday at 09:00",
+                nextRunAt: monday, lastRun: automationRuns[upgradeAutomation]?.first, webhook: nil),
+            AutomationModel(
+                automationId: sentryAutomation, name: "Investigate Sentry alerts", enabled: true,
+                workspaceId: "ws-relay", agent: "claude", profileId: "claude-work",
+                prompt: "A Sentry alert fired: {{sentry.title}}\nRule: {{sentry.rule}}\nIn Sentry: {{sentry.url}}\n\nInvestigate it with the Sentry connector: read the issue, its latest events, stack trace and breadcrumbs, then find the cause in this repository. Write up what you found: the cause, how sure you are, and the fix. If the fix is small and clear, make it on this branch with a test, commit it, push the branch and open a pull request.",
+                trigger: .webhook(WebhookTriggerModel(source: "sentry", dedupeKey: "{{sentry.issue_id}}")),
+                autoApprove: [AutomationTool.createPullRequest], maxMinutes: 45,
+                createdAt: now - 12 * day, updatedAt: now - 12 * day, scheduleText: nil, nextRunAt: nil,
+                lastRun: sentryRun,
+                webhook: WebhookInfoModel(
+                    url: "https://agenthost-relay.example.net/hook/h_4f9c2e7b1d0a6385",
+                    hasSecret: true,
+                    lastDelivery: WebhookDeliveryModel(at: now - 4 * min, result: "started",
+                                                       detail: "TypeError: Cannot read properties of undefined (reading 'id')"))),
+            AutomationModel(
+                automationId: maintenanceAutomation, name: "Routine maintenance", enabled: false,
+                workspaceId: "ws-notes", agent: "codex", profileId: nil,
+                prompt: AutomationExamples.schedule[1].prompt, trigger: .schedule(cron: "30 7 * * 1-5"),
+                autoApprove: nil, maxMinutes: 30,
+                createdAt: now - 20 * day, updatedAt: now - 3 * day, scheduleText: "Weekdays at 07:30",
+                nextRunAt: nil,
+                lastRun: AutomationRunModel(
+                    runId: "run-maint-1", automationId: maintenanceAutomation, sessionId: "demo-import",
+                    trigger: RunTriggerName.schedule, scheduledFor: now - 3 * day, startedAt: now - 3 * day,
+                    finishedAt: now - 3 * day + 6 * min, outcome: RunOutcomeName.failed, summary: nil,
+                    detail: "The agent exited (code 1)"),
+                webhook: nil),
+        ]
+    }
+
+    /// The next `weekday` (1 = Sunday) at `hour`:00, in milliseconds.
+    private static func next(weekday: Int, hour: Int) -> Int64 {
+        let date = Calendar.current.nextDate(
+            after: Date(), matching: DateComponents(hour: hour, minute: 0, weekday: weekday),
+            matchingPolicy: .nextTime) ?? Date().addingTimeInterval(86_400)
+        return Int64(date.timeIntervalSince1970 * 1000)
+    }
+
+    /// `automation.runs` answers, newest first.
+    static let automationRuns: [String: [AutomationRunModel]] = {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let min: Int64 = 60_000, day: Int64 = 24 * 60 * min
+        let lastMonday = now - 4 * day - 9 * 60 * min
+        func run(_ id: String, _ auto: String, _ session: String?, _ trigger: String, _ start: Int64,
+                 _ minutes: Int64, _ outcome: String, summary: String? = nil, detail: String? = nil) -> AutomationRunModel {
+            AutomationRunModel(runId: id, automationId: auto, sessionId: session, trigger: trigger,
+                               scheduledFor: trigger == RunTriggerName.manual ? nil : start, startedAt: start,
+                               finishedAt: start + minutes * min, outcome: outcome, summary: summary, detail: detail)
+        }
+        return [
+            DemoData.upgradeAutomation: [
+                run("run-up-3", DemoData.upgradeAutomation, DemoData.upgradeSession, RunTriggerName.schedule, lastMonday, 14,
+                    RunOutcomeName.succeeded, summary: "Upgraded 12 crates (tokio 1.48, axum 0.8); all tests pass. Opened pull request #482."),
+                run("run-up-2", DemoData.upgradeAutomation, "demo-weekly", RunTriggerName.catchUp, lastMonday - 7 * day + 2 * min, 60,
+                    RunOutcomeName.timedOut, detail: "Stopped after 60 minutes."),
+                run("run-up-1", DemoData.upgradeAutomation, nil, RunTriggerName.schedule, lastMonday - 14 * day, 0,
+                    RunOutcomeName.skipped, detail: "The previous run was still going."),
+            ],
+            DemoData.sentryAutomation: [
+                run("run-sentry-1", DemoData.sentryAutomation, DemoData.flakySession, RunTriggerName.webhook, now - 2 * day, 9,
+                    RunOutcomeName.succeeded, summary: "A null session id after a reconnect; fixed in relay-worker with a test. Opened pull request #479.",
+                    detail: "TypeError: session is undefined"),
+            ],
+            DemoData.maintenanceAutomation: [],
+        ]
+    }()
 
     /// The demo's answer to any side question asked.
     static let sideAnswer = "Short answer: yes. The session keeps going; this answer comes from a fork of the conversation, so nothing you ask here changes what the agent is doing."

@@ -414,6 +414,32 @@ impl Push {
                     a.approval_id,
                 ))
             }
+            EventType::TurnEnd if self.automation_turn(&s, ev).is_some() => {
+                let name = self.automation_turn(&s, ev)?;
+                let stop = ev.payload["stop_reason"].as_str().unwrap_or("end_turn");
+                let body = match stop {
+                    "cancelled" => return None,
+                    "error" => format!("{agent} stopped with an error"),
+                    _ => {
+                        let prompt_seq = ev.payload["prompt_seq"].as_i64().unwrap_or(0);
+                        match self.last_reply(&s.session_id, prompt_seq, ev.seq) {
+                            Some(t) => format!("Finished: {t}"),
+                            None => "Finished".to_string(),
+                        }
+                    }
+                };
+                Some((
+                    |p: &PushPrefs| p.automations,
+                    PushContent {
+                        kind: "automation".into(),
+                        title: name,
+                        body: shorten(&body, BODY_MAX),
+                        session_id: Some(s.session_id.clone()),
+                        approval_id: None,
+                    },
+                    format!("automation-{}", s.session_id),
+                ))
+            }
             EventType::TurnEnd => {
                 let stop = ev.payload["stop_reason"].as_str().unwrap_or("end_turn");
                 if stop == "cancelled" {
@@ -445,6 +471,19 @@ impl Push {
                     return None;
                 }
                 let reason = ev.payload["reason"].as_str().unwrap_or("the session stopped");
+                if let Some(a) = s.automation_id.as_deref().and_then(|id| self.ctx.store.automation_get(id).ok().flatten()) {
+                    return Some((
+                        |p: &PushPrefs| p.automations,
+                        PushContent {
+                            kind: "automation".into(),
+                            title: shorten(&a.automation.name, 80),
+                            body: shorten(&format!("{agent} failed: {reason}"), BODY_MAX),
+                            session_id: Some(s.session_id.clone()),
+                            approval_id: None,
+                        },
+                        format!("failed-{}", s.session_id),
+                    ));
+                }
                 Some((
                     |p: &PushPrefs| p.failed,
                     PushContent {
@@ -459,6 +498,19 @@ impl Push {
             }
             _ => None,
         }
+    }
+
+    /// The automation's name, when this turn answers the prompt an
+    /// automation's run sent (not a follow-up you asked in its session).
+    fn automation_turn(&self, s: &Session, ev: &Event) -> Option<String> {
+        let id = s.automation_id.as_deref()?;
+        let prompt_seq = ev.payload["prompt_seq"].as_i64()?;
+        let prompt = self.ctx.store.events_after(&s.session_id, prompt_seq - 1, 1).ok()?.into_iter().next()?;
+        if prompt.payload["device"].as_str() != Some("automation") {
+            return None;
+        }
+        let a = self.ctx.store.automation_get(id).ok()??;
+        Some(shorten(&a.automation.name, 80))
     }
 
     /// The agent's last reply in a turn.
@@ -782,7 +834,7 @@ mod tests {
             let a_token = "a0".repeat(32);
             push.register("dev_a", reg(&a_token, &ka, PushPrefs::default())).unwrap();
             // B: a debug build that thinks it is a release; wants everything.
-            let all = PushPrefs { approvals: true, turn_done: true, failed: true };
+            let all = PushPrefs { approvals: true, turn_done: true, failed: true, automations: true };
             push.register("dev_b", reg(&"5b".repeat(32), &kb, all)).unwrap();
 
             let sid = "ses_1";
@@ -797,6 +849,7 @@ mod tests {
                     config_options: vec![],
                     side_questions: false,
                     pull_request: None,
+                    automation_id: None,
                     state: SessionState::Running,
                     state_reason: None,
                     acp_session_id: None,

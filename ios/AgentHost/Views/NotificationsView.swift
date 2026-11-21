@@ -54,10 +54,15 @@ struct NotificationsSettingsView: View {
                     Toggle("Approvals", isOn: pref(\.approvals))
                     Toggle("Finished turns", isOn: pref(\.turnDone))
                     Toggle("Failed sessions", isOn: pref(\.failed))
+                    if model.hostSupportsAutomations {
+                        Toggle("Automations", isOn: pref(\.automations))
+                    }
                 } header: {
                     GroupHeader("Notify me about")
                 } footer: {
-                    Text("Finished turns: the agent is done and waits for you.")
+                    Text(model.hostSupportsAutomations
+                         ? "Finished turns: the agent is done and waits for you. Automations: a run finished or failed."
+                         : "Finished turns: the agent is done and waits for you.")
                 }
 
                 keySection

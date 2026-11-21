@@ -26,7 +26,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         }
     }
     let mut root = col().key("root").w_full().h_full().fill(t.window).child(body);
-    if s.menu.is_some() && s.menu != Some(Menu::Login) {
+    if s.menu.is_some() && s.menu != Some(Menu::Login) && !matches!(s.menu, Some(Menu::Pick(_))) {
         root = root.child(menu_layer(s, &t));
     }
     if s.new_open {
@@ -40,6 +40,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some(id) = &s.confirm_archive {
         root = root.child(crate::sheet::confirm_archive(s, id, &t));
+    }
+    if s.auto_open {
+        root = root.child(crate::automations::editor(s, &t));
+    }
+    if let Some(alert) = crate::automations::confirm(s, &t) {
+        root = root.child(alert);
     }
     // Over everything, sheets too: a failure in Settings shows where you are.
     if let Some(toasts) = crate::toast::layer(s, &t) {
@@ -87,6 +93,27 @@ pub fn short_age(ts: i64, look: Look) -> String {
         s => (s / 86400, "d", " d"),
     };
     format!("{n}{}", if look.mac() { unit_mac } else { unit_gnome })
+}
+
+/// A time either side of `now` (both ms): "in 3h", "2h ago", "now" (macOS), or "in 3 h",
+/// "2 h ago" (GNOME). Within a day, "in 4h 10m": the next run's minute matters.
+pub fn when_label(ts: i64, now: i64, look: Look) -> String {
+    let d = (ts - now) / 1000;
+    let s = d.abs();
+    let (m, h, day) = if look.mac() { ("m", "h", "d") } else { (" min", " h", " d") };
+    let span = match s {
+        s if s < 60 => return "now".into(),
+        s if s < 3600 => format!("{}{m}", s / 60),
+        s if s < 86400 && d > 0 && (s % 3600) / 60 > 0 && s < 6 * 3600 => format!("{}{h} {}{m}", s / 3600, (s % 3600) / 60),
+        s if s < 86400 => format!("{}{h}", s / 3600),
+        s => format!("{}{day}", s / 86400),
+    };
+    if d > 0 { format!("in {span}") } else { format!("{span} ago") }
+}
+
+/// Now, in ms since the epoch.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// A status's colour in this look.
@@ -341,10 +368,43 @@ fn sidebar(s: &App, t: &Theme) -> El {
         .min_h(0.0)
         .child(header)
         .child(search)
+        .child(automations_nav(s, t))
         .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
         .child(host);
     sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
     sb
+}
+
+/// The sidebar's way to the Automations screen, above the sessions: how many are on, or how
+/// many run now.
+fn automations_nav(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let selected = s.screen == Screen::Automations;
+    let running = s.automations_running();
+    let on = s.automations.iter().filter(|a| a.enabled).count();
+    let ink = if selected && mac { Color::WHITE } else { t.text };
+    let faint = if selected && mac { Color::WHITE.alpha(0.75) } else { t.text3 };
+    let mut r = row()
+        .key("nav-automations")
+        .w_full()
+        .gap(if mac { 9.0 } else { 10.0 })
+        .px(if mac { 10.0 } else { 12.0 })
+        .py(if mac { 5.0 } else { 8.0 })
+        .center_y()
+        .radius(t.row_radius)
+        .role("button")
+        .label(if running > 0 { format!("Automations, {running} running") } else { "Automations".to_string() })
+        .focusable(true)
+        .on_press(|s: &mut App| s.open_automations())
+        .child(row().size(14.0, 14.0).center().child(icon(&ic::CLOCK, if mac { 13.0 } else { 14.0 }).color(if selected && mac { Color::WHITE } else { t.text2 })))
+        .child(text("Automations").font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(ink).grow(1.0));
+    if running > 0 {
+        r = r.child(icon(&ic::SPINNER, 12.0).color(faint).looping(rune::LoopSpec::rotation(0.9)));
+    } else if on > 0 {
+        r = r.child(text(on.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(faint));
+    }
+    let r = if selected { r.fill(t.row_selected) } else { r.hover(t.row_hover) };
+    col().w_full().px(if mac { 10.0 } else { 6.0 }).pb(if mac { 4.0 } else { 2.0 }).child(r)
 }
 
 fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
@@ -375,6 +435,9 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     if let Some(n) = pr {
         spoken = format!("Pull request {n}, {spoken}");
     }
+    // A run of an automation: a small clock before the line.
+    let run = x.automation_id.is_some();
+    let spoken = if run { format!("{spoken}, automation run") } else { spoken };
     let (title_c, sub_c) = if selected && mac {
         (Color::WHITE, Color::WHITE.alpha(0.8))
     } else if ended {
@@ -410,7 +473,14 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
         .min_w(0.0)
         .gap(1.0)
         .child(text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate())
-        .child(text(sub).font(t.font_small()).color(sub_c).truncate());
+        .child({
+            let line = text(sub).font(t.font_small()).color(sub_c).truncate();
+            if run {
+                row().w_full().min_w(0.0).gap(4.0).center_y().help("An automation's run").child(icon(&ic::CLOCK, if mac { 10.0 } else { 11.0 }).color(sub_c)).child(line.shrink().min_w(0.0))
+            } else {
+                line
+            }
+        });
     r = r.child(names);
     if let (Some(n), true) = (n, mac) {
         r = r.child(text(format!("⌘{n}")).font(TextStyle::new(11.0, 400.0)).color(if selected { Color::WHITE.alpha(0.75) } else { t.text3 }).mt(1.0));
@@ -430,6 +500,7 @@ fn main_pane(s: &App, t: &Theme, k: &rune_kit::Kit, cx: &mut Cx<App>) -> El {
     let _ = cx;
     let content = match &s.screen {
         Screen::Session(id) if s.session(id).is_some() => crate::session::screen(s, id, t, k),
+        Screen::Automations => crate::automations::screen(s, t),
         _ => home(s, t),
     };
     let mut c = col().key("main").grow(1.0).min_w(0.0).h_full().min_h(0.0).fill(t.content).child(toolbar(s, t));
@@ -446,6 +517,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         // The session's own title (else its workspace's name), over who runs it, where, and
         // on which branch: the same live or ended.
         Some(x) => (s.session_title(x), s.session_context(x)),
+        None if s.screen == Screen::Automations => ("Automations".to_string(), crate::automations::summary(s)),
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
             ("AgentHost".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
@@ -829,6 +901,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
             let items = vec![
                 Some(Item::new("New Session", keys(look, Cmd::NewSession), |s, tx| run(s, Cmd::NewSession, tx))),
                 Some(Item::new("New Quick Task", keys(look, Cmd::QuickTask), |s, tx| run(s, Cmd::QuickTask, tx))),
+                Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),
