@@ -848,6 +848,7 @@ mod tests {
                     worktree: None,
                     config_options: vec![],
                     side_questions: false,
+                    pull_request: None,
                     automation_id: None,
                     state: SessionState::Running,
                     state_reason: None,

@@ -406,9 +406,41 @@ pub struct Session {
     /// command) in a fork of the conversation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub side_questions: bool,
+    /// The pull request the session opened (its newest, when it opened
+    /// more than one). Clients show its number ("#48") in the session list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<SessionPullRequest>,
     /// The automation this session is a run of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_id: Option<String>,
+}
+
+/// A pull request a session opened.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionPullRequest {
+    pub number: u64,
+    pub url: String,
+}
+
+impl SessionPullRequest {
+    /// The last pull request link in some text: `gh pr create` prints the
+    /// new one's ("https://github.com/o/r/pull/48"), and names the existing
+    /// one when the branch already has one.
+    pub fn find_in(text: &str) -> Option<Self> {
+        text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '(' | ')'))
+            .rev()
+            .find_map(|w| {
+                let w = w.trim_end_matches(['.', ',', ':', ';']);
+                let rest = w.strip_prefix("https://")?;
+                // host/owner/repo/pull/N, nothing after N.
+                let parts: Vec<&str> = rest.split('/').collect();
+                let [host, owner, repo, "pull", n] = parts[..] else { return None };
+                if [host, owner, repo].iter().any(|p| p.is_empty()) || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                Some(Self { number: n.parse().ok()?, url: w.to_string() })
+            })
+    }
 }
 
 /// Where a session's worktree is and which branch it is on.
@@ -1546,5 +1578,25 @@ mod tests {
             Value::String("turn.end".into())
         );
         assert_eq!(EventType::ToolResult.as_str(), "tool.result");
+    }
+
+    #[test]
+    fn finds_pull_request_links() {
+        let pr = |t: &str| SessionPullRequest::find_in(t).map(|p| (p.number, p.url));
+        assert_eq!(pr("https://github.com/o/r/pull/48\n"), Some((48, "https://github.com/o/r/pull/48".into())));
+        assert_eq!(
+            pr("Creating pull request for a into main in o/r\n\nhttps://ghe.example.com/o/r/pull/48483"),
+            Some((48483, "https://ghe.example.com/o/r/pull/48483".into()))
+        );
+        assert_eq!(
+            pr("a pull request for branch \"x\" into branch \"main\" already exists:\nhttps://github.com/o/r/pull/7."),
+            Some((7, "https://github.com/o/r/pull/7".into()))
+        );
+        assert_eq!(pr("see https://github.com/o/r/pull/1 then https://github.com/o/r/pull/2"), Some((2, "https://github.com/o/r/pull/2".into())));
+        assert_eq!(pr("https://github.com/o/r/pull/48/files"), None);
+        assert_eq!(pr("https://github.com/o/r/issues/48"), None);
+        assert_eq!(pr("http://github.com/o/r/pull/48"), None);
+        assert_eq!(pr("https://github.com/o/r/pull/abc"), None);
+        assert_eq!(pr("error: no commits between main and x"), None);
     }
 }

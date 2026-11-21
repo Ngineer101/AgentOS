@@ -802,6 +802,21 @@ impl Gateway {
         Some(std::path::PathBuf::from(ws.path))
     }
 
+    /// Remember the pull request a command's output links to as the
+    /// session's, and tell the clients (the session list shows its number).
+    fn record_pull_request(&self, session_id: &str, output: &str) {
+        let Some(pr) = agenthost_proto::SessionPullRequest::find_in(output) else { return };
+        match self.ctx.store.session_get(session_id) {
+            Ok(Some(s)) if s.pull_request.as_ref() != Some(&pr) => {}
+            _ => return,
+        }
+        if let Ok(true) = self.ctx.store.session_set_pull_request(session_id, &pr) {
+            if let Ok(Some(s)) = self.ctx.store.session_get(session_id) {
+                self.ctx.bus.publish(BusMsg::SessionChanged(s));
+            }
+        }
+    }
+
     /// `agenthost__create_pull_request`: the title and description shown,
     /// approved, then `gh pr create` as the user.
     async fn pr_tool(self: &Arc<Self>, session_id: &str, args: Value) -> Value {
@@ -890,6 +905,8 @@ impl Gateway {
         );
         let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
         finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        // Also when it failed because the branch already has one: it names it.
+        self.record_pull_request(session_id, &out.output);
         if out.ok {
             text_result(&format!("Opened the pull request with the user's GitHub CLI:\n{output}"), false)
         } else {
@@ -1115,6 +1132,10 @@ impl Gateway {
         );
         let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
         finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));
+        // `gh pr create` run as a plain command opens one too.
+        if plan.argv.iter().take(3).map(String::as_str).eq(["gh", "pr", "create"]) {
+            self.record_pull_request(session_id, &out.output);
+        }
         if out.ok {
             text_result(&format!("Ran `{}` as the user, outside the sandbox:\n{output}", plan.command()), false)
         } else {

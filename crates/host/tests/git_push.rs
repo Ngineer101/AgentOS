@@ -184,6 +184,10 @@ async fn pull_requests_open_only_after_approval_with_the_text_shown() {
     let logged = std::fs::read_to_string(&log).unwrap();
     assert!(logged.contains(&format!("pr create --base main --head {branch} --title Dark prompt bubbles --body-file -")), "{logged}");
     assert!(logged.contains("Readable on a phone."), "{logged}");
+
+    // The session remembers it, for the session list's "#7".
+    let s = c.call::<Session>(m::SESSION_GET, json!({"session_id": sid})).await.unwrap();
+    assert_eq!(s.pull_request.map(|p| (p.number, p.url)), Some((7, "https://github.com/o/r/pull/7".into())));
 }
 
 #[tokio::test]

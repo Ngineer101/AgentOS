@@ -165,6 +165,8 @@ struct SessionInfo: Codable, Identifiable, Hashable {
     var configOptions: [SessionConfigOption]? = nil
     /// The agent answers side questions (`/btw`, `session.side_ask`).
     var sideQuestions: Bool? = nil
+    /// The pull request the session opened (its newest). Absent on older hosts.
+    var pullRequest: SessionPullRequest? = nil
     /// The automation this session is a run of (protocol 5).
     var automationId: String? = nil
 
@@ -198,8 +200,14 @@ struct SessionInfo: Codable, Identifiable, Hashable {
         case worktree
         case configOptions = "config_options"
         case sideQuestions = "side_questions"
+        case pullRequest = "pull_request"
         case automationId = "automation_id"
     }
+}
+
+struct SessionPullRequest: Codable, Hashable {
+    var number: Int
+    var url: String
 }
 
 struct SessionWorktree: Codable, Hashable {

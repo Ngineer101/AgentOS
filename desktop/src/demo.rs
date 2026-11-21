@@ -87,6 +87,7 @@ fn base(s: &mut App) {
         worktree: None,
         config_options: vec![],
         side_questions: false,
+        pull_request: None,
         automation_id: None,
     };
     s.sessions = vec![
@@ -97,6 +98,9 @@ fn base(s: &mut App) {
         sess("ses_5", "ws_notes", AgentKind::Codex, None, SessionState::Failed, "Tidy the reading list", 1_500_000),
         sess("ses_4", "ws_notes", AgentKind::Claude, None, SessionState::Ended, "Weekly summary", 90_000_000),
     ];
+    if let Some(r) = s.sessions.iter_mut().find(|x| x.session_id == "ses_3") {
+        r.pull_request = Some(SessionPullRequest { number: 48483, url: "https://github.com/nico/relay/pull/48483".into() });
+    }
     if let Some(f) = s.sessions.iter_mut().find(|x| x.session_id == "ses_5") {
         f.state_reason = Some("codex exited with status 1: model rate limit reached".into());
     }
@@ -343,6 +347,7 @@ fn automations_screen(s: &mut App, id: &str) {
         config_options: vec![],
         side_questions: false,
         automation_id: Some(auto.into()),
+        pull_request: None,
     };
     s.sessions.push(run_session("ses_r3", "auto_deps", "Upgrade dependencies", 21 * H));
     s.sessions.push(run_session("ses_r4", "auto_sentry", "Investigate Sentry alerts", 2 * H));
@@ -589,6 +594,7 @@ fn subagents(s: &mut App) {
             worktree: Some(SessionWorktree { path: "/home/nico/.local/share/agenthost/worktrees/ses_6".into(), branch: "agenthost/audit-relay".into() }),
             config_options: config_options(),
             side_questions: true,
+            pull_request: None,
             automation_id: None,
         },
     );

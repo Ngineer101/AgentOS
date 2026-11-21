@@ -238,6 +238,7 @@ impl SessionManager {
             worktree: worktree.as_ref().map(|(w, _)| w.clone()),
             config_options: vec![],
             side_questions: false,
+            pull_request: None,
             automation_id: None,
             state: SessionState::Created,
             state_reason: None,
