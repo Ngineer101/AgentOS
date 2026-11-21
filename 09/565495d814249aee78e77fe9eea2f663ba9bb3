@@ -1,0 +1,19 @@
+ios/AgentHost/App/AgentHostApp.swift
+  s_f431642f46ca25::t_d3e392f71bc2ad 131-138,157-160,162,170,174,176,179-207,217-220,222-226,229-231,237-239,243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09565495d814249aee78e77fe9eea2f663ba9bb3",
+  "prompts": {},
+  "sessions": {
+    "s_f431642f46ca25": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f431642f46ca25",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
