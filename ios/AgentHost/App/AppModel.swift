@@ -104,7 +104,14 @@ final class AppModel: ObservableObject {
     // MARK: Published state
 
     @Published private(set) var phase: AppPhase = .locked
-    @Published private(set) var link: LinkState = .disconnected
+    @Published private(set) var link: LinkState = .disconnected {
+        didSet { updateConnectionStatus() }
+    }
+    /// Whether to show the connection card. Not for a connect that is going
+    /// normally (every launch and return to the app): only once it has
+    /// failed or is taking a while, and then until it is back online, so the
+    /// card doesn't come and go with each retry.
+    @Published private(set) var showsConnectionStatus = false
     @Published var lockError: String?
     /// Ask for Face ID (or the passcode) when opening the app. Off by default.
     @Published private(set) var requireUnlock = UserDefaults.standard.bool(forKey: AppModel.requireUnlockKey)
@@ -170,6 +177,8 @@ final class AppModel: ObservableObject {
     private var client: RemoteClient?
     private var generation = 0
     private var connectTask: Task<Void, Never>?
+    /// Shows the connection card if a connect is still going after a moment.
+    private var connectGraceTask: Task<Void, Never>?
     private var attempt = 0
     /// Sessions subscribed on the current connection.
     private var subscribed: Set<String> = []
@@ -613,6 +622,31 @@ final class AppModel: ObservableObject {
         subscriptionIds = [:]
         streaming = [:]
         link = .disconnected
+    }
+
+    private func updateConnectionStatus() {
+        switch link {
+        case .online:
+            connectGraceTask?.cancel()
+            connectGraceTask = nil
+            showsConnectionStatus = false
+        case .connecting:
+            guard !showsConnectionStatus, connectGraceTask == nil else { return }
+            connectGraceTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.connectGraceTask = nil
+                if self.link == .connecting { self.showsConnectionStatus = true }
+            }
+        case .disconnected:
+            // Between connections (backgrounded, network changed): keep
+            // whatever is shown until the next attempt says otherwise.
+            break
+        case .hostOffline, .offline, .updateRequired:
+            connectGraceTask?.cancel()
+            connectGraceTask = nil
+            showsConnectionStatus = true
+        }
     }
 
     private func scheduleReconnect() {

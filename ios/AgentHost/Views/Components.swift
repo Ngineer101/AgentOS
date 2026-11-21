@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// Connection state, shown whenever the app is not online. Plain row
+/// Connection state, shown when connecting has failed or is slow (see
+/// `AppModel.showsConnectionStatus`). Plain row
 /// content: inside a `List` it is a normal row; elsewhere wrap it in
 /// `.statusCard()`.
 struct ConnectionStatusRow: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        if !model.link.isOnline {
+        if model.showsConnectionStatus {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: icon)
                     .foregroundStyle(color)
