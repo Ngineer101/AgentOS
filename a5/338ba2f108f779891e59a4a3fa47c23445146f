@@ -1,0 +1,71 @@
+README.md
+  s_15233757237ae2::t_50fd35d2d1b9a3 87-97,185-190
+crates/cli/src/main.rs
+  s_15233757237ae2::t_da3cb70d157100 586,589-590,613-617
+crates/host/src/lib.rs
+  s_15233757237ae2::t_1400ec206a92a9 51
+crates/host/src/push.rs
+  s_15233757237ae2::t_7cbe18686ffe5f 3-14,28,40,60-62,85,87-90,206-209,214-215,220-224,302,304-308,326,344,357-359,369,574,576,643-695,697-742,753,777-804,967,1062-1238
+crates/host/src/remote.rs
+  s_15233757237ae2::t_b3e9072838dd1d 129-133
+crates/host/src/store.rs
+  s_15233757237ae2::t_7182222b175d51 197-198,210,215,230-233,322-325,1099-1101,1106,1113-1114,1117-1118,1126-1128
+crates/proto/src/lib.rs
+  s_15233757237ae2::t_aa059bc33b7644 26-28
+crates/proto/src/methods.rs
+  s_15233757237ae2::t_d8d814699157ab 108-113
+crates/proto/src/tunnel.rs
+  s_15233757237ae2::t_4e773678c21dc2 96,123-153,437-448
+crates/proto/src/types.rs
+  s_15233757237ae2::t_081684ff22ac4e 1444-1453,1455-1456,1459-1460,1462-1463,1509-1512,1518-1519
+docs/relay-protocol.md
+  s_15233757237ae2::t_7132fa68840424 45-46,246-302,314-315
+docs/status.md
+  s_15233757237ae2::t_8aa3c4fd3bd664 45
+ios/AgentHost/App/AppModel+Push.swift
+  s_15233757237ae2::t_df8c852c755135 5-12,30-34,93-137,254-255,258,260,265-271,338-345
+ios/AgentHost/App/AppModel.swift
+  s_15233757237ae2::t_122c10a32f3fa5 1316
+ios/AgentHost/App/DemoData.swift
+  s_15233757237ae2::t_34eb5596fb499a 45,47-49,64-66,68,72-74
+ios/AgentHost/Core/PushModels.swift
+  s_15233757237ae2::t_fd43dc393ca730 15-17,69-71,78,99-104
+ios/AgentHost/Views/NotificationsView.swift
+  s_15233757237ae2::t_b65146e9f8b2ed 12-13,51-58,77-80,94,104,136,304
+ios/AgentHost/Views/SessionsView.swift
+  s_15233757237ae2::t_472078131eeb6e 229
+ios/README.md
+  s_15233757237ae2::t_4823e4040c757a 67,91-103
+ios/project.yml
+  s_15233757237ae2::t_b544b1e19ae61f 81-84,88-89
+relay/README.md
+  s_15233757237ae2::t_83f8968a96e0ce 20-22,69-101,119-122
+relay/src/index.ts
+  s_15233757237ae2::t_0497901dda9e94 1,6,12,21-28
+relay/src/push.ts
+  s_15233757237ae2::t_7d369b3eaee32b 1-386
+relay/src/relay.ts
+  s_15233757237ae2::t_e0aa25c1aa1f7d 14,93-94,98,111-112
+relay/test/env.d.ts
+  s_15233757237ae2::t_6657f762d20b04 9-13
+relay/test/push.test.ts
+  s_15233757237ae2::t_48688f0370aafb 1-191
+relay/vitest.config.ts
+  s_15233757237ae2::t_960f7720457671 3-56,59-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5338ba2f108f779891e59a4a3fa47c23445146f",
+  "prompts": {},
+  "sessions": {
+    "s_15233757237ae2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_15233757237ae2",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
