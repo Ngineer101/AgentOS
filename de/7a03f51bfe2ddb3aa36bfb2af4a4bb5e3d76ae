@@ -1,0 +1,95 @@
+assets/agents/README.md
+  s_f127e1cf1bb112::t_f61863e89596b2 1-12
+assets/agents/claude.svg
+  s_f127e1cf1bb112::t_06740e6b2d1696 1
+assets/agents/codex.svg
+  s_f127e1cf1bb112::t_b9f23a0bc45c88 1
+assets/agents/cursor.svg
+  s_f127e1cf1bb112::t_dd5815517f561c 1
+assets/agents/gemini.svg
+  s_f127e1cf1bb112::t_475e806048aaa2 1
+assets/agents/opencode.svg
+  s_f127e1cf1bb112::t_865e2fe5a43103 1
+crates/fake-agent/src/main.rs
+  s_f127e1cf1bb112::t_9a3d0683816bc7 18-19,356-365,658-663
+crates/host/src/host.rs
+  s_f127e1cf1bb112::t_305854799a59fc 82-87
+crates/host/src/lib.rs
+  s_f127e1cf1bb112::t_8c7faaeeb4b86b 31
+crates/host/src/session.rs
+  s_f127e1cf1bb112::t_5fec6a204b4adc 13,85-101,388-397,850-868,976-978,1228-1230,1583-1585,1861-1973,1975-1977,2190-2194,2209-2212,2230-2234,2254-2259,2474
+crates/host/src/store.rs
+  s_f127e1cf1bb112::t_addfe9b4c2afec 14,276-277,305-308,657,671-753,779,882,1625-1662
+crates/host/src/title.rs
+  s_f127e1cf1bb112::t_58ce6d971f4e8f 1-257
+crates/host/tests/session_titles.rs
+  s_f127e1cf1bb112::t_94af582dc48378 1-104
+crates/proto/src/methods.rs
+  s_f127e1cf1bb112::t_ad04c88b410f07 28
+crates/proto/src/types.rs
+  s_f127e1cf1bb112::t_018fcd38769be4 383-385,447
+desktop/src/demo.rs
+  s_f127e1cf1bb112::t_b91c9f13dc0c39 1013,1021
+desktop/src/icons.rs
+  s_f127e1cf1bb112::t_fd1bb706bda989 76-147
+desktop/src/look.rs
+  s_f127e1cf1bb112::t_15b08c9ccc674d 496,508-511
+desktop/src/model.rs
+  s_f127e1cf1bb112::t_8bc41465cfcc18 1950-1953,1956,1964,1967-1968
+desktop/src/session.rs
+  s_f127e1cf1bb112::t_b81e92736ea83a 356-357,359-362
+desktop/src/tests.rs
+  s_f127e1cf1bb112::t_411f4647b40d3f 916,923-924,927-928,931,1010,1019
+desktop/src/view.rs
+  s_f127e1cf1bb112::t_54202f347cd4ed 414
+docs/status.md
+  s_f127e1cf1bb112::t_5a467bfcbc5fd7 46
+ios/AgentHost/App/AppModel.swift
+  s_f127e1cf1bb112::t_9f19f62497aa1b 265-267,270
+ios/AgentHost/App/DemoData.swift
+  s_f127e1cf1bb112::t_9c2728a89f094a 33,237
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/Contents.json
+  s_f127e1cf1bb112::t_102b831aa67811 1-10
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/claude.svg
+  s_f127e1cf1bb112::t_fce296b265de9b 1
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/Contents.json
+  s_f127e1cf1bb112::t_c298f9f26eec83 1-10
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/codex.svg
+  s_f127e1cf1bb112::t_c699c5d3eecc7b 1
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/Contents.json
+  s_f127e1cf1bb112::t_267d86237666a3 1-10
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/cursor.svg
+  s_f127e1cf1bb112::t_2026a524ebbf1a 1
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/Contents.json
+  s_f127e1cf1bb112::t_775ab5fd846119 1-10
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/gemini.svg
+  s_f127e1cf1bb112::t_478ad9a4a5db37 1
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/Contents.json
+  s_f127e1cf1bb112::t_336042f58067c6 1-10
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/opencode.svg
+  s_f127e1cf1bb112::t_1c45c4d214b256 1
+ios/AgentHost/Views/ArchivedSessionsView.swift
+  s_f127e1cf1bb112::t_2c2874d386f823 103
+ios/AgentHost/Views/Glass.swift
+  s_f127e1cf1bb112::t_188efe0da08f5f 149-150,158-176,179,181-186
+ios/AgentHost/Views/SessionView.swift
+  s_f127e1cf1bb112::t_6567c7e0c4fe51 79,265,523,1901,2462-2541
+ios/AgentHost/Views/SessionsView.swift
+  s_f127e1cf1bb112::t_fd1650e7213f0e 458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de7a03f51bfe2ddb3aa36bfb2af4a4bb5e3d76ae",
+  "prompts": {},
+  "sessions": {
+    "s_f127e1cf1bb112": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f127e1cf1bb112",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
