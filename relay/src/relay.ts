@@ -11,6 +11,7 @@ import {
   verifyEd25519,
 } from "./codec";
 import type { Env } from "./index";
+import { PushSender } from "./push";
 import { sealToHost } from "./seal";
 
 export type Role = "host" | "device" | "pair";
@@ -89,9 +90,12 @@ export class RelayObject extends DurableObject<Env> {
   private hookHits = new Map<string, number[]>();
   /** Last millisecond used in a delivery_id, so ids sort in arrival order. */
   private lastDeliveryMs = 0;
+  /** Push notifications this host sends through the relay (awake only). */
+  private push: PushSender;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.push = new PushSender(env);
     // Answer the exact keepalive string without waking the object.
     ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'),
@@ -104,6 +108,8 @@ export class RelayObject extends DurableObject<Env> {
     const url = new URL(request.url);
     const hook = /^\/v1\/hook\/([0-9a-f]{32})\/([A-Za-z0-9_-]{22,64})$/.exec(url.pathname);
     if (hook) return this.ingestHook(request, hook[1]!, hook[2]!);
+    const send = /^\/v1\/push\/([0-9a-f]{32})\/send$/.exec(url.pathname);
+    if (send) return this.push.send(request, send[1]!);
     const m = /^\/v1\/relay\/([0-9a-f]{32})\/(host|device|pair)$/.exec(url.pathname);
     if (!m) return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {

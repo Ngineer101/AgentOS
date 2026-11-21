@@ -48,6 +48,7 @@ pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()
     let _ = host.connectors.set(Arc::new(gw));
     let remote = remote::Remote::new(&host)?;
     host.automations.set_relay_id(&remote.relay_id);
+    host.push.set_relay_key(remote.relay_key());
     let _ = host.devices.set(remote.clone());
     remote.spawn();
     host.push.spawn();

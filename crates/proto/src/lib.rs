@@ -23,7 +23,9 @@ pub use types::*;
 /// 3: screen sharing (`screen.*`).
 /// 4: push notifications (`push.*`).
 /// 5: automations (`automation.*`), `Session.automation_id`.
-pub const PROTOCOL_VERSION: u32 = 5;
+/// 6: notifications through a relay (`push.register` `gateway`), so the
+/// host needs no APNs key.
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

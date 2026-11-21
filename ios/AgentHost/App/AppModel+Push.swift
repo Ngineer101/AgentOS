@@ -2,11 +2,14 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// Push notifications (protocol 4). The host holds the APNs key
-/// (`push.set_key`) and sends each notification with its content encrypted
-/// to this iPhone's key (`PushKeyStore`), which the notification extension
-/// opens; Apple only sees "A session needs you". The phone registers its
-/// APNs token on every connection while notifications are on.
+/// Push notifications (protocol 4). Usually a relay sends them to Apple with
+/// the APNs key of the team that signs this build: the phone registers its
+/// APNs token with that relay and gives the host only the handle it gets
+/// back (protocol 6). Otherwise the host holds an APNs key (`push.set_key`)
+/// and sends to Apple itself. Either way each notification's content is
+/// encrypted to this iPhone's key (`PushKeyStore`), which the notification
+/// extension opens; Apple only sees "A session needs you". The phone
+/// registers on every connection while notifications are on.
 extension AppModel {
     static let notificationsEnabledKey = "notificationsEnabled"
     static let pushPrefsKey = "pushPrefs"
@@ -22,6 +25,11 @@ extension AppModel {
 
     var hostSupportsPush: Bool {
         (hostProtocolVersion ?? hostInfo?.protocolVersion ?? 0) >= RPC.pushProtocolVersion
+    }
+
+    /// The host can send through a relay (no APNs key on the host).
+    var hostSupportsPushRelay: Bool {
+        (hostProtocolVersion ?? hostInfo?.protocolVersion ?? 0) >= RPC.pushRelayProtocolVersion
     }
 
     /// iOS lets AgentHost show notifications (or hasn't been asked yet).
@@ -80,6 +88,51 @@ extension AppModel {
               let ents = dict["Entitlements"] as? [String: Any]
         else { return nil }
         return ents["aps-environment"] as? String
+    }
+
+    /// The relay that sends this build's notifications to Apple:
+    /// `AgentHostPushRelay` in Info.plist (set by whoever publishes the app,
+    /// with their team's APNs key on that relay), else the relay this
+    /// iPhone is paired through.
+    var pushRelayURL: URL? {
+        if let s = Bundle.main.object(forInfoDictionaryKey: "AgentHostPushRelay") as? String,
+           !s.isEmpty, !s.hasPrefix("$("), let url = Self.httpURL(fromRelay: s) {
+            return url
+        }
+        return credentials.flatMap { Self.httpURL(fromRelay: $0.relayUrl) }
+    }
+
+    /// `wss://relay.example` → `https://relay.example` (and `ws` → `http`).
+    static func httpURL(fromRelay s: String) -> URL? {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        while t.hasSuffix("/") { t.removeLast() }
+        if t.hasPrefix("wss://") { t = "https://" + t.dropFirst(6) }
+        else if t.hasPrefix("ws://") { t = "http://" + t.dropFirst(5) }
+        guard let url = URL(string: t), url.scheme == "https" || url.scheme == "http", url.host != nil else { return nil }
+        return url
+    }
+
+    /// `POST /v1/push/register` on the relay: this iPhone's token, sealed by
+    /// the relay for this host only. Nil when the relay doesn't send for
+    /// this build (or can't be reached): the host then needs its own key.
+    private func relayHandle(token: String) async -> (url: String, handle: String)? {
+        guard hostSupportsPushRelay, let base = pushRelayURL, let relayId = credentials?.relayId else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent("v1/push/register"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "token": token,
+            "topic": Self.pushTopic,
+            "environment": Self.apnsEnvironment,
+            "relay_id": relayId,
+        ])
+        guard let reply = try? await URLSession.shared.data(for: req),
+              (reply.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: reply.0) as? [String: Any],
+              let handle = obj["handle"] as? String, !handle.isEmpty
+        else { return nil }
+        return (base.absoluteString, handle)
     }
 
     // MARK: Status
@@ -198,18 +251,24 @@ extension AppModel {
         applyPushStatus(st)
     }
 
-    /// `push.register` with the current token, key and prefs. Idempotent.
+    /// `push.register` with the current token (or the relay's handle for
+    /// it), key and prefs. Idempotent.
     @discardableResult
     func registerPush() async throws -> PushStatusModel {
-        let token = try await remoteToken()
+        let token = try await remoteToken().map { String(format: "%02x", $0) }.joined()
         let key = try PushKeyStore.loadOrCreate()
-        let st: PushStatusModel = try await call(RPC.pushRegister, [
-            "token": token.map { String(format: "%02x", $0) }.joined(),
+        var params: [String: Any] = [
             "topic": Self.pushTopic,
             "environment": Self.apnsEnvironment,
             "key": PushCrypto.base64URLEncode(key),
             "prefs": pushPrefs.params,
-        ])
+        ]
+        if let relay = await relayHandle(token: token) {
+            params["gateway"] = ["url": relay.url, "handle": relay.handle]
+        } else {
+            params["token"] = token
+        }
+        let st: PushStatusModel = try await call(RPC.pushRegister, params)
         applyPushStatus(st)
         return st
     }
@@ -276,6 +335,14 @@ extension AppModel {
             return "This iPhone's token is no longer valid (Unregistered). Turn notifications off and on again."
         case "ExpiredProviderToken", "TooManyProviderTokenUpdates":
             return "Apple refused the host's sign-in (\(reason)). Try again in a minute."
+        case "NoAPNsKey":
+            return "The host has no APNs key, so nothing was sent."
+        case "BadHandle", "PushUnavailable":
+            return "The relay that sends notifications no longer takes this iPhone's registration (\(reason)). Turn notifications off and on again."
+        case "BadSignature":
+            return "The relay that sends notifications didn't accept the host's signature (BadSignature). Check that the host's clock is right."
+        case "TooManyRequests":
+            return "The host sent too many notifications in a minute; the relay held some back."
         default:
             return reason
         }

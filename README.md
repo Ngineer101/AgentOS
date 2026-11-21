@@ -84,13 +84,17 @@ command through the relay.
 
 Notifications: the iPhone app can notify you when a session needs your
 approval (and, if you ask, when an agent finishes its turn or a session
-fails). Turn them on while pairing or in Settings → Notifications. The host
-sends them through Apple's APNs with the APNs key (`.p8`) of the Apple
-Developer account the app is signed with: the phone asks for it once per
-host, or run `agenthost push setup --key AuthKey_XXXXXXXXXX.p8 --team-id <TEAM ID>`.
-What a notification says is encrypted to the phone; Apple only sees
-"A session needs you". `agenthost push status` and `agenthost push test`
-show and check it.
+fails). Turn them on while pairing or in Settings → Notifications; there is
+nothing to set up on the host. Apple takes notifications for an app only
+with the APNs key of the team that signs it, so the relay of whoever
+publishes the app holds that key and passes notifications on to Apple
+([relay/README.md](relay/README.md#push-notifications-if-you-publish-the-ios-app)).
+If you build the app yourself under another team and run no such relay, the
+host sends to Apple itself with your team's key (`.p8`): the phone asks for
+it once per host, or run `agenthost push setup --key AuthKey_XXXXXXXXXX.p8 --team-id <TEAM ID>`.
+What a notification says is encrypted to the phone; Apple (and the relay)
+only see "A session needs you". `agenthost push status` and `agenthost push
+test` show and check it.
 
 ## Automations
 
@@ -178,10 +182,12 @@ program from a folder a session can write. "Always Allow" lets a prefix such
 as `gh pr edit` run without asking from then on (listed, and undone, under
 Settings → Connectors); shells, interpreters and build tools always ask.
 Nothing from the repository, such as its hooks, runs outside the sandbox.
-Push notifications go from the host straight to Apple's APNs (the relay is
-not involved); their content is sealed with a key each phone gives the host
-(ChaCha20-Poly1305) and opened on the phone, so Apple sees only a generic
-alert. The host listens on no network port. See
+Push notifications go from the host to the relay that serves the phone's
+build of the app, which passes them to Apple's APNs (or, for builds without
+one, from the host straight to APNs); their content is sealed with a key each
+phone gives the host (ChaCha20-Poly1305) and opened on the phone, so Apple
+and the relay see only a generic alert. The phone's APNs token goes to that
+relay, never to the host. The host listens on no network port. See
 [docs/status.md](docs/status.md) for what is verified and the limits.
 
 ## Development

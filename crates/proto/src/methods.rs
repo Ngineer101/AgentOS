@@ -105,10 +105,12 @@ pub const SCREEN_ATTACH: &str = "screen.attach";
 /// Allow phones to watch (and click and type). Desktop only.
 pub const SCREEN_SET_POLICY: &str = "screen.set_policy";
 
-/// Push notifications through APNs. The host holds the APNs key
-/// (`push.set_key`, which a phone may call while pairing: it is only the
-/// host's credential for Apple, and every notification's content is
-/// encrypted to the receiving phone); each phone registers its own token.
+/// Push notifications through APNs. Usually the relay that serves the
+/// phone's build of the app sends them to Apple (`push.register` with
+/// `gateway`, protocol 6); otherwise the host does, with an APNs key of its
+/// own (`push.set_key`, which a phone may call while pairing: it is only the
+/// host's credential for Apple). Either way every notification's content is
+/// encrypted to the receiving phone.
 pub const PUSH_STATUS: &str = "push.status";
 pub const PUSH_SET_KEY: &str = "push.set_key";
 pub const PUSH_CLEAR_KEY: &str = "push.clear_key";

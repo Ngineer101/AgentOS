@@ -1313,7 +1313,7 @@ final class AppModel: ObservableObject {
         screenStatus = d.screenStatus
         automations = d.automations
         hostProtocolVersion = RPC.automationProtocolVersion
-        notificationsEnabled = d.screen == .notifications
+        notificationsEnabled = d.screen == .notifications || d.screen == .notificationsOwnKey
         pushPrefs = PushPrefsModel()
         pushStatus = d.pushStatus(for: d.screen)
         pushAuthorization = .authorized

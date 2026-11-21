@@ -583,9 +583,11 @@ async fn push_cmd(c: &Client, cmd: PushCmd, json_out: bool) -> Result<()> {
         print_json(&serde_json::to_value(&st)?);
         return Ok(());
     }
+    let direct = st.devices.iter().any(|d| d.gateway.is_none());
     match (&st.key_id, &st.team_id) {
         (Some(k), Some(t)) if st.configured => println!("APNs key: {k} (team {t})"),
-        _ => println!("APNs key: not set up (`agenthost push setup`, or pair an iPhone)"),
+        _ if !direct => println!("APNs key: none (not needed: a relay sends to Apple for every phone)"),
+        _ => println!("APNs key: not set up (`agenthost push setup`); phones marked \"own key\" get nothing until it is"),
     }
     if let Some(d) = &st.this_device {
         println!("This device: {} ({})", d.name, d.environment.as_str());
@@ -608,7 +610,11 @@ async fn push_cmd(c: &Client, cmd: PushCmd, json_out: bool) -> Result<()> {
             what.push("automations");
         }
         let what = if what.is_empty() { "nothing".to_string() } else { what.join(", ") };
-        print!("{}  {}  {}  {}", d.device_id, d.name, d.environment.as_str(), what);
+        let via = match &d.gateway {
+            Some(url) => format!("via {}", url.trim_start_matches("https://")),
+            None => "own key".to_string(),
+        };
+        print!("{}  {}  {}  {}  {}", d.device_id, d.name, d.environment.as_str(), via, what);
         match &d.last_error {
             Some(e) => println!("  (last refused: {e})"),
             None => println!(),

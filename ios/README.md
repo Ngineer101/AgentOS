@@ -64,7 +64,7 @@ must be reachable from the phone.
 
 For screenshots, Debug builds take `-AgentHostDemo` (sample host, sessions,
 transcripts and an approval; no pairing, lock or network) and optionally
-`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair|notifications|pair-notifications|pair-apns-key|automations|automation|automation-webhook|automation-new`
+`-AgentHostDemoScreen session|dictating|new|new-login|picker|settings|archived|archived-session|pair|notifications|notifications-own-key|pair-notifications|pair-apns-key|automations|automation|automation-webhook|automation-new`
 (`App/DemoData.swift`; compiled out of Release builds):
 
 ```sh
@@ -88,13 +88,19 @@ leave the feature off and everything else works).
    App IDs and capabilities.
 2. Create an APNs key: developer.apple.com → Certificates, Identifiers &
    Profiles → Keys → +, enable "Apple Push Notifications service (APNs)",
-   download `AuthKey_<KEYID>.p8` (it can be downloaded only once) and put it
-   where the phone can reach it, for example iCloud Drive.
-3. Pair the phone. After the first connection the app asks to turn on
-   notifications and, when the host has no key yet, to pick the `.p8` file
-   (Settings → Notifications → "Add APNs Key…" later). The key goes to the
-   host (`push.set_key`), never stays on the phone; the team id is the app's
-   own (`AppIdentifierPrefix` in Info.plist).
+   download `AuthKey_<KEYID>.p8` (it can be downloaded only once).
+3. Give it to your relay once ([relay/README.md](../relay/README.md#push-notifications-if-you-publish-the-ios-app)).
+   Phones paired through it get notifications with nothing to set up on the
+   host: the app registers its APNs token with the relay
+   (`POST /v1/push/register`) and gives the host only the handle it gets
+   back. For builds you hand out, set `AGENTHOST_PUSH_RELAY` to
+   `https://<your relay>` so phones paired through other relays use yours.
+4. Without such a relay (or with a host older than protocol 6), the host
+   sends to Apple itself: after pairing the app asks for the `.p8` file
+   (Settings → Notifications → "Add APNs Key…" later; it says plainly that
+   nothing is sent until there is one). The key goes to the host
+   (`push.set_key`), never stays on the phone; the team id is the app's own
+   (`AppIdentifierPrefix` in Info.plist).
 
 The app tells the host which APNs server its token belongs to: Debug
 builds use the sandbox; other builds read `aps-environment` from the

@@ -126,6 +126,11 @@ impl Remote {
         }))
     }
 
+    /// The host's relay key (push notifications through a relay are signed with it).
+    pub fn relay_key(&self) -> RelayKey {
+        self.relay.clone()
+    }
+
     /// Keep a connection to the relay, reconnecting with backoff.
     pub fn spawn(self: &Arc<Self>) {
         let Some(url) = self.url.clone() else { return };

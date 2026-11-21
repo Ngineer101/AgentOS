@@ -93,6 +93,7 @@ fn x25519_public(private: &[u8; 32]) -> [u8; 32] {
 }
 
 /// An Ed25519 key for relay authentication.
+#[derive(Clone)]
 pub struct RelayKey(pub SigningKey);
 
 impl RelayKey {
@@ -119,6 +120,37 @@ impl RelayKey {
             .sign(challenge_message(role, relay_id, nonce).as_bytes())
             .to_bytes())
     }
+    /// Sign a push notification for a relay's push service
+    /// (`POST /v1/push/{relay_id}/send`; `time_ms` goes in `x-agenthost-time`).
+    pub fn sign_push(&self, time_ms: i64, body: &[u8]) -> String {
+        b64(&self
+            .0
+            .sign(push_send_message(&self.relay_id(), time_ms, body).as_bytes())
+            .to_bytes())
+    }
+}
+
+/// What a host signs to send a push notification through a relay:
+/// `agenthost-push-v1:send:{relay_id}:{time_ms}:{base64url(sha256(body))}`.
+pub fn push_send_message(relay_id: &str, time_ms: i64, body: &[u8]) -> String {
+    format!(
+        "agenthost-push-v1:send:{relay_id}:{time_ms}:{}",
+        b64(&Sha256::digest(body))
+    )
+}
+
+/// Verify [`RelayKey::sign_push`] (tests and the dev relay).
+pub fn verify_push(public: &[u8], relay_id: &str, time_ms: i64, body: &[u8], sig: &[u8]) -> bool {
+    let Ok(pk) = key32(public).and_then(|k| {
+        VerifyingKey::from_bytes(&k).map_err(|e| TunnelError::Invalid(e.to_string()))
+    }) else {
+        return false;
+    };
+    let Ok(sig) = ed25519_dalek::Signature::from_slice(sig) else {
+        return false;
+    };
+    pk.verify(push_send_message(relay_id, time_ms, body).as_bytes(), &sig)
+        .is_ok()
 }
 
 pub fn relay_id(public: &[u8; 32]) -> String {
@@ -401,6 +433,18 @@ pub struct PairResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The relay's push service checks this in TypeScript
+    /// (`relay/test/push.test.ts`, "verifies a host's signature from Rust").
+    #[test]
+    fn push_signature_vector() {
+        let key = RelayKey::from_bytes(&[7u8; 32]).unwrap();
+        let body = br#"{"handle":"h","sealed":"s"}"#;
+        let sig = key.sign_push(1_700_000_000_000, body);
+        println!("public {} relay_id {} sig {sig}", b64(&key.public()), key.relay_id());
+        assert!(verify_push(&key.public(), &key.relay_id(), 1_700_000_000_000, body, &unb64(&sig).unwrap()));
+        assert!(!verify_push(&key.public(), &key.relay_id(), 1_700_000_000_001, body, &unb64(&sig).unwrap()));
+    }
 
     fn qr(host: &StaticKey, secret: [u8; 32]) -> PairingQr {
         PairingQr {
