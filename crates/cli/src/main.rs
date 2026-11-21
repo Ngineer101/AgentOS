@@ -2213,6 +2213,9 @@ impl Renderer {
                     p["approval_id"].as_str().unwrap_or("")
                 );
             }
+            EventType::ApprovalResolved if p["withdrawn"] == true => {
+                println!("  approval withdrawn: the agent stopped waiting");
+            }
             EventType::ApprovalResolved => {
                 println!(
                     "  approval {} by {}",

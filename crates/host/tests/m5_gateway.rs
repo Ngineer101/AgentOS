@@ -192,6 +192,59 @@ async fn write_tool_waits_for_approval_from_any_device() {
     wait_state(&s.c, &s.sid, SessionState::Idle, T).await;
 }
 
+/// An agent that gives up waiting on a write (its HTTP client timed out, say)
+/// and calls again: the abandoned request leaves the pending list, and once
+/// the retry is approved the session is no longer waiting for approval.
+#[tokio::test]
+async fn abandoned_approval_does_not_leave_the_session_waiting() {
+    let mut s = setup().await;
+    s.c.prompt(&s.sid, r#"mcp-retry 1 test__create_note {"text":"buy milk"}"#)
+        .await
+        .unwrap();
+    let (ev, _) = collect_until(&mut s.n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let first = ev.last().unwrap().payload["approval_id"].clone();
+    // The agent drops the first call and asks again.
+    let (ev, _) = collect_until(&mut s.n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let gone = ev
+        .iter()
+        .find(|e| e.kind == EventType::ApprovalResolved)
+        .expect("the abandoned request is resolved");
+    assert_eq!(gone.payload["approval_id"], first);
+    assert_eq!(gone.payload["withdrawn"], true);
+    let second = ev.last().unwrap().payload["approval_id"].clone();
+    assert_ne!(first, second);
+    let pending: Vec<PendingApproval> = s.c.call(m::APPROVAL_LIST, json!({})).await.unwrap();
+    assert_eq!(
+        pending.iter().map(|p| p.approval_id.as_str()).collect::<Vec<_>>(),
+        vec![second.as_str().unwrap()]
+    );
+    // Answering the abandoned one fails rather than seeming to work.
+    assert!(s
+        .c
+        .request(m::APPROVAL_RESPOND, json!({"approval_id": first, "decision": "approve"}))
+        .await
+        .is_err());
+
+    s.c.request(m::APPROVAL_RESPOND, json!({"approval_id": second, "decision": "approve"}))
+        .await
+        .unwrap();
+    let (ev, _) = collect_until(&mut s.n, T, turn_end).await;
+    let approved = ev
+        .iter()
+        .position(|e| e.kind == EventType::ApprovalResolved && e.payload["approval_id"] == second)
+        .unwrap();
+    // Back to running before the turn ends, not still waiting.
+    assert!(
+        ev[approved..]
+            .iter()
+            .any(|e| e.kind == EventType::SessionState && e.payload["state"] == "running"),
+        "{:#?}",
+        ev[approved..].iter().map(|e| (&e.kind, &e.payload)).collect::<Vec<_>>()
+    );
+    assert_eq!(s.server.state.calls.lock().unwrap().len(), 1);
+    wait_state(&s.c, &s.sid, SessionState::Idle, T).await;
+}
+
 #[tokio::test]
 async fn denied_write_never_reaches_the_server() {
     let mut s = setup().await;
@@ -211,6 +264,18 @@ async fn denied_write_never_reaches_the_server() {
         .iter()
         .any(|e| e.kind == EventType::ToolResult && e.payload["status"] == "denied"));
     assert!(s.server.state.calls.lock().unwrap().is_empty());
+    // A denial ends the wait like an approval: nothing left to answer, and
+    // the session stops asking for approval.
+    let pending: Vec<PendingApproval> = s.c.call(m::APPROVAL_LIST, json!({})).await.unwrap();
+    assert!(pending.is_empty());
+    let denied = ev
+        .iter()
+        .position(|e| e.kind == EventType::ApprovalResolved && e.payload["approval_id"] == id)
+        .unwrap();
+    assert!(ev[denied..]
+        .iter()
+        .any(|e| e.kind == EventType::SessionState && e.payload["state"] == "running"));
+    wait_state(&s.c, &s.sid, SessionState::Idle, T).await;
 }
 
 #[tokio::test]

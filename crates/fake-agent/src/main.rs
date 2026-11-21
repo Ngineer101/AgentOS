@@ -13,6 +13,7 @@
 //! | `fail-loop`            | Repeats the same failing tool call until cancelled     |
 //! | `mcp <tool> [json]`    | Calls a tool on the first MCP server it was given      |
 //! | `mcp-list`             | Lists the tools of the first MCP server                |
+//! | `mcp-retry <secs> <tool> [json]` | Like `mcp`, but gives up on the first call after `<secs>` and calls again |
 //! | `hang <secs>`          | Waits, ignoring `session/cancel`                       |
 //! | `crash`                | Exits the process mid-turn                             |
 //! | `retitle <title>`      | Names the session (`session_info_update`)              |
@@ -666,7 +667,7 @@ async fn run_prompt(
             tokio::time::sleep(Duration::from_millis(50)).await;
             std::process::exit(3);
         }
-        "mcp-list" | "mcp" => {
+        "mcp-list" | "mcp" | "mcp-retry" => {
             let Some(server) = mcp.first() else {
                 say(agent, sid, "no MCP server configured").await;
                 return "end_turn";
@@ -674,6 +675,15 @@ async fn run_prompt(
             let result = if cmd == "mcp-list" {
                 mcp_call(server, "tools/list", json!({})).await
             } else {
+                // `mcp-retry`: how long the first call may take, as an HTTP
+                // client's timeout would decide.
+                let (give_up, rest) = match cmd {
+                    "mcp-retry" => {
+                        let (secs, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+                        (secs.parse::<f64>().ok().map(Duration::from_secs_f64), rest)
+                    }
+                    _ => (None, rest),
+                };
                 let (tool_name, args) = rest.split_once(' ').unwrap_or((rest, "{}"));
                 let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
                 let title = format!(
@@ -690,13 +700,19 @@ async fn run_prompt(
                     &title,
                     json!({"arguments": args.clone()}),
                     async move {
-                        match mcp_call(
-                            &server,
-                            "tools/call",
-                            json!({"name": tool_name, "arguments": args}),
-                        )
-                        .await
-                        {
+                        let params = json!({"name": tool_name, "arguments": args});
+                        let first = match give_up {
+                            // Dropping the call closes its connection.
+                            Some(d) => tokio::time::timeout(d, mcp_call(&server, "tools/call", params.clone()))
+                                .await
+                                .ok(),
+                            None => None,
+                        };
+                        let r = match first {
+                            Some(r) => r,
+                            None => mcp_call(&server, "tools/call", params).await,
+                        };
+                        match r {
                             Ok(v) => (v.get("isError") != Some(&Value::Bool(true)), v.to_string()),
                             Err(e) => (false, e.to_string()),
                         }

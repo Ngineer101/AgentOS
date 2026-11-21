@@ -324,7 +324,8 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
         case EventKind.approvalResolved:
             rows.append(.approvalResolved(
                 seq: e.seq,
-                decision: p["decision"].string ?? "",
+                // Withdrawn: the agent stopped waiting before anyone answered.
+                decision: p["withdrawn"].bool == true ? "withdrawn" : (p["decision"].string ?? ""),
                 device: deviceDisplayName(p["device"].string ?? ""),
                 timedOut: p["timed_out"].bool ?? false
             ))

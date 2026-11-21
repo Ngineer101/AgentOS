@@ -65,6 +65,46 @@ struct Pending {
     tx: oneshot::Sender<(ApprovalDecision, String)>,
 }
 
+/// One wait in `await_approval`. Dropping it ends the wait, whether the user
+/// answered or not: the request leaves the pending list, the transcript says
+/// how it ended, and the session's count of waits goes down. Its drop is the
+/// only way out, so a wait the agent abandons (it gave up on the call, or the
+/// turn was cancelled, and the request future was dropped) cannot leave the
+/// session showing "needs approval" with nothing left to approve.
+struct ApprovalWait<'a> {
+    gw: &'a Gateway,
+    session_id: &'a str,
+    approval_id: String,
+    /// The decision and who made it; `None` while waiting.
+    outcome: Option<(ApprovalDecision, String)>,
+}
+
+impl Drop for ApprovalWait<'_> {
+    fn drop(&mut self) {
+        self.gw.approvals.lock().unwrap().remove(&self.approval_id);
+        let payload = match self.outcome.take() {
+            Some((decision, device)) => json!({
+                "approval_id": self.approval_id,
+                "decision": decision,
+                "timed_out": device == "timeout",
+                "device": device,
+            }),
+            // The agent stopped waiting: nothing ran, and nobody denied it.
+            None => json!({
+                "approval_id": self.approval_id,
+                "decision": ApprovalDecision::Deny,
+                "device": "",
+                "withdrawn": true,
+            }),
+        };
+        let _ = self
+            .gw
+            .ctx
+            .append(self.session_id, EventType::ApprovalResolved, payload);
+        self.gw.set_waiting(self.session_id, -1);
+    }
+}
+
 /// One remote MCP session (the server's `Mcp-Session-Id`).
 #[derive(Default, Clone)]
 struct RemoteSession {
@@ -725,19 +765,17 @@ impl Gateway {
             serde_json::to_value(&info).unwrap(),
         );
         self.set_waiting(session_id, 1);
+        let mut wait = ApprovalWait {
+            gw: self,
+            session_id,
+            approval_id,
+            outcome: None,
+        };
         let (decision, device) = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(d)) => d,
-            _ => {
-                self.approvals.lock().unwrap().remove(&approval_id);
-                (ApprovalDecision::Deny, "timeout".to_string())
-            }
+            _ => (ApprovalDecision::Deny, "timeout".to_string()),
         };
-        let _ = self.ctx.append(
-            session_id,
-            EventType::ApprovalResolved,
-            json!({"approval_id": approval_id, "decision": decision, "device": device, "timed_out": device == "timeout"}),
-        );
-        self.set_waiting(session_id, -1);
+        wait.outcome = Some((decision, device));
         decision
     }
 
