@@ -1,0 +1,19 @@
+crates/host/tests/m5_gateway.rs
+  s_13bfa1210060cc::t_463b63d128328a 267-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68c50efcb8b563eeb7b0ae6d5fd213fd4494beb8",
+  "prompts": {},
+  "sessions": {
+    "s_13bfa1210060cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_13bfa1210060cc",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
