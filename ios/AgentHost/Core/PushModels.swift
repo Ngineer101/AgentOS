@@ -12,6 +12,9 @@ extension RPC {
     static let pushTest = "push.test"
     /// Hosts on this protocol version or newer send push notifications.
     static let pushProtocolVersion: UInt32 = 4
+    /// Hosts on this version or newer can send through a relay
+    /// (`push.register` `gateway`), so they need no APNs key.
+    static let pushRelayProtocolVersion: UInt32 = 6
 }
 
 /// What this iPhone is notified about.
@@ -63,12 +66,16 @@ struct PushDeviceModel: Codable, Hashable {
     var registeredAt: Int64
     /// The last time APNs refused a notification for it, and why.
     var lastError: String?
+    /// The relay that sends its notifications to Apple (protocol 6); nil:
+    /// the host sends them with its own APNs key.
+    var gateway: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
         case name, environment, prefs
         case registeredAt = "registered_at"
         case lastError = "last_error"
+        case gateway
     }
 }
 
@@ -88,6 +95,12 @@ struct PushStatusModel: Codable, Hashable {
         case thisDevice = "this_device"
         case devices
     }
+
+    /// A relay sends this iPhone's notifications: the host needs no key.
+    var viaRelay: Bool { thisDevice?.gateway != nil }
+
+    /// Something can reach this iPhone: through a relay, or with the host's key.
+    var canSend: Bool { configured || viaRelay }
 
     init(configured: Bool, keyId: String? = nil, teamId: String? = nil,
          thisDevice: PushDeviceModel? = nil, devices: [PushDeviceModel] = []) {

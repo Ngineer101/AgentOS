@@ -42,8 +42,11 @@ struct DemoData {
         case screen
         /// Choosing what to show before the stream starts.
         case screenPicker = "screen-picker"
-        /// Settings → Notifications, on, with the host's APNs key set.
+        /// Settings → Notifications, on, sent through the relay.
         case notifications
+        /// Settings → Notifications, on, for a build no relay sends for and
+        /// a host without an APNs key (nothing can be sent).
+        case notificationsOwnKey = "notifications-own-key"
         /// The pairing flow's "Turn On Notifications?" step.
         case pairNotifications = "pair-notifications"
         /// Its "Add Your APNs Key" step (the host has no key yet).
@@ -58,15 +61,17 @@ struct DemoData {
         case automationNew = "automation-new"
     }
 
-    /// `push.status` for a screen: a key and this iPhone registered on
-    /// `notifications`, no key otherwise.
+    /// `push.status` for a screen: this iPhone registered through the relay
+    /// on `notifications`, with its own token and no host key on
+    /// `notifications-own-key`, not registered otherwise.
     func pushStatus(for screen: Screen) -> PushStatusModel {
-        guard screen == .notifications else { return PushStatusModel(configured: false) }
+        guard screen == .notifications || screen == .notificationsOwnKey else { return PushStatusModel(configured: false) }
         let device = PushDeviceModel(
             deviceId: "demo-iphone", name: deviceName, environment: "sandbox",
             prefs: PushPrefsModel(), registeredAt: Int64(Date().timeIntervalSince1970 * 1000) - 86_400_000,
-            lastError: nil)
-        return PushStatusModel(configured: true, keyId: "7KX9Q2M4PL", teamId: "A1B2C3D4E5", thisDevice: device)
+            lastError: nil,
+            gateway: screen == .notifications ? "https://relay.example.workers.dev" : nil)
+        return PushStatusModel(configured: false, thisDevice: device)
     }
 
     var screen: Screen

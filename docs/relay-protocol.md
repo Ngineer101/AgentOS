@@ -42,6 +42,8 @@ GET /v1/relay/{relay_id}/host     WebSocket: the host (one at a time)
 GET /v1/relay/{relay_id}/device   WebSocket: a paired device
 GET /v1/relay/{relay_id}/pair     WebSocket: a device that is pairing
 POST /v1/hook/{relay_id}/{hook_id} Webhook ingress (plain HTTPS, see Webhooks)
+POST /v1/push/register            A phone's APNs token -> a handle (see Push notifications)
+POST /v1/push/{relay_id}/send     The host sends a notification (see Push notifications)
 GET /health                       200 "ok"
 ```
 
@@ -241,6 +243,63 @@ to frames *from* clients and the host): a 262,144-byte body seals to about
 350 KB of base64url, plus headers. The host must accept text frames of up to
 1 MiB.
 
+## Push notifications
+
+Apple accepts notifications for an app only with an APNs key from the Apple
+Developer team that signs it. So whoever publishes the iOS app runs a relay
+with that team's key (Worker secrets `APNS_KEY`, the `.p8` PEM, and
+`APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, the app's bundle id). Hosts
+then need no key, whichever relay they connect through: a build names its
+relay in Info.plist (`AgentHostPushRelay`), and without one the phone uses
+the relay it is paired through. A relay without the secrets answers 404 on
+both routes, and the phone falls back to giving the host its raw token (the
+host then needs its own key, `push.set_key`).
+
+### Registration (the phone)
+
+```
+POST /v1/push/register
+{"token": "<hex>", "topic": "<bundle id>", "environment": "sandbox"|"production", "relay_id": "<host>"}
+-> 200 {"handle": "<base64url>"}
+   400 malformed, 403 a topic this relay doesn't send for, 404 no APNs key here
+```
+
+The handle is `iv(12) ‖ AES-256-GCM(JSON {v:1, t: token, e: environment,
+r: relay_id})` with additional data `agenthost-push-handle-v1:<topic>`,
+under a key derived from `APNS_KEY` (HKDF-SHA256, empty salt, info
+`agenthost-push-handle-v1`). Only this relay can open it, and it names the
+one host that may use it; the phone gives the host the handle, never the
+token. Registration is open (only someone who has a token can make a handle
+for it); nothing is stored.
+
+### Sending (the host)
+
+```
+POST /v1/push/{relay_id}/send
+x-agenthost-key: <host relay public key, base64url>
+x-agenthost-time: <unix ms>
+x-agenthost-signature: <Ed25519 over "agenthost-push-v1:send:{relay_id}:{time}:{base64url(sha256(body))}">
+{"handle": "...", "sealed": "<base64url, at most 3000 chars>", "collapse_id": "<at most 64 bytes>"?}
+```
+
+The relay checks that the key's relay id is the one in the path, that the
+time is within 5 minutes of its clock, the signature, and that the handle
+opens and names this relay id; then at most 60 notifications per host per
+minute (in that host's Durable Object, in memory). It sends Apple
+`{"aps": {"alert": {"title": "AgentHost", "body": "A session needs you"},
+"sound": "default", "mutable-content": 1}, "v": 1, "e": sealed}` with
+`apns-push-type: alert`, priority 10, a 1-hour expiry and the collapse id,
+signed with an ES256 provider token (`iat` rounded down to 40 minutes, so
+every instance uses the same one). `sealed` is the content the host
+encrypted to the phone (ChaCha20-Poly1305); the relay can't read it.
+`BadDeviceToken` is retried in the other environment.
+
+Answers, as APNs would: `200 {"environment"}` (the one that worked), or a
+status with `{"reason"}`: Apple's own (`410 Unregistered` means the host
+drops the phone; Apple's 5xx become 502), or the relay's `401 BadSignature`,
+`400 BadHandle`/`BadPayload`/`BadCollapseId`, `413 PayloadTooLarge`, `429
+TooManyRequests`, `404 PushUnavailable`, `502 ApnsUnreachable`.
+
 ## What the relay stores
 
 Durable Object storage holds exactly:
@@ -252,7 +311,8 @@ Durable Object storage holds exactly:
 - the host's webhook seal public key, and the SHA-256 of each registered hook id;
 - queued webhook deliveries, **sealed** to the host (deleted on ack or after 24 h).
 
-Nothing else is written. Device frames are never buffered: a device that is
+Nothing else is written (push notifications store nothing: handles carry
+the token, sealed, and the content is sealed to the phone). Device frames are never buffered: a device that is
 offline simply misses nothing, because the host replays events from its own
 log. Webhook plaintext (headers and body) exists only in memory while one
 request is handled. Logs record only lifecycle events, for webhooks

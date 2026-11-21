@@ -194,6 +194,8 @@ pub struct PushRow {
     pub prefs: PushPrefs,
     pub registered_at: i64,
     pub last_error: Option<String>,
+    /// The relay that sends to Apple for it; none: the host does, with its key.
+    pub gateway: Option<PushGateway>,
 }
 
 impl PushRow {
@@ -205,11 +207,12 @@ impl PushRow {
             prefs: self.prefs,
             registered_at: self.registered_at,
             last_error: self.last_error.clone(),
+            gateway: self.gateway.as_ref().map(|g| g.url.clone()),
         }
     }
 }
 
-const PUSH_COLS: &str = "p.device_id, d.name, p.token, p.topic, p.environment, p.content_key, p.prefs, p.registered_at, p.last_error";
+const PUSH_COLS: &str = "p.device_id, d.name, p.token, p.topic, p.environment, p.content_key, p.prefs, p.registered_at, p.last_error, p.gateway_url, p.gateway_handle";
 
 fn row_push(r: &rusqlite::Row) -> rusqlite::Result<PushRow> {
     let env: String = r.get(4)?;
@@ -224,6 +227,10 @@ fn row_push(r: &rusqlite::Row) -> rusqlite::Result<PushRow> {
         prefs: serde_json::from_str(&prefs).unwrap_or_default(),
         registered_at: r.get(7)?,
         last_error: r.get(8)?,
+        gateway: match (r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?) {
+            (Some(url), Some(handle)) => Some(PushGateway { url, handle }),
+            _ => None,
+        },
     })
 }
 
@@ -312,6 +319,10 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // user's), and where it came from (`title::TitleSource`).
     ("sessions", "auto_title", "TEXT"),
     ("sessions", "auto_title_source", "TEXT"),
+    // A phone whose notifications a relay sends: its URL and the handle the
+    // relay gave the phone (`token` is then empty).
+    ("push_devices", "gateway_url", "TEXT"),
+    ("push_devices", "gateway_handle", "TEXT"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -1085,22 +1096,26 @@ impl Store {
 
     // ---- push registrations ----
 
-    /// Register (or replace) a device's APNs token.
+    /// Register (or replace) a device's APNs token, or the relay handle
+    /// that stands for it (`token` is then empty).
+    #[allow(clippy::too_many_arguments)]
     pub fn push_register(
         &self,
         device_id: &str,
         token: &str,
+        gateway: Option<&PushGateway>,
         topic: &str,
         environment: PushEnvironment,
         content_key: &[u8],
         prefs: &PushPrefs,
     ) -> Result<()> {
         self.db().execute(
-            "INSERT INTO push_devices (device_id, token, topic, environment, content_key, prefs, registered_at, last_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+            "INSERT INTO push_devices (device_id, token, topic, environment, content_key, prefs, registered_at, last_error, gateway_url, gateway_handle)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)
              ON CONFLICT(device_id) DO UPDATE SET token = excluded.token, topic = excluded.topic,
                environment = excluded.environment, content_key = excluded.content_key,
-               prefs = excluded.prefs, registered_at = excluded.registered_at, last_error = NULL",
+               prefs = excluded.prefs, registered_at = excluded.registered_at, last_error = NULL,
+               gateway_url = excluded.gateway_url, gateway_handle = excluded.gateway_handle",
             params![
                 device_id,
                 token,
@@ -1108,7 +1123,9 @@ impl Store {
                 environment.as_str(),
                 content_key,
                 serde_json::to_string(prefs)?,
-                now_ms()
+                now_ms(),
+                gateway.map(|g| g.url.as_str()),
+                gateway.map(|g| g.handle.as_str()),
             ],
         )?;
         Ok(())

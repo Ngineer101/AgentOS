@@ -1,9 +1,17 @@
 //! Push notifications to paired phones through Apple's APNs.
 //!
-//! The host talks to APNs itself (outbound HTTPS only; it still listens on
-//! no port) with the APNs auth key of the Apple Developer account the iOS app
-//! is signed with. The key is kept in the secret store; a phone may hand it
-//! over while pairing (`push.set_key`), or `agenthost push setup` does.
+//! Apple takes notifications for an app only with an APNs key of the Apple
+//! Developer team that signs it. Usually that team's relay sends them: the
+//! phone registers its APNs token with the relay its build names (`POST
+//! /v1/push/register`) and gives the host only the sealed handle it gets
+//! back; the host posts each notification to that relay, signed with its
+//! relay key (`POST /v1/push/{relay_id}/send`), and needs no key of its own.
+//!
+//! A build signed by another team (built from source) has no such relay:
+//! then the host talks to APNs itself (outbound HTTPS only; it still listens
+//! on no port) with that team's APNs auth key, kept in the secret store. A
+//! phone may hand it over while pairing (`push.set_key`), or `agenthost push
+//! setup` does.
 //!
 //! Each phone registers its device token and a 32-byte key of its own. What a
 //! notification says (session, tool, the agent's reply) is sealed with that
@@ -17,6 +25,7 @@ use crate::secrets::SecretStore;
 use crate::store::PushRow;
 use crate::util::now_ms;
 use agenthost_proto::jsonrpc::{codes, RpcError};
+use agenthost_proto::tunnel::RelayKey;
 use agenthost_proto::*;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
@@ -28,7 +37,7 @@ use p256::pkcs8::DecodePrivateKey;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -48,6 +57,9 @@ const TOKEN_TTL_MS: i64 = 50 * 60 * 1000;
 const EXPIRY: Duration = Duration::from_secs(60 * 60);
 /// Longest body, in characters.
 const BODY_MAX: usize = 180;
+/// Longest relay URL and handle a phone may register.
+const GATEWAY_URL_MAX: usize = 300;
+const HANDLE_MAX: usize = 1024;
 
 const PRODUCTION_URL: &str = "https://api.push.apple.com";
 const SANDBOX_URL: &str = "https://api.sandbox.push.apple.com";
@@ -70,7 +82,12 @@ struct Signer256 {
 pub struct Push {
     ctx: Arc<Ctx>,
     secrets: Arc<dyn SecretStore>,
+    /// To APNs (HTTP/2).
     http: reqwest::Client,
+    /// To relays that send for phones (`PushRow::gateway`).
+    relay_http: reqwest::Client,
+    /// The host's relay key, which signs what it asks a relay to send.
+    relay_key: OnceLock<RelayKey>,
     /// The provider token in use and when it was made.
     token: Mutex<Option<(String, i64)>>,
 }
@@ -186,12 +203,23 @@ impl Push {
             // A local test server: HTTP/2 without TLS.
             b = b.http2_prior_knowledge();
         }
+        let relay_http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("http client");
         Arc::new(Self {
             ctx,
             secrets,
             http: b.build().expect("http client"),
+            relay_http,
+            relay_key: OnceLock::new(),
             token: Mutex::new(None),
         })
+    }
+
+    /// The host's relay key (from remote access, once it has loaded it).
+    pub fn set_relay_key(&self, key: RelayKey) {
+        let _ = self.relay_key.set(key);
     }
 
     fn key_info(&self) -> Option<KeyInfo> {
@@ -271,8 +299,13 @@ impl Push {
     }
 
     pub fn register(&self, device_id: &str, p: PushRegisterParams) -> Result<(), RpcError> {
+        let gateway = p.gateway.as_ref().map(check_gateway).transpose()?;
         let token = p.token.trim().to_ascii_lowercase();
-        if token.len() < 32 || token.len() > 400 || token.len() & 1 == 1 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
+        if gateway.is_some() {
+            if !token.is_empty() {
+                return Err(bad("give the device token or a relay's handle, not both"));
+            }
+        } else if token.len() < 32 || token.len() > 400 || token.len() & 1 == 1 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(bad("the device token must be hex"));
         }
         let topic = p.topic.trim();
@@ -290,7 +323,7 @@ impl Push {
         }
         self.ctx
             .store
-            .push_register(device_id, &token, topic, p.environment, &key, &p.prefs)
+            .push_register(device_id, &token, gateway.as_ref(), topic, p.environment, &key, &p.prefs)
             .map_err(internal)
     }
 
@@ -308,9 +341,7 @@ impl Push {
 
     /// Send a test notification to one device, or to every registered one.
     pub async fn test(&self, device_id: Option<&str>) -> Result<PushTestResult, RpcError> {
-        let signer = self.signer().ok_or_else(|| {
-            RpcError::new(codes::UNAVAILABLE, "the host has no APNs key yet")
-        })?;
+        let signer = self.signer();
         let rows: Vec<PushRow> = match device_id {
             Some(d) => vec![self
                 .ctx
@@ -323,6 +354,9 @@ impl Push {
         if rows.is_empty() {
             return Err(RpcError::not_found("no device is registered for notifications"));
         }
+        if signer.is_none() && rows.iter().all(|r| r.gateway.is_none()) {
+            return Err(RpcError::new(codes::UNAVAILABLE, "the host has no APNs key yet"));
+        }
         let content = PushContent {
             kind: "test".into(),
             title: "Notifications are on".into(),
@@ -332,7 +366,7 @@ impl Push {
         };
         let mut out = PushTestResult { sent: 0, errors: vec![] };
         for row in rows {
-            match self.deliver(&signer, &row, &content, None).await {
+            match self.deliver(signer.as_ref(), &row, &content, None).await {
                 Ok(()) => out.sent += 1,
                 Err(e) => out.errors.push(format!("{}: {}", row.name, e.reason)),
             }
@@ -537,12 +571,9 @@ impl Push {
         if rows.is_empty() {
             return;
         }
-        let Some(signer) = self.signer() else {
-            tracing::debug!("push: no APNs key; not notifying");
-            return;
-        };
+        let signer = self.signer();
         for row in rows {
-            if let Err(e) = self.deliver(&signer, &row, &content, Some(&collapse)).await {
+            if let Err(e) = self.deliver(signer.as_ref(), &row, &content, Some(&collapse)).await {
                 tracing::warn!(device = %row.device_id, status = e.status, reason = %e.reason, "push refused");
             }
         }
@@ -609,38 +640,82 @@ impl Push {
         })
     }
 
+    /// Ask the phone's relay to send it (`POST {url}/v1/push/{relay_id}/send`).
+    /// The relay answers as APNs would; it switches environments itself.
+    async fn post_gateway(
+        &self,
+        g: &PushGateway,
+        row: &PushRow,
+        content: &PushContent,
+        collapse: Option<&str>,
+    ) -> Result<Option<PushEnvironment>, Refused> {
+        let key = self.relay_key.get().ok_or_else(|| Refused {
+            status: 0,
+            reason: "remote access hasn't started yet".into(),
+        })?;
+        let sealed = seal(&row.content_key, content).map_err(|e| Refused {
+            status: 0,
+            reason: e.to_string(),
+        })?;
+        let mut msg = json!({"handle": g.handle, "sealed": sealed});
+        if let Some(c) = collapse {
+            msg["collapse_id"] = json!(c);
+        }
+        let body = msg.to_string().into_bytes();
+        let time = now_ms();
+        let url = format!(
+            "{}/v1/push/{}/send",
+            g.url.trim_end_matches('/'),
+            key.relay_id()
+        );
+        let resp = self
+            .relay_http
+            .post(url)
+            .header("content-type", "application/json")
+            .header("x-agenthost-key", agenthost_proto::tunnel::b64(&key.public()))
+            .header("x-agenthost-time", time.to_string())
+            .header("x-agenthost-signature", key.sign_push(time, &body))
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Refused {
+                status: 0,
+                reason: format!("could not reach the relay that sends notifications: {e}"),
+            })?;
+        let status = resp.status().as_u16();
+        let v: Value = resp.json().await.unwrap_or(Value::Null);
+        if status == 200 {
+            return Ok(v["environment"].as_str().and_then(PushEnvironment::parse));
+        }
+        Err(Refused {
+            status,
+            reason: v["reason"].as_str().unwrap_or("unknown").to_string(),
+        })
+    }
+
     async fn deliver(
         &self,
-        s: &Signer256,
+        s: Option<&Signer256>,
         row: &PushRow,
         content: &PushContent,
         collapse: Option<&str>,
     ) -> Result<(), Refused> {
-        let body = payload(&row.content_key, content).map_err(|e| Refused {
-            status: 0,
-            reason: e.to_string(),
-        })?;
-        let mut env = row.environment;
-        let mut r = self.post(s, row, env, &body, collapse, false).await;
-        if let Err(e) = &r {
-            match e.reason.as_str() {
-                // The provider token aged out or the key changed: make a new one.
-                "ExpiredProviderToken" | "InvalidProviderToken" => {
-                    r = self.post(s, row, env, &body, collapse, true).await;
-                }
-                // A token from the other environment (a debug build that
-                // thought it was a release, or the other way round).
-                "BadDeviceToken" => {
-                    let other = env.other();
-                    if self.post(s, row, other, &body, collapse, false).await.is_ok() {
-                        env = other;
-                        let _ = self.ctx.store.push_set_environment(&row.device_id, other);
-                        r = Ok(());
+        let r = match (&row.gateway, s) {
+            (Some(g), _) => match self.post_gateway(g, row, content, collapse).await {
+                Ok(env) => {
+                    if let Some(env) = env.filter(|e| *e != row.environment) {
+                        let _ = self.ctx.store.push_set_environment(&row.device_id, env);
                     }
+                    Ok(())
                 }
-                _ => {}
+                Err(e) => Err(e),
+            },
+            (None, Some(s)) => self.deliver_direct(s, row, content, collapse).await,
+            (None, None) => {
+                tracing::warn!(device = %row.device_id, "push: the host has no APNs key; not notifying");
+                Err(Refused { status: 0, reason: "NoAPNsKey".into() })
             }
-        }
+        };
         match &r {
             Ok(()) => {
                 if row.last_error.is_some() {
@@ -659,9 +734,72 @@ impl Push {
                 let _ = self.ctx.store.push_set_error(&row.device_id, Some(&e.reason));
             }
         }
-        tracing::debug!(device = %row.device_id, env = env.as_str(), ok = r.is_ok(), "push sent");
+        tracing::debug!(device = %row.device_id, relay = row.gateway.is_some(), ok = r.is_ok(), "push sent");
         r
     }
+
+    /// Straight to APNs with the host's own key.
+    async fn deliver_direct(
+        &self,
+        s: &Signer256,
+        row: &PushRow,
+        content: &PushContent,
+        collapse: Option<&str>,
+    ) -> Result<(), Refused> {
+        let body = payload(&row.content_key, content).map_err(|e| Refused {
+            status: 0,
+            reason: e.to_string(),
+        })?;
+        let env = row.environment;
+        let mut r = self.post(s, row, env, &body, collapse, false).await;
+        if let Err(e) = &r {
+            match e.reason.as_str() {
+                // The provider token aged out or the key changed: make a new one.
+                "ExpiredProviderToken" | "InvalidProviderToken" => {
+                    r = self.post(s, row, env, &body, collapse, true).await;
+                }
+                // A token from the other environment (a debug build that
+                // thought it was a release, or the other way round).
+                "BadDeviceToken" => {
+                    let other = env.other();
+                    if self.post(s, row, other, &body, collapse, false).await.is_ok() {
+                        let _ = self.ctx.store.push_set_environment(&row.device_id, other);
+                        r = Ok(());
+                    }
+                }
+                _ => {}
+            }
+        }
+        r
+    }
+}
+
+/// A relay a phone named for its notifications: `https://` (plain `http://`
+/// only to this machine, for the dev relay), no user or password, and a
+/// base64url handle.
+fn check_gateway(g: &PushGateway) -> Result<PushGateway, RpcError> {
+    let url = g.url.trim().trim_end_matches('/');
+    let parsed = reqwest::Url::parse(url).map_err(|_| bad("the relay's URL is not a URL"))?;
+    let local = matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    let scheme_ok = parsed.scheme() == "https" || (parsed.scheme() == "http" && local);
+    if url.len() > GATEWAY_URL_MAX
+        || !scheme_ok
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(bad("the relay's URL must be https://<host>"));
+    }
+    let handle = g.handle.trim();
+    if handle.is_empty()
+        || handle.len() > HANDLE_MAX
+        || !handle.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err(bad("the relay's handle must be base64url"));
+    }
+    Ok(PushGateway { url: url.to_string(), handle: handle.to_string() })
 }
 
 #[cfg(test)]
@@ -826,6 +964,7 @@ mod tests {
             let (ka, kb) = ([1u8; 32], [2u8; 32]);
             let reg = |token: &str, key: &[u8], prefs: PushPrefs| PushRegisterParams {
                 token: token.into(),
+                gateway: None,
                 topic: "dev.agenthost.ios".into(),
                 environment: PushEnvironment::Production,
                 key: URL_SAFE_NO_PAD.encode(key),
@@ -919,6 +1058,183 @@ mod tests {
             let st = push.status(None).unwrap();
             assert!(!st.configured && st.key_id.is_none());
             assert!(push.test(None).await.is_err());
+        }
+
+        type Sent = Arc<Mutex<Vec<Value>>>;
+
+        /// A relay's push service: checks the host's signature, answers 410
+        /// for the handle `dead`, says a handle `h-sandbox` worked in the
+        /// sandbox, and keeps what it was asked to send.
+        async fn fake_relay(relay_id: String) -> (String, Sent) {
+            use hyper::server::conn::http1;
+            use hyper::service::service_fn;
+            use hyper_util::rt::TokioIo;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let sent: Sent = Arc::default();
+            let s = sent.clone();
+            tokio::spawn(async move {
+                while let Ok((tcp, _)) = listener.accept().await {
+                    let (s, rid) = (s.clone(), relay_id.clone());
+                    tokio::spawn(async move {
+                        let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                            let (s, rid) = (s.clone(), rid.clone());
+                            async move {
+                                assert_eq!(req.uri().path(), format!("/v1/push/{rid}/send"));
+                                let h = |n: &str| req.headers()[n].to_str().unwrap().to_string();
+                                let (key, time, sig) = (h("x-agenthost-key"), h("x-agenthost-time"), h("x-agenthost-signature"));
+                                let body = req.into_body().collect().await.unwrap().to_bytes();
+                                let signed = agenthost_proto::tunnel::verify_push(
+                                    &agenthost_proto::tunnel::unb64(&key).unwrap(),
+                                    &rid,
+                                    time.parse().unwrap(),
+                                    &body,
+                                    &agenthost_proto::tunnel::unb64(&sig).unwrap(),
+                                );
+                                let msg: Value = serde_json::from_slice(&body).unwrap();
+                                let (status, answer) = if !signed {
+                                    (401, json!({"reason": "BadSignature"}))
+                                } else if msg["handle"] == "dead" {
+                                    (410, json!({"reason": "Unregistered"}))
+                                } else {
+                                    s.lock().unwrap().push(msg.clone());
+                                    let env = if msg["handle"] == "h-sandbox" { "sandbox" } else { "production" };
+                                    (200, json!({"environment": env}))
+                                };
+                                Ok::<_, std::convert::Infallible>(
+                                    hyper::Response::builder()
+                                        .status(status)
+                                        .body(Full::new(Bytes::from(answer.to_string())))
+                                        .unwrap(),
+                                )
+                            }
+                        });
+                        let _ = http1::Builder::new().serve_connection(TokioIo::new(tcp), svc).await;
+                    });
+                }
+            });
+            (url, sent)
+        }
+
+        #[tokio::test]
+        async fn a_relay_sends_for_phones_so_the_host_needs_no_key() {
+            let dir = tempfile::tempdir().unwrap();
+            let host = crate::Host::open(crate::HostConfig::in_dir(dir.path())).unwrap();
+            let ctx = host.ctx.clone();
+            let push = host.push.clone();
+            let relay_key = RelayKey::generate();
+            let (url, sent) = fake_relay(relay_key.relay_id()).await;
+            push.set_relay_key(relay_key);
+            push.spawn();
+            for id in ["dev_a", "dev_b", "dev_c"] {
+                ctx.store
+                    .device_insert(&DeviceRecord {
+                        device: Device {
+                            device_id: id.into(),
+                            name: format!("Phone {id}"),
+                            capabilities: Capability::phone(),
+                            created_at: 0,
+                            last_seen_at: None,
+                            revoked_at: None,
+                        },
+                        public_key: format!("pk-{id}"),
+                        relay_key: format!("rk-{id}"),
+                    })
+                    .unwrap();
+            }
+            let ka = [3u8; 32];
+            let via = |handle: &str, key: &[u8]| PushRegisterParams {
+                token: String::new(),
+                gateway: Some(PushGateway { url: format!("{url}/"), handle: handle.into() }),
+                topic: "dev.agenthost.ios".into(),
+                environment: PushEnvironment::Production,
+                key: URL_SAFE_NO_PAD.encode(key),
+                prefs: PushPrefs::default(),
+            };
+
+            // What a phone may name.
+            for (u, h) in [("http://relay.example", "h"), ("https://u:p@relay.example", "h"), ("https://relay.example", "not base64!")] {
+                let mut p = via("h", &ka);
+                p.gateway = Some(PushGateway { url: u.into(), handle: h.into() });
+                assert!(push.register("dev_a", p).is_err(), "{u} {h}");
+            }
+            let mut both = via("h", &ka);
+            both.token = "a0".repeat(32);
+            assert!(push.register("dev_a", both).is_err());
+
+            push.register("dev_a", via("h-a", &ka)).unwrap();
+            let st = push.status(Some("dev_a")).unwrap();
+            assert!(!st.configured, "no APNs key on the host");
+            assert_eq!(st.this_device.unwrap().gateway.as_deref(), Some(url.as_str()));
+
+            // An approval: through the relay, sealed to the phone.
+            ctx.store
+                .session_insert(&Session {
+                    session_id: "ses_1".into(),
+                    workspace_id: QUICK_WORKSPACE_ID.into(),
+                    agent: AgentKind::Claude,
+                    profile_id: None,
+                    archived_at: None,
+                    worktree: None,
+                    config_options: vec![],
+                    side_questions: false,
+                    pull_request: None,
+                    automation_id: None,
+                    state: SessionState::Running,
+                    state_reason: None,
+                    acp_session_id: None,
+                    title: None,
+                    created_at: 0,
+                    updated_at: 0,
+                    last_seq: 0,
+                })
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let approval = PendingApproval {
+                approval_id: "apr_1".into(),
+                session_id: "ses_1".into(),
+                connector_id: "con_1".into(),
+                connector_name: "GitHub".into(),
+                tool: "create_issue".into(),
+                arguments: json!({}),
+                requested_at: 0,
+                expires_at: 0,
+                summary: None,
+            };
+            ctx.append("ses_1", EventType::ApprovalRequested, serde_json::to_value(&approval).unwrap()).unwrap();
+            for _ in 0..200 {
+                if !sent.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let got = sent.lock().unwrap().clone();
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!((got[0]["handle"].as_str(), got[0]["collapse_id"].as_str()), (Some("h-a"), Some("apr_1")));
+            let c = open(&ka, got[0]["sealed"].as_str().unwrap()).unwrap();
+            assert_eq!(c.body, "Claude Code needs your approval: GitHub · create_issue");
+
+            // A test works without a key; one that worked in the sandbox is remembered.
+            push.register("dev_b", via("h-sandbox", &[4u8; 32])).unwrap();
+            let r = push.test(Some("dev_b")).await.unwrap();
+            assert_eq!((r.sent, r.errors.len()), (1, 0));
+            assert_eq!(push.status(Some("dev_b")).unwrap().this_device.unwrap().environment, PushEnvironment::Sandbox);
+
+            // A phone that registered its token needs the host's key; it says so.
+            let mut direct = via("", &[5u8; 32]);
+            direct.gateway = None;
+            direct.token = "c0".repeat(32);
+            push.register("dev_c", direct).unwrap();
+            let r = push.test(None).await.unwrap();
+            assert_eq!((r.sent, r.errors), (2, vec!["Phone dev_c: NoAPNsKey".to_string()]));
+            assert_eq!(push.status(Some("dev_c")).unwrap().this_device.unwrap().last_error.as_deref(), Some("NoAPNsKey"));
+            assert!(push.test(Some("dev_c")).await.is_err(), "only key-less phones: no APNs key yet");
+
+            // The app was deleted: the relay says Unregistered, the host forgets it.
+            push.register("dev_a", via("dead", &ka)).unwrap();
+            let r = push.test(Some("dev_a")).await.unwrap();
+            assert_eq!(r.sent, 0);
+            assert!(push.status(Some("dev_a")).unwrap().this_device.is_none());
         }
     }
 }

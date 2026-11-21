@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 
 /// "What a notification says is encrypted …", under both screens.
 private let encryptionNote = "What a notification says is encrypted for this iPhone. Apple only sees “A session needs you”."
+/// The same, when a relay passes notifications on to Apple.
+private let relayEncryptionNote = "What a notification says is encrypted for this iPhone. Apple and the relay that passes it on only see “A session needs you”."
 
 // MARK: - Settings → Notifications
 
@@ -46,7 +48,14 @@ struct NotificationsSettingsView: View {
                     Text(pushError).font(.footnote).foregroundStyle(Palette.red)
                 }
             } footer: {
-                Text("Get a notification on this iPhone when a session on \(model.hostName) needs you.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Get a notification on this iPhone when a session on \(model.hostName) needs you.")
+                    // Registered, but neither a relay nor the host can send.
+                    if model.notificationsEnabled, let st = model.pushStatus, st.thisDevice != nil, !st.canSend {
+                        Text("Nothing is sent until \(model.hostName) has an APNs key.")
+                            .foregroundStyle(Palette.red)
+                    }
+                }
             }
 
             if model.notificationsEnabled {
@@ -65,7 +74,10 @@ struct NotificationsSettingsView: View {
                          : "Finished turns: the agent is done and waits for you.")
                 }
 
-                keySection
+                // A relay sends for this iPhone: no key to set up.
+                if let st = model.pushStatus, !st.viaRelay {
+                    keySection
+                }
 
                 Section {
                     Button {
@@ -79,7 +91,7 @@ struct NotificationsSettingsView: View {
                             }
                         }
                     }
-                    .disabled(testing || !model.link.isOnline || model.pushStatus?.configured != true)
+                    .disabled(testing || !model.link.isOnline || model.pushStatus?.canSend != true)
                     if let testNote {
                         Text(testNote).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -89,7 +101,7 @@ struct NotificationsSettingsView: View {
                             .foregroundStyle(Palette.red)
                     }
                 } footer: {
-                    Text(encryptionNote)
+                    Text(model.pushStatus?.viaRelay == true ? relayEncryptionNote : encryptionNote)
                 }
             }
         }
@@ -121,7 +133,7 @@ struct NotificationsSettingsView: View {
         } header: {
             GroupHeader("APNs key on \(model.hostName)")
         } footer: {
-            Text("\(model.hostName) sends notifications through Apple with this key from the Apple Developer account AgentHost is signed with. It is stored on \(model.hostName) only.")
+            Text("This build of AgentHost has no relay that sends its notifications, so \(model.hostName) sends them through Apple itself, with the APNs key (.p8) of the Apple Developer account the app is signed with. It is stored on \(model.hostName) only.")
         }
     }
 
@@ -289,7 +301,7 @@ struct PushOnboardingView: View {
                 case .denied:
                     step = .denied
                 case let .enabled(status):
-                    if status.configured {
+                    if status.canSend {
                         // Ready: one test notification, and done.
                         _ = try? await model.sendTestPush()
                         model.finishPushOnboarding()

@@ -1441,11 +1441,26 @@ pub struct PushSetKeyParams {
     pub team_id: String,
 }
 
+/// A relay that sends notifications to Apple for the host (`POST
+/// /v1/push/register` on it gave the phone `handle`). Protocol 6.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushGateway {
+    /// The relay's base URL (`https://…`).
+    pub url: String,
+    /// The phone's APNs token, sealed by that relay for this host only.
+    pub handle: String,
+}
+
 /// `push.register`: this device wants notifications. Paired devices only.
+/// Either `gateway` (the relay sends to Apple; the host needs no APNs key)
+/// or `token` (the host sends to Apple itself with its own key).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PushRegisterParams {
-    /// The APNs device token, hex.
+    /// The APNs device token, hex. Empty with `gateway`.
+    #[serde(default)]
     pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<PushGateway>,
     /// The app's bundle id (the APNs topic).
     pub topic: String,
     pub environment: PushEnvironment,
@@ -1491,12 +1506,17 @@ pub struct PushDevice {
     /// The last time APNs refused a notification for it, and why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// The relay that sends its notifications (protocol 6); none: the host
+    /// sends them with its own APNs key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
 }
 
 /// `push.status`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PushStatus {
-    /// The host has an APNs key and can send notifications.
+    /// The host has an APNs key of its own. Phones registered through a
+    /// relay (`PushDevice::gateway`) don't need one.
     pub configured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,

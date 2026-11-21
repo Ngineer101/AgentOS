@@ -227,7 +227,7 @@ struct SessionsView: View {
         case .plain: path = [.session(DemoData.plainSession)]
         case .subagents: path = [.session(DemoData.subagentSession)]
         case .screen, .screenPicker: showScreen = true
-        case .notifications: path = [.settings, .notifications]
+        case .notifications, .notificationsOwnKey: path = [.settings, .notifications]
         case .automations, .automationNew: path = [.settings, .automations]
         case .automation: path = [.settings, .automations, .automation(DemoData.upgradeAutomation)]
         case .automationWebhook: path = [.settings, .automations, .automation(DemoData.sentryAutomation)]

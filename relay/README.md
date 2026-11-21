@@ -17,6 +17,9 @@ implementation.
 - `GET /v1/relay/{relay_id}/pair`: a device that is pairing
 - `POST /v1/hook/{relay_id}/{hook_id}`: webhook ingress; answers `202
   {"delivery_id"}` at once (or 404/405/413/429/503) and never waits for the host
+- `POST /v1/push/register` and `POST /v1/push/{relay_id}/send`: push
+  notifications to the iOS app, when this relay has the APNs key of the team
+  that signs the app (below); 404 otherwise
 
 Each `relay_id` maps to its own Durable Object (`idFromName(relay_id)`). The
 object uses the WebSocket Hibernation API, so idle connections are not billed
@@ -63,6 +66,39 @@ wss://agenthost-relay.<subdomain>.workers.dev
 `wrangler.toml`). The host and phones append `/v1/relay/{relay_id}/...`.
 Durable Objects with SQLite storage are available on the Workers Free plan.
 
+## Push notifications (if you publish the iOS app)
+
+Apple accepts notifications for an app only with an APNs key of the Apple
+Developer team that signs it. If you sign the app that others install
+(TestFlight, App Store, or your own phone), give your relay that key once
+and nobody's host needs one:
+
+1. developer.apple.com → Certificates, Identifiers & Profiles → Keys → +,
+   enable "Apple Push Notifications service (APNs)", download
+   `AuthKey_<KEY ID>.p8` (only once). One key works for the sandbox and
+   production.
+2. Set the secrets and deploy:
+
+   ```sh
+   npx wrangler secret put APNS_KEY < AuthKey_XXXXXXXXXX.p8
+   echo XXXXXXXXXX | npx wrangler secret put APNS_KEY_ID      # from the file name
+   echo YOURTEAMID | npx wrangler secret put APNS_TEAM_ID     # Membership details
+   echo dev.agenthost.ios | npx wrangler secret put APNS_TOPIC   # the app's bundle id
+   npx wrangler deploy
+   ```
+
+3. Phones paired through this relay use it by themselves. For builds you
+   hand out, set `AGENTHOST_PUSH_RELAY` (in `ios/project.yml` or Xcode's
+   build settings) to `https://<this relay>`, so phones paired through
+   someone else's relay still get their notifications from yours.
+
+The relay stores nothing for this. The phone gets a handle (its APNs token
+sealed by the relay, usable only by its host); the host sends the handle
+and the content it already encrypted to the phone; the relay adds the
+generic alert ("A session needs you") and passes it to Apple. Each host may
+send 60 a minute. See "Push notifications" in
+[`../docs/relay-protocol.md`](../docs/relay-protocol.md).
+
 ## Run locally
 
 ```sh
@@ -80,7 +116,10 @@ npx tsc --noEmit
 
 Tests generate Ed25519 and X25519 keys with WebCrypto, drive real WebSockets
 through the Worker into the Durable Object, and open sealed webhook deliveries
-the way the host does (`openFromRelay` in `test/helpers.ts`).
+the way the host does (`openFromRelay` in `test/helpers.ts`). Push tests send
+through an APNs stand-in in `vitest.config.ts` (the Worker's outbound
+requests go to it; it checks the provider token's signature, the topic and
+the payload).
 
 ## Interpretation choices
 
