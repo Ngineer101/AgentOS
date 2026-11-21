@@ -49,7 +49,7 @@ struct SessionsView: View {
                 }
                 .listSectionSpacing(14)
 
-                if !model.link.isOnline {
+                if model.showsConnectionStatus {
                     Section {
                         ConnectionStatusRow()
                     }
@@ -96,6 +96,7 @@ struct SessionsView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .animation(.default, value: model.showsConnectionStatus)
             .environment(\.defaultMinListRowHeight, 20)
             .contentMargins(.top, 0, for: .scrollContent)
             .overlay {

@@ -546,7 +546,7 @@ struct SessionView: View {
     @ViewBuilder
     private func transcript(_ rows: [TranscriptRow], working: String?) -> some View {
         LazyVStack(alignment: .leading, spacing: 14) {
-            if !model.link.isOnline {
+            if model.showsConnectionStatus {
                 ConnectionStatusRow().statusCard()
             }
             if approvalBannerNeeded(rows) {
@@ -713,6 +713,7 @@ struct SessionView: View {
         if isTerminal { return "This session has ended" }
         switch model.link {
         case .online: return "Message"
+        case .connecting, .disconnected: return "Connecting…"
         case .hostOffline: return "Host offline"
         default: return "Offline"
         }
