@@ -1670,3 +1670,92 @@ fn automation_screens_lay_out_and_click_through() {
     assert!(state(&mut ui, &|s| !s.auto_open));
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }
+
+#[test]
+fn sent_images_are_fetched_once_and_let_go_with_their_session() {
+    let mut app = demo("sent-images");
+    app.images.clear();
+    app.fetch_images();
+    let mut ids: Vec<&String> = app.images.keys().collect();
+    ids.sort();
+    assert_eq!(ids, ["att_s1", "att_s2"], "images only, not the log file");
+    assert!(app.images.values().all(|i| matches!(i, model::SentImage::Loading)));
+    // An answer decodes; a failure says why and is retried after a reconnect.
+    app.image_cache = Some(rune::ImageCache::new(Arc::new(|| {})));
+    app.apply(bridge::FromHost::AttachmentRead { attachment_id: "att_s1".into(), result: Ok(crate::brand::APP_ICON_PNG.to_vec()) });
+    app.apply(bridge::FromHost::AttachmentRead { attachment_id: "att_s2".into(), result: Err("no such attachment".into()) });
+    let model::SentImage::Ready(img) = &app.images["att_s1"] else { panic!("not decoded") };
+    assert_eq!(img.wait().ok(), Some([512, 512]));
+    assert!(matches!(&app.images["att_s2"], model::SentImage::Failed(e) if e == "no such attachment"));
+    // A late answer for an image no longer wanted is dropped.
+    app.apply(bridge::FromHost::AttachmentRead { attachment_id: "att_gone".into(), result: Ok(vec![]) });
+    assert!(!app.images.contains_key("att_gone"));
+    // Older hosts don't keep images: nothing is asked for.
+    let mut old = demo("sent-images");
+    old.images.clear();
+    old.info.as_mut().unwrap().protocol_version = 6;
+    old.fetch_images();
+    assert!(old.images.is_empty());
+    // Another session: its images only.
+    app.open_session("ses_2");
+    app.fetch_images();
+    assert!(app.images.is_empty());
+}
+
+/// A sent screenshot shows as a picture; clicking it opens the viewer, Escape closes it.
+#[test]
+fn a_sent_image_opens_in_the_viewer() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 900.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "sent-images").unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+            for i in s.images.values() {
+                if let model::SentImage::Ready(img) = i {
+                    let _ = img.wait();
+                }
+            }
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        for k in ["img-att_s1", "img-att_s2"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        assert!(ui.find("viewer").is_none());
+        let (x, y) = ui.find("img-att_s1").unwrap();
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(ui.find("viewer-image").is_some(), "{look:?}: the viewer did not open");
+        ui.key(rune::KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(ui.find("viewer").is_none(), "{look:?}: Escape did not close the viewer");
+    }
+}
+
+/// What you type in a session stays with it while you look at another.
+#[test]
+fn each_session_keeps_its_unsent_message() {
+    let mut app = demo("composer-pickers");
+    app.open_session("ses_1");
+    app.prompt.replace_text("half a thought");
+    app.open_session("ses_2");
+    assert_eq!(app.prompt.text, "", "another session starts empty");
+    app.prompt.replace_text("for ses_2");
+    app.screen = Screen::Automations;
+    app.open_session("ses_1");
+    assert_eq!(app.prompt.text, "half a thought");
+    app.open_session("ses_2");
+    assert_eq!(app.prompt.text, "for ses_2");
+    // Sent: nothing comes back.
+    app.send_prompt();
+    app.open_session("ses_1");
+    app.open_session("ses_2");
+    assert_eq!(app.prompt.text, "");
+}

@@ -446,6 +446,8 @@ impl Conn {
                 to_value(h.ctx.uploads.finish(&r.upload_id)?)
             }
 
+            m::ATTACHMENT_READ => to_value(h.ctx.uploads.read(&params(p)?)?),
+
             m::VOICE_STATUS => to_value(h.ctx.voice.status()),
 
             m::SCREEN_STATUS => to_value(h.screen.status()),

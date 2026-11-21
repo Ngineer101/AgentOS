@@ -1139,6 +1139,27 @@ impl Attachment {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentReadParams {
+    pub session_id: String,
+    pub attachment_id: String,
+    /// Where this piece starts.
+    #[serde(default)]
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachmentReadResult {
+    pub name: String,
+    pub mime: String,
+    /// The whole file's size.
+    pub size: u64,
+    pub offset: u64,
+    /// Up to [`UPLOAD_CHUNK_BYTES`] from `offset`, standard base64. Empty at
+    /// the end.
+    pub data: String,
+}
+
 /// MIME type from a file name, for clients and the host alike.
 pub fn guess_mime(name: &str) -> &'static str {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();

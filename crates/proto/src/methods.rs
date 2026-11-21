@@ -77,6 +77,11 @@ pub const DEVICE_REVOKE: &str = "device.revoke";
 pub const UPLOAD_BEGIN: &str = "upload.begin";
 pub const UPLOAD_APPEND: &str = "upload.append";
 pub const UPLOAD_FINISH: &str = "upload.finish";
+/// An image sent with a prompt, in pieces (protocol 7): give `offset` 0,
+/// then the end of each piece, until all `size` bytes are in. The host keeps
+/// a session's sent images as long as the session, so clients can show them
+/// again in the transcript.
+pub const ATTACHMENT_READ: &str = "attachment.read";
 
 /// The local speech-to-text model: whether it is installed, downloading or ready.
 pub const VOICE_STATUS: &str = "voice.status";
@@ -203,7 +208,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | AUTOMATION_CHECK_SCHEDULE => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
-        | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | VOICE_DOWNLOAD
+        | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | ATTACHMENT_READ | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE | VOICE_STREAM_BEGIN | VOICE_STREAM_APPEND | VOICE_STREAM_FINISH
         // Bounded by the project folders, which only an admin sets.
         | PROJECT_BROWSE | PROJECT_CREATE
@@ -263,6 +268,7 @@ mod tests {
             UPLOAD_BEGIN,
             UPLOAD_APPEND,
             UPLOAD_FINISH,
+            ATTACHMENT_READ,
             VOICE_STATUS,
             VOICE_DOWNLOAD,
             VOICE_TRANSCRIBE,

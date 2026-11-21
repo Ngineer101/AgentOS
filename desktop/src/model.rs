@@ -441,6 +441,24 @@ pub fn suggestion_supported(s: &ConnectorSuggestion) -> bool {
     matches!(s.auth.as_str(), "oauth" | "none")
 }
 
+/// An image sent with a message, fetched from the host to show in the transcript.
+pub enum SentImage {
+    Loading,
+    Ready(rune::Image),
+    Failed(String),
+}
+
+/// A message's attachments that are images, as `(attachment_id, name)`.
+pub fn sent_images(payload: &Value) -> Vec<(String, String)> {
+    payload["attachments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["mime"].as_str().is_some_and(|m| m.starts_with("image/")))
+        .filter_map(|a| Some((a["attachment_id"].as_str()?.to_string(), a["name"].as_str().unwrap_or("Image").to_string())))
+        .collect()
+}
+
 /// A file picked for the next message.
 pub struct PendingFile {
     pub local_id: u64,
@@ -529,6 +547,10 @@ pub struct App {
     pub subscribed: HashSet<String>,
     pub expanded: HashSet<String>,
     pub prompt: TextEdit,
+    /// The session whose message `prompt` holds, and the unsent messages of the others:
+    /// each session keeps what you typed in it while you look at another.
+    pub prompt_for: Option<String>,
+    pub drafts: HashMap<String, TextEdit>,
     pub ws_path: TextEdit,
     pub custom_host: TextEdit,
     pub host_for: Option<String>,
@@ -555,6 +577,12 @@ pub struct App {
     pub notice: Option<String>,
     /// Files waiting to go with the next message, by session.
     pub files: HashMap<String, Vec<PendingFile>>,
+    /// Images sent with the open session's messages, by attachment id (protocol 7).
+    pub images: HashMap<String, SentImage>,
+    /// Decodes [`App::images`]; set up with the window's waker.
+    pub image_cache: Option<rune::ImageCache>,
+    /// The image open in the viewer: its attachment id.
+    pub viewing: Option<String>,
     pub next_local_id: u64,
     pub voice: Option<VoiceStatus>,
     /// Phone screen sharing (protocol 3); `None` on older hosts.
@@ -666,6 +694,11 @@ pub fn init() -> App {
         subscribed: HashSet::new(),
         expanded: HashSet::new(),
         prompt: TextEdit::new(""),
+        prompt_for: None,
+        drafts: HashMap::new(),
+        images: HashMap::new(),
+        image_cache: None,
+        viewing: None,
         ws_path: TextEdit::new(""),
         custom_host: TextEdit::new(""),
         host_for: None,
@@ -1086,15 +1119,37 @@ impl App {
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
         self.menu = None;
+        self.viewing = None;
         if self.session_rename.as_deref() != Some(id) {
             self.session_rename = None;
         }
+        self.swap_draft(id);
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
         if self.agent_open.as_ref().is_some_and(|(s, _)| s != id) {
             self.agent_open = None;
         }
         self.ensure_subscribed(id);
+    }
+
+    /// Put the composer's text away with its session and bring back `id`'s.
+    fn swap_draft(&mut self, id: &str) {
+        if self.prompt_for.as_deref() == Some(id) {
+            return;
+        }
+        // A dictation writes into the text it started in.
+        self.mic_cancel();
+        if let Some(old) = self.prompt_for.take() {
+            let mut text = std::mem::replace(&mut self.prompt, TextEdit::new(""));
+            text.focused = false;
+            if !text.text.is_empty() {
+                self.drafts.insert(old, text);
+            }
+            if let Some(d) = self.drafts.remove(id) {
+                self.prompt = d;
+            }
+        }
+        self.prompt_for = Some(id.to_string());
     }
 
     pub fn ensure_subscribed(&mut self, id: &str) {
@@ -1186,6 +1241,39 @@ impl App {
             }
             None => false,
         }
+    }
+
+    /// Whether the host gives back images sent with messages (protocol 7).
+    pub fn host_keeps_images(&self) -> bool {
+        self.info.as_ref().map(|i| i.protocol_version >= 7).unwrap_or(false)
+    }
+
+    /// Ask the host for the open session's images not loaded yet; let go of other
+    /// sessions' images. Cheap when there's nothing to do: `poll` calls it each time.
+    pub fn fetch_images(&mut self) {
+        let Screen::Session(id) = &self.screen else { return };
+        if self.conn != Conn::Connected || !self.host_keeps_images() {
+            return;
+        }
+        let events = self.transcripts.get(id).map(|t| t.events.as_slice()).unwrap_or_default();
+        let wanted: Vec<String> = events.iter().filter(|e| e.kind == EventType::Prompt).flat_map(|e| sent_images(&e.payload)).map(|(a, _)| a).collect();
+        let keep: HashSet<&String> = wanted.iter().collect();
+        self.images.retain(|k, _| keep.contains(k));
+        for a in wanted {
+            if self.images.contains_key(&a) {
+                continue;
+            }
+            self.images.insert(a.clone(), SentImage::Loading);
+            if let Some(b) = &self.bridge {
+                b.send(crate::bridge::ToHost::ReadAttachment { session_id: id.clone(), attachment_id: a });
+            }
+        }
+    }
+
+    /// Open a sent image in the viewer, or close it with `None`.
+    pub fn view_image(&mut self, attachment_id: Option<String>) {
+        self.viewing = attachment_id;
+        self.menu = None;
     }
 
     /// Whether the host takes attachments and voice (protocol 2).
@@ -1485,6 +1573,8 @@ impl App {
                 self.subscribed.clear();
                 self.sub_ids.clear();
                 self.behind.clear();
+                // Images that failed to load (the host was away) try again.
+                self.images.retain(|_, i| !matches!(i, SentImage::Failed(_)));
                 self.error = None;
                 // Runs may have started or finished while away.
                 self.runs.clear();
@@ -1780,6 +1870,16 @@ impl App {
                         };
                         break;
                     }
+                }
+            }
+            FromHost::AttachmentRead { attachment_id, result } => {
+                // Dropped while it loaded (another session opened): don't keep it.
+                if let Some(slot) = self.images.get_mut(&attachment_id) {
+                    *slot = match (result, &self.image_cache) {
+                        (Ok(bytes), Some(cache)) => SentImage::Ready(cache.load(bytes)),
+                        (Ok(_), None) => SentImage::Failed("Images can't be shown here.".into()),
+                        (Err(e), _) => SentImage::Failed(e),
+                    };
                 }
             }
             FromHost::Transcribed(r) => {

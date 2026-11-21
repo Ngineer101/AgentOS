@@ -95,6 +95,8 @@ pub enum ToHost {
     Upload { local_id: u64, path: PathBuf },
     /// Send bytes (a pasted image); answered by [`FromHost::Uploaded`].
     UploadBytes { local_id: u64, name: String, mime: String, data: Vec<u8> },
+    /// Fetch an image sent with a prompt; answered by [`FromHost::AttachmentRead`].
+    ReadAttachment { session_id: String, attachment_id: String },
     /// Transcribe a WAV recording; answered by [`FromHost::Transcribed`].
     Transcribe { wav: Vec<u8> },
     /// Live dictation, sent in order; answered by [`FromHost::LiveText`].
@@ -124,6 +126,7 @@ pub enum FromHost {
     Reply { tag: Tag, result: Result<Value, RpcError> },
     Note(Notification),
     Uploaded { local_id: u64, result: Result<agenthost_proto::Attachment, String> },
+    AttachmentRead { attachment_id: String, result: Result<Vec<u8>, String> },
     Transcribed(Result<String, String>),
     /// Everything heard so far in dictation `gen`; `done` with the final text.
     LiveText { gen: u64, done: bool, result: Result<String, String> },
@@ -326,6 +329,10 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                         ToHost::Call { tag, method, params } => FromHost::Reply { tag, result: c.request(method, params).await },
                                         ToHost::Upload { local_id, path } => FromHost::Uploaded { local_id, result: c.upload_file(&path).await.map_err(|e| format!("{e:#}")) },
                                         ToHost::UploadBytes { local_id, name, mime, data } => FromHost::Uploaded { local_id, result: c.upload(&name, Some(&mime), &data, |_, _| {}).await.map_err(|e| format!("{e:#}")) },
+                                        ToHost::ReadAttachment { session_id, attachment_id } => {
+                                            let result = c.read_attachment(&session_id, &attachment_id).await.map(|(_, data)| data).map_err(|e| format!("{e:#}"));
+                                            FromHost::AttachmentRead { attachment_id, result }
+                                        }
                                         ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
                                         ToHost::Live(_) => unreachable!(),
                                     };

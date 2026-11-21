@@ -161,7 +161,7 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     // Escape closes the agent panel when nothing over it takes the key.
-    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() && !s.auto_open {
+    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() && !s.auto_open && s.viewing.is_none() {
         s.close_agent();
         return true;
     }

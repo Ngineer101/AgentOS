@@ -25,7 +25,8 @@ pub use types::*;
 /// 5: automations (`automation.*`), `Session.automation_id`.
 /// 6: notifications through a relay (`push.register` `gateway`), so the
 /// host needs no APNs key.
-pub const PROTOCOL_VERSION: u32 = 6;
+/// 7: images sent with prompts can be read back (`attachment.read`).
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
