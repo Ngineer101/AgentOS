@@ -1,0 +1,25 @@
+ios/AgentHost/App/AppModel.swift
+  s_b866e6b73071ee::t_e8d7f040e4e4c0 107-114,180-181,627-651
+ios/AgentHost/Views/Components.swift
+  s_b866e6b73071ee::t_01a4303786690a 3-4,11
+ios/AgentHost/Views/SessionView.swift
+  s_b866e6b73071ee::t_1a611d3a7d3192 549,716
+ios/AgentHost/Views/SessionsView.swift
+  s_b866e6b73071ee::t_3b43ee9e0f1057 52,99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c90bcd606dec6362e5c4117caab3810a9619d50f",
+  "prompts": {},
+  "sessions": {
+    "s_b866e6b73071ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b866e6b73071ee",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
