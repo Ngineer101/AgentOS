@@ -28,6 +28,7 @@ pub mod screen;
 pub mod secrets;
 pub mod session;
 pub mod store;
+pub mod title;
 pub mod uploads;
 pub mod util;
 pub mod voice;

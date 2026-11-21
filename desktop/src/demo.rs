@@ -1010,7 +1010,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.approvals.clear();
         idle(s, "ses_1");
     }),
-    // An untitled quick task: "Quick task" over the login.
+    // A quick task before its first message: "New session" over the login and quick tasks.
     ("header-quick-untitled", |s| {
         session(s);
         if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_q") {
@@ -1018,7 +1018,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         }
         s.screen = Screen::Session("ses_q".into());
     }),
-    // An untitled session in a git workspace: the workspace's name, the branch beside the login.
+    // A session in a git workspace before its first message: "New session", the branch beside the login.
     ("header-untitled", |s| {
         session(s);
         if let Some(x) = s.sessions.iter_mut().find(|x| x.session_id == "ses_2") {

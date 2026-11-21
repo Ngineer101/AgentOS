@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
+use crate::title::TitleSource;
 use crate::util::now_ms;
 
 const SCHEMA: &str = r#"
@@ -272,6 +273,8 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
     })
 }
 const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id";
+/// [`SESSION_COLS`] to read: the title shown is the user's, else the host's.
+const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -299,6 +302,10 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("sessions", "side_questions", "INTEGER"),
     ("connectors", "icon", "TEXT"),
     ("sessions", "automation_id", "TEXT"),
+    // The host's title for a session the user hasn't named (`title` is the
+    // user's), and where it came from (`title::TitleSource`).
+    ("sessions", "auto_title", "TEXT"),
+    ("sessions", "auto_title_source", "TEXT"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -647,7 +654,7 @@ impl Store {
         Ok(self
             .db()
             .query_row(
-                &format!("SELECT {SESSION_COLS} FROM sessions WHERE session_id = ?1"),
+                &format!("SELECT {SESSION_SELECT} FROM sessions WHERE session_id = ?1"),
                 params![id],
                 row_session,
             )
@@ -659,6 +666,89 @@ impl Store {
             "UPDATE sessions SET title = ?2 WHERE session_id = ?1",
             params![id, title],
         )? > 0)
+    }
+
+    /// Set the host's own title for a session, unless it has one from a
+    /// better source (see [`TitleSource`]), or, from a message, any at all. Returns whether the title shown
+    /// changed (it doesn't while the user's own title stands).
+    pub fn session_set_auto_title(&self, id: &str, title: &str, source: TitleSource) -> Result<bool> {
+        let db = self.db();
+        let Some((user, current, from)) = db
+            .query_row(
+                "SELECT title, auto_title, auto_title_source FROM sessions WHERE session_id = ?1",
+                params![id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)),
+            )
+            .optional()?
+        else {
+            return Ok(false);
+        };
+        if from.as_deref().and_then(TitleSource::parse).is_some_and(|f| f > source) {
+            return Ok(false);
+        }
+        // Only the first message names a session, not every one.
+        if source == TitleSource::Prompt && current.is_some() {
+            return Ok(false);
+        }
+        if current.as_deref() == Some(title) && from.as_deref() == Some(source.as_str()) {
+            return Ok(false);
+        }
+        db.execute(
+            "UPDATE sessions SET auto_title = ?2, auto_title_source = ?3 WHERE session_id = ?1",
+            params![id, title, source.as_str()],
+        )?;
+        Ok(user.is_none() && current.as_deref() != Some(title))
+    }
+
+    /// Whether a session still wants a better title than it has: the user
+    /// hasn't named it and the host has only its first message (or nothing).
+    pub fn session_wants_title(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT title IS NULL AND (auto_title_source IS NULL OR auto_title_source = ?2) FROM sessions WHERE session_id = ?1",
+                params![id, TitleSource::Prompt.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
+    /// The text of a session's first message, if it has one.
+    pub fn first_prompt_text(&self, id: &str) -> Result<Option<String>> {
+        let payload: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT payload FROM events WHERE session_id = ?1 AND type = 'prompt' ORDER BY seq LIMIT 1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(payload
+            .and_then(|p| serde_json::from_str::<Value>(&p).ok())
+            .and_then(|v| v["text"].as_str().map(str::to_string)))
+    }
+
+    /// Title, from its first message, every session that has neither the
+    /// user's title nor the host's (those from before the host titled them).
+    pub fn backfill_prompt_titles(&self) -> Result<usize> {
+        let ids: Vec<String> = {
+            let db = self.db();
+            let mut st = db.prepare(
+                "SELECT session_id FROM sessions WHERE title IS NULL AND auto_title IS NULL",
+            )?;
+            let rows = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        let mut n = 0;
+        for id in ids {
+            let Some(t) = self.first_prompt_text(&id)?.as_deref().and_then(crate::title::from_prompt) else {
+                continue;
+            };
+            self.session_set_auto_title(&id, &t, TitleSource::Prompt)?;
+            n += 1;
+        }
+        Ok(n)
     }
 
     /// Archive (`Some(time)`) or unarchive (`None`) a session.
@@ -686,7 +776,7 @@ impl Store {
     pub fn session_list(&self, workspace_id: Option<&str>) -> Result<Vec<Session>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT {SESSION_COLS} FROM sessions WHERE (?1 IS NULL OR workspace_id = ?1) ORDER BY created_at"
+            "SELECT {SESSION_SELECT} FROM sessions WHERE (?1 IS NULL OR workspace_id = ?1) ORDER BY created_at"
         ))?;
         let rows = st
             .query_map(params![workspace_id], row_session)?
@@ -789,7 +879,7 @@ impl Store {
         }
         let ev = append_in_tx(&tx, session_id, EventType::SessionState, payload)?;
         let s = tx.query_row(
-            &format!("SELECT {SESSION_COLS} FROM sessions WHERE session_id = ?1"),
+            &format!("SELECT {SESSION_SELECT} FROM sessions WHERE session_id = ?1"),
             params![session_id],
             row_session,
         )?;
@@ -1530,6 +1620,44 @@ mod tests {
         // And opening again is a no-op.
         drop(st);
         Store::open(&path).unwrap();
+    }
+
+    #[test]
+    fn the_users_title_beats_the_hosts_and_better_sources_win() {
+        let (st, sid) = setup();
+        let title = |st: &Store| st.session_get(&sid).unwrap().unwrap().title;
+        assert!(st.session_wants_title(&sid).unwrap());
+        assert!(st.session_set_auto_title(&sid, "Fix the bug", TitleSource::Prompt).unwrap());
+        assert_eq!(title(&st).as_deref(), Some("Fix the bug"));
+        assert!(st.session_wants_title(&sid).unwrap(), "a first message is not a good title");
+        assert!(!st.session_set_auto_title(&sid, "Second message", TitleSource::Prompt).unwrap(), "only the first");
+        assert!(st.session_set_auto_title(&sid, "Flaky resume test", TitleSource::Asked).unwrap());
+        assert!(!st.session_wants_title(&sid).unwrap());
+        assert!(!st.session_set_auto_title(&sid, "Later message", TitleSource::Prompt).unwrap());
+        assert!(st.session_set_auto_title(&sid, "Agent's name", TitleSource::Agent).unwrap());
+        assert!(!st.session_set_auto_title(&sid, "Asked again", TitleSource::Asked).unwrap());
+        assert!(st.session_set_auto_title(&sid, "Agent renamed it", TitleSource::Agent).unwrap());
+        assert_eq!(title(&st).as_deref(), Some("Agent renamed it"));
+        // The user's title shows over it, and clearing it brings it back.
+        st.session_set_title(&sid, Some("Mine")).unwrap();
+        assert_eq!(title(&st).as_deref(), Some("Mine"));
+        assert!(!st.session_set_auto_title(&sid, "Agent again", TitleSource::Agent).unwrap(), "not shown");
+        assert_eq!(title(&st).as_deref(), Some("Mine"));
+        st.session_set_title(&sid, None).unwrap();
+        assert_eq!(title(&st).as_deref(), Some("Agent again"));
+        assert_eq!(st.session_list(None).unwrap()[0].title.as_deref(), Some("Agent again"));
+    }
+
+    #[test]
+    fn older_sessions_are_titled_from_their_first_message() {
+        let (st, sid) = setup();
+        assert_eq!(st.backfill_prompt_titles().unwrap(), 0, "no messages yet");
+        st.append_prompt(&sid, "p1", json!({"text": "make the tests pass. then push"})).unwrap();
+        st.append_prompt(&sid, "p2", json!({"text": "and the docs"})).unwrap();
+        assert_eq!(st.first_prompt_text(&sid).unwrap().as_deref(), Some("make the tests pass. then push"));
+        assert_eq!(st.backfill_prompt_titles().unwrap(), 1);
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().title.as_deref(), Some("Make the tests pass"));
+        assert_eq!(st.backfill_prompt_titles().unwrap(), 0, "once");
     }
 
     #[test]

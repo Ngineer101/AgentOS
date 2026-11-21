@@ -79,6 +79,12 @@ impl Host {
         cfg.prepare()?;
         let store = Arc::new(Store::open(&cfg.db_path())?);
         let host_id = store.ensure_host(os_name(), env!("CARGO_PKG_VERSION"))?;
+        // Sessions from before the host titled them are named from their first message.
+        match store.backfill_prompt_titles() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("titled {n} sessions from their first message"),
+            Err(e) => tracing::warn!("could not title older sessions: {e:#}"),
+        }
         ensure_quick_workspace(&store, &cfg)?;
         let secrets: Arc<dyn SecretStore> = Arc::from(crate::secrets::open(
             &store,

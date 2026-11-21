@@ -73,3 +73,75 @@ icon!(STEPS, "ah-steps", 14.0, r#"<path d="M2.2 3.6l1.1 1.1 2-2.1M2.2 9.6l1.1 1.
 icon!(CLOCK, "ah-clock", 14.0, r#"<circle cx="7" cy="7" r="5.8" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M7 3.8V7l2.2 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
 icon!(HOOK, "ah-hook", 14.0, r#"<circle cx="7" cy="3.2" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="3" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="11" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M6.1 4.8L3.9 9M7.9 4.8l2.2 4.2M4.8 10.6h4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#);
 icon!(PLAY, "ah-play", 14.0, r#"<path d="M4 2.6v8.8a.6.6 0 0 0 .9.5l7-4.4a.6.6 0 0 0 0-1L4.9 2.1a.6.6 0 0 0-.9.5z" fill="currentColor"/>"#);
+
+// The agents' own marks (assets/agents/, from LobeHub's icon set), in their element's colour:
+// the badge's ink on its brand tile, or the model chip's text colour.
+macro_rules! agent_logo {
+    ($id:ident, $name:literal, $file:literal) => {
+        pub static $id: Icon = Icon { name: $name, view: 24.0, body: include_str!(concat!("../../assets/agents/", $file)) };
+    };
+}
+
+agent_logo!(LOGO_CLAUDE, "ah-logo-claude", "claude.svg");
+agent_logo!(LOGO_CODEX, "ah-logo-codex", "codex.svg");
+agent_logo!(LOGO_GEMINI, "ah-logo-gemini", "gemini.svg");
+agent_logo!(LOGO_OPENCODE, "ah-logo-opencode", "opencode.svg");
+agent_logo!(LOGO_CURSOR, "ah-logo-cursor", "cursor.svg");
+
+/// An agent's mark; None for one without (the test agent), which keeps its letter.
+pub fn agent_logo(agent: agenthost_proto::AgentKind) -> Option<&'static Icon> {
+    use agenthost_proto::AgentKind as A;
+    match agent {
+        A::Claude => Some(&LOGO_CLAUDE),
+        A::Codex => Some(&LOGO_CODEX),
+        A::Gemini => Some(&LOGO_GEMINI),
+        A::Opencode => Some(&LOGO_OPENCODE),
+        A::Cursor => Some(&LOGO_CURSOR),
+        A::Fake => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use agenthost_proto::AgentKind;
+
+    /// Every real agent's mark parses and draws a shape, not nothing and not a filled square.
+    /// `AGENT_LOGOS_ASCII=1` prints them, to look at.
+    #[test]
+    fn agent_logos_draw() {
+        for agent in AgentKind::REAL {
+            let logo = super::agent_logo(agent).expect("every real agent has a mark");
+            let px = 32;
+            let cov = rune::text::icon_coverage(logo, px);
+            let inked = cov.iter().filter(|&&c| c > 127).count() as f32 / cov.len() as f32;
+            if std::env::var_os("AGENT_LOGOS_ASCII").is_some() {
+                println!("{}:", logo.name);
+                for r in cov.chunks(px as usize) {
+                    println!("{}", r.iter().map(|&c| if c > 170 { '#' } else if c > 60 { '+' } else { '.' }).collect::<String>());
+                }
+            }
+            assert!((0.12..0.85).contains(&inked), "{} covers {inked}", logo.name);
+        }
+    }
+
+    /// The iOS asset catalog carries copies of the same marks.
+    #[test]
+    fn ios_has_the_same_logos() {
+        macro_rules! same {
+            ($file:literal, $set:literal) => {
+                assert_eq!(
+                    include_str!(concat!("../../assets/agents/", $file)),
+                    include_str!(concat!("../../ios/AgentHost/Assets.xcassets/", $set, ".imageset/", $file)),
+                    "copy assets/agents/{} into the {} image set",
+                    $file,
+                    $set
+                );
+            };
+        }
+        same!("claude.svg", "AgentClaude");
+        same!("codex.svg", "AgentCodex");
+        same!("gemini.svg", "AgentGemini");
+        same!("opencode.svg", "AgentOpenCode");
+        same!("cursor.svg", "AgentCursor");
+    }
+}

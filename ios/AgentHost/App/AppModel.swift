@@ -262,11 +262,12 @@ final class AppModel: ObservableObject {
         return login.map { "\(agent) (\($0))" } ?? agent
     }
 
-    /// What a session is called where it is shown on its own: its title, or
-    /// the workspace's name ("Quick task" in Quick tasks).
+    /// What a session is called, everywhere it is shown: its title, the
+    /// same on every device (the host names it from its first message on),
+    /// or "New session" before then.
     func sessionTitle(_ s: SessionInfo) -> String {
         if let t = s.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
-        return isQuickTasks(s.workspaceId) ? "Quick task" : workspaceName(s.workspaceId)
+        return "New session"
     }
 
     func workspaceName(_ id: String) -> String {

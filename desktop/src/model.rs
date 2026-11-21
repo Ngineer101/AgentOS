@@ -1947,17 +1947,13 @@ impl App {
 
     // ---- session titles -------------------------------------------------------------------
 
-    /// What an untitled session is called: its workspace's name, "Quick task" for a quick task.
-    pub fn untitled_name(&self, x: &Session) -> String {
-        match self.workspace(&x.workspace_id) {
-            Some(w) if w.kind == WorkspaceKind::Scratch => "Quick task".into(),
-            Some(w) => w.name.clone(),
-            None if x.workspace_id == QUICK_WORKSPACE_ID => "Quick task".into(),
-            None => "Session".into(),
-        }
+    /// What a session is called before its first message: the host names it from then on
+    /// (the same name on every device), so this shows only until then.
+    pub fn untitled_name(&self, _x: &Session) -> String {
+        "New session".into()
     }
 
-    /// The header's title: the session's own title, else [`App::untitled_name`].
+    /// The session's name: its title, else [`App::untitled_name`].
     pub fn session_title(&self, x: &Session) -> String {
         match x.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
             Some(t) => t.to_string(),
@@ -1965,15 +1961,11 @@ impl App {
         }
     }
 
-    /// The header's subtitle before the branch: "Claude Code · Work · relay". The workspace is
-    /// left out when the title already is its name (an untitled session).
+    /// The header's subtitle before the branch: "Claude Code · Work · relay".
     pub fn session_context(&self, x: &Session) -> String {
         let mut parts = vec![self.login_label(x)];
-        let titled = x.title.as_deref().is_some_and(|t| !t.trim().is_empty());
-        if titled {
-            if let Some(w) = self.workspace(&x.workspace_id) {
-                parts.push(w.name.clone());
-            }
+        if let Some(w) = self.workspace(&x.workspace_id) {
+            parts.push(w.name.clone());
         }
         parts.join(" · ")
     }

@@ -411,7 +411,7 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
     let mac = t.mac();
     let selected = s.screen == Screen::Session(x.session_id.clone());
     let ended = x.state.is_terminal();
-    let title = x.title.clone().unwrap_or_else(|| s.login_label(x));
+    let title = s.session_title(x);
     // The status, then the login: a profile's name alone says which ("Needs you · Work · 3m").
     // "Your turn" is the resting state, and its dot says so: the line leaves it out.
     let status = Status::of(x.state);

@@ -353,10 +353,13 @@ pub fn chip_label(name: &str) -> String {
     n.to_string()
 }
 
-/// The agent's mark for the chip: its letter, monochrome, as the reference's model glyph.
+/// The agent's mark for the chip, monochrome, as the reference's model glyph: its logo, or its
+/// letter in a square.
 fn agent_mark(agent: AgentKind, size: f32, ink: Color) -> El {
-    let name = agent.display_name();
-    let letter = if agent == AgentKind::Codex { 'X' } else { name.chars().next().unwrap_or('?').to_ascii_uppercase() };
+    if let Some(logo) = ic::agent_logo(agent) {
+        return icon(logo, size).color(ink);
+    }
+    let letter = agent.display_name().chars().next().unwrap_or('?').to_ascii_uppercase();
     row()
         .size(size, size)
         .center()

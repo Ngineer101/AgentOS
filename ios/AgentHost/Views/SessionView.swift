@@ -76,7 +76,7 @@ struct SessionView: View {
         return waiting.contains { !shown.contains($0.approvalId) }
     }
 
-    /// The session's own title, else its workspace ("Quick task").
+    /// The session's title, else "New session".
     private var title: String {
         guard let s = session else { return "Session" }
         return model.sessionTitle(s)
@@ -262,7 +262,7 @@ struct SessionView: View {
             model.sessionHidden(sessionId)
         }
         .alert("Rename Session", isPresented: $renaming) {
-            TextField(session.map { model.isQuickTasks($0.workspaceId) ? "Quick task" : model.workspaceName($0.workspaceId) } ?? "Title",
+            TextField(session.map { model.sessionTitle($0) } ?? "Title",
                       text: $renameText)
                 .submitLabel(.done)
             Button("Cancel", role: .cancel) {}
@@ -520,6 +520,7 @@ struct SessionView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .startsAtBottom()
+            .pinsToBottom(proxy)
             .modifier(FollowsBottom(
                 proxy: proxy, rowCount: rows.count,
                 streamingText: model.streaming[sessionId]?.text,
@@ -1897,6 +1898,7 @@ struct SideQuestionsSheet: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .startsAtBottom()
+            .pinsToBottom(proxy)
             .onAppear { DispatchQueue.main.async { proxy.scrollToBottom(animated: false) } }
             .onChange(of: c) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
@@ -2456,5 +2458,85 @@ extension View {
         } else {
             self
         }
+    }
+
+    /// Holds a conversation on its last message while the reader is there,
+    /// whatever resizes it. See `PinsToBottom`.
+    @ViewBuilder
+    func pinsToBottom(_ proxy: ScrollViewProxy) -> some View {
+        if #available(iOS 18, *) {
+            modifier(PinsToBottom(proxy: proxy))
+        } else {
+            self
+        }
+    }
+}
+
+/// Keeps a scroll view at its end until the reader scrolls away from it.
+///
+/// A LazyVStack guesses the height of rows it hasn't drawn, so a jump to the
+/// end of a long transcript lands where the guesses put it. When the rows
+/// there are drawn and turn out shorter (a folded "Ran 3 commands" line
+/// next to long answers throws the guess off), the content shrinks under
+/// the view and leaves it past the last message, on a black screen, until
+/// the reader scrolls up. Scrolling to the end again a turn later isn't
+/// enough, since rows can take longer than that to be measured. So while
+/// the reader is at the end, every change in the content's height (rows
+/// measured, a status card going, the keyboard) scrolls back to it.
+@available(iOS 18, *)
+private struct PinsToBottom: ViewModifier {
+    let proxy: ScrollViewProxy
+    /// At the end, or not yet scrolled away from it by the reader.
+    @State private var pinned = true
+    @State private var phase: ScrollPhase = .idle
+    @State private var gap: CGFloat = 0
+
+    /// How far above the end the reader can stop and still count as there.
+    private static let slack: CGFloat = 40
+
+    private struct Metrics: Equatable {
+        var contentHeight: CGFloat
+        var containerHeight: CGFloat
+        /// From the bottom of the view to the end of the content (with its
+        /// bottom inset, where the composer sits): zero at the end, negative
+        /// once the view is past it.
+        var gap: CGFloat
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Metrics.self) { g in
+                Metrics(contentHeight: g.contentSize.height,
+                        containerHeight: g.containerSize.height,
+                        gap: g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY)
+            } action: { old, new in
+                gap = new.gap
+                if new.gap <= Self.slack {
+                    pinned = true
+                } else if readerScrolling {
+                    // Only the reader unpins: content growing below the
+                    // view while pinned is what gets scrolled to.
+                    pinned = false
+                }
+                guard pinned, phase == .idle else { return }
+                // Not on a gap alone opening above the end: that is the
+                // reader's first drag, before its phase arrives.
+                let resized = new.contentHeight != old.contentHeight || new.containerHeight != old.containerHeight
+                if resized || new.gap < -1 {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            .onScrollPhaseChange { old, new in
+                phase = new
+                // An animated scroll to the end (a message arriving) can be
+                // cut short by rows measured on the way; finish it.
+                if old == .animating, new == .idle, pinned, abs(gap) > 1 {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+    }
+
+    private var readerScrolling: Bool {
+        phase == .tracking || phase == .interacting || phase == .decelerating
     }
 }
