@@ -1,0 +1,130 @@
+Cargo.lock
+  h_e31f15a7c97762 119,144,151,155,1201-1209
+README.md
+  h_e31f15a7c97762 95-150
+crates/cli/src/main.rs
+  h_e31f15a7c97762 99-101,228-548,607-609,976
+crates/host/Cargo.toml
+  h_e31f15a7c97762 45-47
+crates/host/src/api.rs
+  h_e31f15a7c97762 185-187,513-540
+crates/host/src/automations.rs
+  h_e31f15a7c97762 1-1156
+crates/host/src/bus.rs
+  h_e31f15a7c97762 7,29-30
+crates/host/src/cron.rs
+  h_e31f15a7c97762 1-415
+crates/host/src/host.rs
+  h_e31f15a7c97762 41,112,121
+crates/host/src/lib.rs
+  h_e31f15a7c97762 12-13,50,54
+crates/host/src/mcp.rs
+  h_e31f15a7c97762 707-713,728,744-756,883-886,895,983-994,1003
+crates/host/src/push.rs
+  h_e31f15a7c97762 417-442,474-486,503-515,837,852
+crates/host/src/relay_dev.rs
+  h_e31f15a7c97762 50-54,57-59,90-96,198-205,391-402,411-509
+crates/host/src/remote.rs
+  h_e31f15a7c97762 63-73,125,180-206,265-280,320,345,375
+crates/host/src/session.rs
+  h_e31f15a7c97762 162-181,242,251
+crates/host/src/store.rs
+  h_e31f15a7c97762 121-155,272-273,279,281,310,635,653,1358-1577,1608
+crates/host/src/uploads.rs
+  h_e31f15a7c97762 193-208
+crates/host/tests/automations.rs
+  h_e31f15a7c97762 1-353
+crates/host/tests/automations_core.rs
+  h_e31f15a7c97762 1-247
+crates/host/tests/push.rs
+  h_e31f15a7c97762 232
+crates/proto/Cargo.toml
+  h_e31f15a7c97762 20-22
+crates/proto/src/automation.rs
+  h_e31f15a7c97762 1-347
+crates/proto/src/hookseal.rs
+  h_e31f15a7c97762 1-132
+crates/proto/src/lib.rs
+  h_e31f15a7c97762 7-8,16,25-26
+crates/proto/src/methods.rs
+  h_e31f15a7c97762 120-133,156-158,200-201,211-214,288-295
+crates/proto/src/types.rs
+  h_e31f15a7c97762 413-415,1380-1382,1395
+desktop/Cargo.lock
+  h_e31f15a7c97762 193,217,224,228,2036-2044
+desktop/README.md
+  h_e31f15a7c97762 28-36,59-61
+desktop/src/automations.rs
+  h_e31f15a7c97762 1-872
+desktop/src/bridge.rs
+  h_e31f15a7c97762 63-74,89
+desktop/src/commands.rs
+  h_e31f15a7c97762 151-158,164,364
+desktop/src/demo.rs
+  h_e31f15a7c97762 91,212,243-362,598,1084-1132
+desktop/src/icons.rs
+  h_e31f15a7c97762 71-75
+desktop/src/main.rs
+  h_e31f15a7c97762 4
+desktop/src/model.rs
+  h_e31f15a7c97762 15-16,59-60,613-625,721-727,871-873,880,1075,1080,1489-1490,1696-1755,1762-1768,2294,2420-2424,2489-3176
+desktop/src/settings.rs
+  h_e31f15a7c97762 190,199,207,279
+desktop/src/tests.rs
+  h_e31f15a7c97762 1266-1672
+desktop/src/view.rs
+  h_e31f15a7c97762 29,44-49,98-118,371,378-409,438-440,476-483,503,520,904
+docs/relay-protocol.md
+  h_e31f15a7c97762 5-16,44,119-120,132,137-243,246-260
+docs/status.md
+  h_e31f15a7c97762 48
+ios/AgentHost/App/AppModel+Automations.swift
+  h_e31f15a7c97762 1-220
+ios/AgentHost/App/AppModel.swift
+  h_e31f15a7c97762 133-136,549,749-751,1106-1107,1314-1315
+ios/AgentHost/App/DemoData.swift
+  h_e31f15a7c97762 13-14,51-58,82,102-105,235-238,259,261,496-579
+ios/AgentHost/Core/AutomationModels.swift
+  h_e31f15a7c97762 1-463
+ios/AgentHost/Core/ProtocolModels.swift
+  h_e31f15a7c97762 170-171,204
+ios/AgentHost/Core/PushModels.swift
+  h_e31f15a7c97762 25-27,33,36,40,48,53
+ios/AgentHost/Views/AutomationEditorView.swift
+  h_e31f15a7c97762 1-499
+ios/AgentHost/Views/AutomationsView.swift
+  h_e31f15a7c97762 1-589
+ios/AgentHost/Views/NotificationsView.swift
+  h_e31f15a7c97762 57-59,63-65
+ios/AgentHost/Views/SessionsView.swift
+  h_e31f15a7c97762 9-11,152-155,230-232,436-442
+ios/AgentHost/Views/SettingsView.swift
+  h_e31f15a7c97762 3,15,54,121-137
+ios/README.md
+  h_e31f15a7c97762 32,67
+ios/Shared/PushCrypto.swift
+  h_e31f15a7c97762 12-13
+relay/README.md
+  h_e31f15a7c97762 5-10,18-19,35-43,81-83,137-153
+relay/src/index.ts
+  h_e31f15a7c97762 1,10,12,19-28
+relay/src/relay.ts
+  h_e31f15a7c97762 14,35-44,49-51,55-62,86-91,105-106,191,205-213,311-319,438-465,485-607,724-759,773-774
+relay/src/seal.ts
+  h_e31f15a7c97762 1-63
+relay/test/helpers.ts
+  h_e31f15a7c97762 2-3,128-129,140-144,191-302
+relay/test/hooks.test.ts
+  h_e31f15a7c97762 1-417
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "22ede3f9281da527d2cdc4c895efdf9e337e27a9",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
