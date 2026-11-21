@@ -1,0 +1,90 @@
+assets/agents/README.md
+  h_e31f15a7c97762 1-12
+assets/agents/claude.svg
+  h_e31f15a7c97762 1
+assets/agents/codex.svg
+  h_e31f15a7c97762 1
+assets/agents/cursor.svg
+  h_e31f15a7c97762 1
+assets/agents/gemini.svg
+  h_e31f15a7c97762 1
+assets/agents/opencode.svg
+  h_e31f15a7c97762 1
+crates/fake-agent/src/main.rs
+  h_e31f15a7c97762 18-19,356-365,658-663
+crates/host/src/host.rs
+  h_e31f15a7c97762 81-86
+crates/host/src/lib.rs
+  h_e31f15a7c97762 29
+crates/host/src/session.rs
+  h_e31f15a7c97762 13,85-101,367-376,829-847,955-957,1207-1209,1562-1564,1840-1952,1954-1956,2169-2173,2188-2191,2209-2213,2233-2238,2453
+crates/host/src/store.rs
+  h_e31f15a7c97762 14,244-245,274-277,627,641-723,749,860,1393-1430
+crates/host/src/title.rs
+  h_e31f15a7c97762 1-257
+crates/host/tests/session_titles.rs
+  h_e31f15a7c97762 1-104
+crates/proto/src/methods.rs
+  h_e31f15a7c97762 28
+crates/proto/src/types.rs
+  h_e31f15a7c97762 383-385,476
+desktop/src/demo.rs
+  h_e31f15a7c97762 897,905
+desktop/src/icons.rs
+  h_e31f15a7c97762 71-142
+desktop/src/look.rs
+  h_e31f15a7c97762 496,508-511
+desktop/src/model.rs
+  h_e31f15a7c97762 1854-1857,1860,1868,1871-1872
+desktop/src/session.rs
+  h_e31f15a7c97762 356-357,359-362
+desktop/src/tests.rs
+  h_e31f15a7c97762 916,923-924,927-928,931,1010,1019
+desktop/src/view.rs
+  h_e31f15a7c97762 354
+docs/status.md
+  h_e31f15a7c97762 46
+ios/AgentHost/App/AppModel.swift
+  h_e31f15a7c97762 261-263,266
+ios/AgentHost/App/DemoData.swift
+  h_e31f15a7c97762 32,222
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/Contents.json
+  h_e31f15a7c97762 1-10
+ios/AgentHost/Assets.xcassets/AgentClaude.imageset/claude.svg
+  h_e31f15a7c97762 1
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/Contents.json
+  h_e31f15a7c97762 1-10
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/codex.svg
+  h_e31f15a7c97762 1
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/Contents.json
+  h_e31f15a7c97762 1-10
+ios/AgentHost/Assets.xcassets/AgentCursor.imageset/cursor.svg
+  h_e31f15a7c97762 1
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/Contents.json
+  h_e31f15a7c97762 1-10
+ios/AgentHost/Assets.xcassets/AgentGemini.imageset/gemini.svg
+  h_e31f15a7c97762 1
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/Contents.json
+  h_e31f15a7c97762 1-10
+ios/AgentHost/Assets.xcassets/AgentOpenCode.imageset/opencode.svg
+  h_e31f15a7c97762 1
+ios/AgentHost/Views/ArchivedSessionsView.swift
+  h_e31f15a7c97762 103
+ios/AgentHost/Views/Glass.swift
+  h_e31f15a7c97762 149-150,158-176,179,181-186
+ios/AgentHost/Views/SessionView.swift
+  h_e31f15a7c97762 79,265,523,1901,2462-2541
+ios/AgentHost/Views/SessionsView.swift
+  h_e31f15a7c97762 441
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f46c99f26c0a0b912c9a114bcc131e633f64bb3",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
