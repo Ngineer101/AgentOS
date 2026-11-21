@@ -971,6 +971,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
             }
         }
         EventType::ApprovalRequested => approval_card(s, sess, e, t)?,
+        EventType::ApprovalResolved if p["withdrawn"] == true => t.faint("Request withdrawn by the agent".to_string()),
         EventType::ApprovalResolved => {
             let decision = str_of(&p["decision"]);
             let by = agenthost_proto::device_display_name(&str_of(&p["device"])).to_string();

@@ -794,6 +794,11 @@ struct TranscriptRowView: View {
         case let .approvalRequested(_, approval, connector, tool):
             ApprovalRequestRow(approval: approval, connector: connector, tool: tool, onOpen: onApproval)
 
+        case .approvalResolved(_, "withdrawn", _, _):
+            Label("Request withdrawn by the agent", systemImage: "arrow.uturn.backward")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
         case let .approvalResolved(_, decision, device, timedOut):
             Label(
                 timedOut ? "Approval timed out (denied)" :
