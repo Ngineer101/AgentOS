@@ -1,0 +1,33 @@
+crates/fake-agent/src/main.rs
+  s_8ece6aa6be37a1::t_ef067e97abf59d 4-5,19,27-29,229,231,285-297,675,681-686
+crates/host/src/agents.rs
+  s_8ece6aa6be37a1::t_3cdae20fb7cbe0 65-79
+crates/host/src/host.rs
+  s_8ece6aa6be37a1::t_a9818238b27b97 82-89
+crates/host/src/session.rs
+  s_8ece6aa6be37a1::t_59650dac2b1956 93-96,100-102,860-861,987,1023-1031,1250-1252,1883-1893,1897-1900,1907-1910,1921-1935,1937-1938,1941,1948-1968,1976-1990,2060,2099,2282-2285,2340-2341,2343
+crates/host/src/store.rs
+  s_8ece6aa6be37a1::t_f731bdb6e96a8a 740-782
+crates/host/src/title.rs
+  s_8ece6aa6be37a1::t_1f0ed83a12b42e 6-7,12-16,19,91-95,100-124,257-280
+crates/host/tests/session_titles_core.rs
+  s_8ece6aa6be37a1::t_6e9aafa790707e 1-139
+docs/status.md
+  s_8ece6aa6be37a1::t_58e92186bbae4c 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b71d9e23b6532c35694f342a22259ac685af487c",
+  "prompts": {},
+  "sessions": {
+    "s_8ece6aa6be37a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8ece6aa6be37a1",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
