@@ -6,6 +6,10 @@
 //! Finished files live in `<data>/uploads/<id>/` (owner-only, outside every
 //! sandbox) until a prompt claims them: the session copies them into its own
 //! temp folder, which its agent can read.
+//!
+//! Images sent with a prompt are also kept, in `<data>/attachments/<session>/<id>/`,
+//! so clients can show them again in the transcript (`attachment.read`).
+//! Sessions are never deleted, so neither are these.
 
 use agenthost_proto::jsonrpc::RpcError;
 use agenthost_proto::*;
@@ -35,6 +39,8 @@ struct Live {
 
 pub struct Uploads {
     root: PathBuf,
+    /// Images sent with prompts, by session.
+    kept: PathBuf,
     live: Mutex<HashMap<String, Live>>,
 }
 
@@ -43,8 +49,11 @@ impl Uploads {
     pub fn open(data_dir: &Path) -> anyhow::Result<Self> {
         let root = data_dir.join("uploads");
         crate::config::create_private_dir(&root)?;
+        let kept = data_dir.join("attachments");
+        crate::config::create_private_dir(&kept)?;
         let u = Uploads {
             root,
+            kept,
             live: Mutex::new(HashMap::new()),
         };
         u.sweep();
@@ -226,6 +235,57 @@ impl Uploads {
         }
     }
 
+    /// Move a finished upload into a session's kept attachments, once a prompt
+    /// of the session has recorded it.
+    pub fn keep(&self, session_id: &str, id: &str) -> std::io::Result<()> {
+        if !valid_id(id) || !valid_session(session_id) {
+            return Err(std::io::Error::other("bad id"));
+        }
+        let dir = self.kept.join(session_id);
+        crate::config::create_private_dir(&dir).map_err(std::io::Error::other)?;
+        std::fs::rename(self.root.join(id), dir.join(id))
+    }
+
+    /// A kept attachment of a session and the path of its bytes.
+    pub fn kept(&self, session_id: &str, id: &str) -> Result<(Attachment, PathBuf), RpcError> {
+        if !valid_id(id) || !valid_session(session_id) {
+            return Err(RpcError::not_found("no such attachment"));
+        }
+        let dir = self.kept.join(session_id).join(id);
+        let meta = std::fs::read(dir.join("meta.json"))
+            .map_err(|_| RpcError::not_found(format!("no such attachment {id} in this session")))?;
+        let att: Attachment =
+            serde_json::from_slice(&meta).map_err(|e| RpcError::internal(e.to_string()))?;
+        Ok((att, dir.join("data")))
+    }
+
+    /// The upload if no prompt has claimed it yet, else the session's kept copy.
+    pub fn get_for(&self, session_id: &str, id: &str) -> Result<(Attachment, PathBuf), RpcError> {
+        self.get(id).or_else(|_| self.kept(session_id, id))
+    }
+
+    /// A piece of a kept attachment, for `attachment.read`.
+    pub fn read(&self, p: &AttachmentReadParams) -> Result<AttachmentReadResult, RpcError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let (att, path) = self.kept(&p.session_id, &p.attachment_id)?;
+        let io = |e: std::io::Error| RpcError::internal(format!("attachment: {e}"));
+        let mut f = std::fs::File::open(&path).map_err(io)?;
+        let size = f.metadata().map_err(io)?.len();
+        if p.offset > size {
+            return Err(RpcError::invalid_params(format!("offset {} is past the end ({size} bytes)", p.offset)));
+        }
+        f.seek(SeekFrom::Start(p.offset)).map_err(io)?;
+        let mut buf = Vec::with_capacity(UPLOAD_CHUNK_BYTES.min((size - p.offset) as usize));
+        f.take(UPLOAD_CHUNK_BYTES as u64).read_to_end(&mut buf).map_err(io)?;
+        Ok(AttachmentReadResult {
+            name: att.name,
+            mime: att.mime,
+            size,
+            offset: p.offset,
+            data: base64::engine::general_purpose::STANDARD.encode(&buf),
+        })
+    }
+
     fn part_path(&self, id: &str) -> PathBuf {
         self.root.join(format!("{id}.part"))
     }
@@ -239,6 +299,12 @@ impl PrivateOpen for std::fs::OpenOptions {
         use std::os::unix::fs::OpenOptionsExt;
         self.mode(0o600)
     }
+}
+
+fn valid_session(id: &str) -> bool {
+    id.starts_with("ses_")
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn valid_id(id: &str) -> bool {

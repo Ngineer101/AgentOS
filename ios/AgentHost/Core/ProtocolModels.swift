@@ -47,6 +47,11 @@ enum RPC {
     static let mediaProtocolVersion: UInt32 = 2
     /// `session.prompt` takes at most this many attachments.
     static let maxAttachments = 10
+    /// An image sent with a prompt, read back in pieces.
+    static let attachmentRead = "attachment.read"
+    /// Hosts on this protocol version or newer keep the images sent with
+    /// prompts, so the transcript can show them again (`attachment.read`).
+    static let imageProtocolVersion: UInt32 = 7
     /// The largest file `RemoteClient.uploadFile` sends.
     static let maxUploadBytes: Int64 = 25 * 1024 * 1024
 }
@@ -582,6 +587,15 @@ struct AttachmentInfo: Codable, Hashable, Identifiable {
             )
         }
     }
+}
+
+/// A piece of a sent image (`attachment.read`): `data` is base64, empty at the end.
+struct AttachmentReadResult: Decodable {
+    var name: String
+    var mime: String
+    var size: Int
+    var offset: Int
+    var data: String
 }
 
 /// "1.2 MB", for attachment sizes.

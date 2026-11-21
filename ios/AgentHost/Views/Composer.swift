@@ -174,6 +174,14 @@ final class ComposerModel: ObservableObject {
                 file = f
                 guard let model else { throw AgentHostError.NotConnected }
                 let info = try await upload(f, model)
+                // The phone's own images show in the transcript at once (and offline).
+                if info.isImage {
+                    await Task.detached(priority: .utility) {
+                        if let data = try? Data(contentsOf: f) {
+                            TranscriptCache.saveImage(data, attachmentId: info.attachmentId)
+                        }
+                    }.value
+                }
                 ComposerFiles.removeTemporaryFile(f)
                 file = nil
                 self?.finish(id, .ready(info))
@@ -365,6 +373,12 @@ final class SpeechDictation: ObservableObject {
     private var recognitionDone = false
     /// Counts dictations, so a timeout left from an earlier one is ignored.
     private var generation = 0
+    /// What was heard before the recognizer last started over. After a pause
+    /// iOS begins a new transcription, and its results then hold only the
+    /// words since; these are kept and the new ones go after them.
+    private var committed = ""
+    /// The latest result, to notice when the next one starts over.
+    private var lastPartial = ""
 
     /// Ask for speech recognition and microphone access (each once).
     static func requestAccess() async -> Access {
@@ -428,6 +442,8 @@ final class SpeechDictation: ObservableObject {
 
         request = req
         text = ""
+        committed = ""
+        lastPartial = ""
         recognitionDone = false
         generation += 1
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
@@ -493,7 +509,7 @@ final class SpeechDictation: ObservableObject {
     }
 
     private func handle(_ partial: String?, done: Bool) {
-        if let partial, isListening || isFinishing { text = partial }
+        if let partial, !partial.isEmpty, isListening || isFinishing { add(partial) }
         guard done else { return }
         recognitionDone = true
         if isFinishing {
@@ -503,6 +519,40 @@ final class SpeechDictation: ObservableObject {
             // keep what was heard.
             onAutoStop?()
         }
+    }
+
+    /// A new result: the same words revised or extended, everything again
+    /// (some iOS versions), or only the words since a pause.
+    private func add(_ partial: String) {
+        if !committed.isEmpty, Self.words(partial).starts(with: Self.words(committed)) {
+            // The whole dictation again.
+            committed = ""
+        } else if Self.startedOver(from: lastPartial, to: partial) {
+            committed = Self.joined(committed, lastPartial)
+        }
+        lastPartial = partial
+        text = Self.joined(committed, partial)
+    }
+
+    /// Whether `next` is a new transcription rather than `previous` revised:
+    /// shorter, and starting with another word.
+    nonisolated static func startedOver(from previous: String, to next: String) -> Bool {
+        let p = words(previous), n = words(next)
+        guard let first = p.first, !n.isEmpty else { return false }
+        return n.count < p.count && n.first != first
+    }
+
+    nonisolated static func words(_ s: String) -> [String] {
+        s.lowercased()
+            .split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") })
+            .map(String.init)
+    }
+
+    nonisolated static func joined(_ a: String, _ b: String) -> String {
+        let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        return a + " " + b
     }
 
     private func finish() {
@@ -749,8 +799,29 @@ struct LevelMeter: View {
     }
 }
 
-/// Attachments listed under a prompt bubble (sent or pending).
+/// A prompt's attachments (sent or pending): images as pictures (tap to see
+/// one full screen), other files listed by name.
 struct PromptAttachmentsView: View {
+    let sessionId: String
+    let attachments: [AttachmentInfo]
+    var sentAt: Date? = nil
+
+    var body: some View {
+        let images = attachments.filter(\.isImage)
+        let files = attachments.filter { !$0.isImage }
+        VStack(alignment: .trailing, spacing: 6) {
+            ForEach(images) { a in
+                SentImageThumbnail(sessionId: sessionId, attachment: a, sentAt: sentAt)
+            }
+            if !files.isEmpty {
+                PromptFilesList(attachments: files)
+            }
+        }
+    }
+}
+
+/// Files listed by name and size under a prompt bubble.
+struct PromptFilesList: View {
     let attachments: [AttachmentInfo]
 
     var body: some View {
@@ -767,6 +838,190 @@ struct PromptAttachmentsView: View {
                 .font(.caption)
                 .accessibilityElement(children: .combine)
             }
+        }
+    }
+}
+
+// MARK: - Sent images
+
+/// A sent image at its own aspect ratio, fit in 220 × 300 pt, like a photo in
+/// Messages. A grey placeholder while it loads; its name if it can't show.
+struct SentImageThumbnail: View {
+    @EnvironmentObject private var model: AppModel
+    let sessionId: String
+    let attachment: AttachmentInfo
+    var sentAt: Date?
+
+    @State private var image: UIImage?
+    @State private var failure: String?
+    @State private var showViewer = false
+
+    private static let maxSize = CGSize(width: 220, height: 300)
+
+    var body: some View {
+        Group {
+            if let image {
+                Button {
+                    showViewer = true
+                } label: {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: fitted(image.size).width, height: fitted(image.size).height)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(attachment.name)
+                .accessibilityHint("Shows the image full screen")
+                .fullScreenCover(isPresented: $showViewer) {
+                    SentImageViewer(image: image, name: attachment.name, sentAt: sentAt)
+                }
+            } else if failure != nil {
+                PromptFilesList(attachments: [attachment])
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(uiColor: .systemGray5))
+                    .frame(width: 160, height: 120)
+                    .overlay(ProgressView())
+                    .accessibilityLabel("\(attachment.name), loading")
+            }
+        }
+        .task(id: attachment.attachmentId) { await load() }
+        .onChange(of: model.link.isOnline) { _, online in
+            // Couldn't load while offline: try again once connected.
+            if online, image == nil, failure != nil {
+                failure = nil
+                Task { await load() }
+            }
+        }
+    }
+
+    private func load() async {
+        if let img = SentImages.shared.decoded(attachment.attachmentId) {
+            image = img
+            return
+        }
+        do {
+            image = try await model.sentImage(sessionId: sessionId, attachment: attachment)
+        } catch {
+            failure = userMessage(for: error)
+        }
+    }
+
+    private func fitted(_ size: CGSize) -> CGSize {
+        guard size.width > 0, size.height > 0 else { return CGSize(width: 160, height: 120) }
+        let scale = min(Self.maxSize.width / size.width, Self.maxSize.height / size.height, 1)
+        return CGSize(width: max(44, (size.width * scale).rounded()), height: max(44, (size.height * scale).rounded()))
+    }
+}
+
+/// A sent image full screen on black: pinch or double-tap to zoom, Share
+/// (Save Image, Copy, AirDrop) and close in glass at the top.
+struct SentImageViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    let image: UIImage
+    let name: String
+    var sentAt: Date?
+
+    var body: some View {
+        NavigationStack {
+            ZoomableImage(image: image)
+                .ignoresSafeArea()
+                .background(Color.black)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            ToolbarIcon(systemName: "xmark")
+                        }
+                        .accessibilityLabel("Close")
+                    }
+                    ToolbarItem(placement: .principal) {
+                        VStack(spacing: 0) {
+                            Text(name).font(.headline).lineLimit(1).truncationMode(.middle)
+                            if let sentAt {
+                                Text(sentAt, format: .dateTime.day().month().hour().minute())
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        let picture = Image(uiImage: image)
+                        ShareLink(item: picture, preview: SharePreview(name, image: picture)) {
+                            ToolbarIcon(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share")
+                    }
+                }
+        }
+    }
+}
+
+/// An image that fits the screen and zooms with a pinch or a double tap.
+struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> ZoomScrollView {
+        let v = ZoomScrollView()
+        v.delegate = context.coordinator
+        v.minimumZoomScale = 1
+        v.maximumZoomScale = 5
+        v.showsVerticalScrollIndicator = false
+        v.showsHorizontalScrollIndicator = false
+        v.contentInsetAdjustmentBehavior = .never
+        v.backgroundColor = .black
+        v.imageView.image = image
+        v.imageView.contentMode = .scaleAspectFit
+        v.imageView.isAccessibilityElement = true
+        v.addSubview(v.imageView)
+        context.coordinator.imageView = v.imageView
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped(_:)))
+        tap.numberOfTapsRequired = 2
+        v.addGestureRecognizer(tap)
+        return v
+    }
+
+    func updateUIView(_ v: ZoomScrollView, context: Context) {
+        if v.imageView.image !== image { v.imageView.image = image }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        @objc func doubleTapped(_ g: UITapGestureRecognizer) {
+            guard let v = g.view as? UIScrollView, let imageView else { return }
+            if v.zoomScale > 1 {
+                v.setZoomScale(1, animated: true)
+            } else {
+                let p = g.location(in: imageView)
+                let size = CGSize(width: v.bounds.width / 2.5, height: v.bounds.height / 2.5)
+                v.zoom(to: CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height), animated: true)
+            }
+        }
+    }
+}
+
+/// Keeps the image the size of the screen while not zoomed (rotation too).
+final class ZoomScrollView: UIScrollView {
+    let imageView = UIImageView()
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if zoomScale == 1, imageView.frame.size != bounds.size {
+            imageView.frame = CGRect(origin: .zero, size: bounds.size)
+            contentSize = bounds.size
         }
     }
 }

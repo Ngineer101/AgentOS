@@ -504,6 +504,27 @@ fn session(s: &mut App) {
     s.screen = Screen::Session("ses_1".into());
 }
 
+fn sent_images(s: &mut App) {
+    session(s);
+    s.approvals.clear();
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 7;
+    }
+    let tr = s.transcripts.entry("ses_1".into()).or_default();
+    let seq = tr.last_seq;
+    let img = |id: &str, name: &str| json!({"attachment_id": id, "name": name, "mime": "image/png", "size": 284_102});
+    tr.events.push(ev("ses_1", seq + 1, 60_000, EventType::Prompt, json!({"text": "", "attachments": [img("att_s1", "Pasted image.png")]})));
+    tr.events.push(ev("ses_1", seq + 2, 70_000, EventType::Prompt, json!({
+        "text": "Same overflow on the settings screen. Log attached.",
+        "attachments": [img("att_s2", "Settings.png"), {"attachment_id": "att_s3", "name": "console.log", "mime": "text/plain", "size": 18_200}],
+    })));
+    tr.last_seq = seq + 2;
+    for id in ["att_s1", "att_s2"] {
+        let shown = s.image_cache.as_ref().map(|c| crate::model::SentImage::Ready(c.load(crate::brand::APP_ICON_PNG)));
+        s.images.insert(id.into(), shown.unwrap_or(crate::model::SentImage::Loading));
+    }
+}
+
 fn pairing(s: &mut App, confirm: bool) {
     base(s);
     s.settings = Some(Tab::Devices);
@@ -956,6 +977,13 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
                 PendingFile { local_id: 2, name: "Pasted image 2.png".into(), state: FileState::Uploading },
             ],
         );
+    }),
+    // A message with only a screenshot (another image and a file with a question), shown
+    // as pictures; `sent-image-viewer` opens the first.
+    ("sent-images", sent_images),
+    ("sent-image-viewer", |s| {
+        sent_images(s);
+        s.viewing = Some("att_s1".into());
     }),
     ("connector-search", |s| {
         base(s);

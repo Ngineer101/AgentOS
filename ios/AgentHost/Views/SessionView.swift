@@ -226,6 +226,8 @@ struct SessionView: View {
                 .environmentObject(model)
         }
         .onAppear {
+            // What you typed here before looking at another session.
+            if draft.isEmpty, let saved = model.drafts[sessionId] { draft = saved }
             model.open(sessionId)
             model.sessionShown(sessionId)
             #if DEBUG
@@ -256,6 +258,9 @@ struct SessionView: View {
                 subagentShown = SubagentRef(id: id)
             }
             #endif
+        }
+        .onChange(of: draft) { _, text in
+            model.drafts[sessionId] = text.isEmpty ? nil : text
         }
         .onDisappear {
             dictation.cancel()
@@ -580,7 +585,7 @@ struct SessionView: View {
             ForEach(groupActivity(rows)) { item in
                 switch item {
                 case let .row(row):
-                    TranscriptRowView(row: row, onApproval: { a in approvalShown = a },
+                    TranscriptRowView(sessionId: sessionId, row: row, onApproval: { a in approvalShown = a },
                                       onSubagent: { id in subagentShown = SubagentRef(id: id) })
                 case let .activity(_, group):
                     ActivityGroupRow(rows: group)
@@ -745,6 +750,7 @@ extension TranscriptRow {
 
 struct TranscriptRowView: View {
     @EnvironmentObject private var model: AppModel
+    let sessionId: String
     let row: TranscriptRow
     var onApproval: (PendingApprovalModel) -> Void
     var onSubagent: (String) -> Void = { _ in }
@@ -757,7 +763,7 @@ struct TranscriptRowView: View {
                     PromptBubble(text: text)
                 }
                 if !attachments.isEmpty {
-                    PromptAttachmentsView(attachments: attachments)
+                    PromptAttachmentsView(sessionId: sessionId, attachments: attachments, sentAt: dateFromMillis(ts))
                         .padding(.vertical, 2)
                 }
                 HStack(spacing: 4) {
@@ -1450,7 +1456,7 @@ struct PendingPromptRow: View {
                 PromptBubble(text: prompt.text, pending: held)
             }
             if !prompt.attachments.isEmpty {
-                PromptAttachmentsView(attachments: prompt.attachments)
+                PromptAttachmentsView(sessionId: prompt.sessionId, attachments: prompt.attachments)
                     .opacity(held ? 0.7 : 1)
             }
             if let f = prompt.failure {

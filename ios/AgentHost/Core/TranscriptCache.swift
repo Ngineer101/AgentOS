@@ -28,9 +28,14 @@ enum TranscriptCache {
         root.appendingPathComponent("state.json")
     }
 
+    /// Images sent with prompts, by attachment id (see `SentImages`).
+    private static var imagesDir: URL {
+        root.appendingPathComponent("images", isDirectory: true)
+    }
+
     private static func ensureDirs() throws {
         let fm = FileManager.default
-        for dir in [root, transcriptsDir] where !fm.fileExists(atPath: dir.path) {
+        for dir in [root, transcriptsDir, imagesDir] where !fm.fileExists(atPath: dir.path) {
             try fm.createDirectory(
                 at: dir,
                 withIntermediateDirectories: true,
@@ -81,6 +86,21 @@ enum TranscriptCache {
             }
         }
         return out
+    }
+
+    private static func imageURL(_ attachmentId: String) -> URL {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let safe = String(attachmentId.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+        return imagesDir.appendingPathComponent(safe)
+    }
+
+    static func saveImage(_ data: Data, attachmentId: String) {
+        try? ensureDirs()
+        try? data.write(to: imageURL(attachmentId), options: [.atomic, .completeFileProtection])
+    }
+
+    static func loadImage(_ attachmentId: String) -> Data? {
+        try? Data(contentsOf: imageURL(attachmentId))
     }
 
     static func deleteAll() {

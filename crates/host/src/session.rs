@@ -385,6 +385,12 @@ impl SessionManager {
                 accepted: false,
             });
         };
+        // Images stay with the session, for clients to show again.
+        for a in attachments.iter().filter(|a| a.is_image()) {
+            if let Err(e) = self.ctx.uploads.keep(&p.session_id, &a.attachment_id) {
+                tracing::warn!(session = %p.session_id, "keep {}: {e}", a.attachment_id);
+            }
+        }
         self.ctx.bus.publish(BusMsg::Event(ev));
         // Until the agent names it, a session is named by its first message
         // (kept under a title the user gives it, for if they clear theirs).
@@ -1863,8 +1869,15 @@ impl Actor {
     /// already (the user's, or the agent's own). The session's first message
     /// is what's titled; `fallback` (this message) if none is recorded.
     async fn ask_title(&mut self, fallback: &str) {
-        self.title_asked = true;
         let sid = self.session.session_id.clone();
+        let first = self.ctx.store.first_prompt_text(&sid).ok().flatten();
+        let request = first.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback.to_string());
+        if request.trim().is_empty() {
+            // Only files so far: the name from the first message stands until
+            // a message has words to name the session by.
+            return;
+        }
+        self.title_asked = true;
         match self.ctx.store.session_wants_title(&sid) {
             Ok(true) => {}
             Ok(false) => return,
@@ -1872,11 +1885,6 @@ impl Actor {
                 tracing::warn!(session = %sid, "title: {e:#}");
                 return;
             }
-        }
-        let first = self.ctx.store.first_prompt_text(&sid).ok().flatten();
-        let request = first.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback.to_string());
-        if request.trim().is_empty() {
-            return; // only files: the name from the first message stands
         }
         let id = self.title_ask.as_ref().map_or(1, |a| a.id + 1);
         self.title_ask = Some(TitleAsk {
@@ -2017,7 +2025,7 @@ impl Actor {
         let mut listing = String::from("Attached files (read them from these paths):");
         let mut extra = vec![];
         for a in &q.attachments {
-            let src = match self.ctx.uploads.get(&a.attachment_id) {
+            let src = match self.ctx.uploads.get_for(&self.session.session_id, &a.attachment_id) {
                 Ok((_, p)) => p,
                 Err(_) => {
                     listing.push_str(&format!("\n- {} (no longer available)", a.name));

@@ -47,6 +47,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(alert) = crate::automations::confirm(s, &t) {
         root = root.child(alert);
     }
+    if let Some(v) = crate::session::image_viewer(s, &t) {
+        root = root.child(v);
+    }
     // Over everything, sheets too: a failure in Settings shows where you are.
     if let Some(toasts) = crate::toast::layer(s, &t) {
         root = root.child(toasts);

@@ -128,6 +128,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var transcripts: [String: Transcript] = [:]
     @Published private(set) var streaming: [String: StreamingText] = [:]
     @Published private(set) var outbox: [OutgoingPrompt] = []
+    /// Unsent text in each session's composer, kept while you look at
+    /// another session. Not published: only the session's own view reads it.
+    var drafts: [String: String] = [:]
     /// Set when the cache was written last (shown when offline).
     @Published private(set) var cachedAt: Date?
     /// The host's protocol version from `hello` on the last connection.
@@ -429,6 +432,7 @@ final class AppModel: ObservableObject {
         } else {
             // Not paired: make sure nothing from an earlier pairing is left.
             TranscriptCache.deleteAll()
+            SentImages.shared.clearMemory()
             phase = UserDefaults.standard.bool(forKey: Self.removedFlag) ? .removed : .unpaired
         }
     }
@@ -509,6 +513,7 @@ final class AppModel: ObservableObject {
         // Locked meanwhile: the keys are saved; the next unlock loads them.
         guard phase == .unpaired else { return }
         TranscriptCache.deleteAll()
+        SentImages.shared.clearMemory()
         clearContent()
         credentials = stored
         phase = .ready
@@ -544,6 +549,7 @@ final class AppModel: ObservableObject {
         stopMonitoringNetwork()
         CredentialStore.deleteAll()
         TranscriptCache.deleteAll()
+        SentImages.shared.clearMemory()
         credentials = nil
         clearContent()
         forgetPush()
@@ -551,6 +557,7 @@ final class AppModel: ObservableObject {
 
     private func clearContent() {
         saveTask?.cancel()
+        drafts = [:]
         hostInfo = nil
         workspaces = []
         sessions = []

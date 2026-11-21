@@ -17,7 +17,10 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   Deny ⌥⌘D / Approve ⌥⌘A (Alt+D / Alt+A). The toolbar has a status capsule
   (macOS) or the window an approval banner (GNOME), Stop turn and a session
   menu. The composer attaches files, dictates, and shows its keys; ↑ in an
-  empty composer brings back your last message. Dictation (⇧⌘D / Ctrl+Shift+D,
+  empty composer brings back your last message. Each session keeps what you
+  typed in it while you look at another. Images you sent show as
+  pictures in the transcript (hosts on protocol 7); click one to see it in
+  the window, Esc to close. Dictation (⇧⌘D / Ctrl+Shift+D,
   or the microphone) writes the words into the composer as you talk; ↩ stops
   and sends, Esc throws the dictation away.
 - **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):

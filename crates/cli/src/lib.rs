@@ -297,6 +297,31 @@ impl Client {
         Ok(r.text)
     }
 
+    /// An image sent with one of a session's prompts, read back whole (protocol 7).
+    pub async fn read_attachment(&self, session_id: &str, attachment_id: &str) -> Result<(Attachment, Vec<u8>)> {
+        use base64::Engine;
+        let mut data = vec![];
+        loop {
+            let r: AttachmentReadResult = self
+                .call(
+                    methods::ATTACHMENT_READ,
+                    json!({"session_id": session_id, "attachment_id": attachment_id, "offset": data.len()}),
+                )
+                .await?;
+            let piece = base64::engine::general_purpose::STANDARD
+                .decode(r.data.as_bytes())
+                .map_err(|_| anyhow!("the host sent bad base64"))?;
+            if piece.is_empty() || data.len() + piece.len() > r.size as usize {
+                return Err(anyhow!("the host stopped after {} of {} bytes", data.len(), r.size));
+            }
+            data.extend(piece);
+            if data.len() as u64 >= r.size {
+                let a = Attachment { attachment_id: attachment_id.into(), name: r.name, mime: r.mime, size: r.size };
+                return Ok((a, data));
+            }
+        }
+    }
+
     pub async fn subscribe(
         &self,
         session_id: &str,

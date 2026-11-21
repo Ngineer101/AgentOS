@@ -5,7 +5,7 @@ use crate::bridge::Refresh;
 use crate::commands::{label as keys, run, Cmd};
 use crate::icons as ic;
 use crate::look::{Btn, Theme};
-use crate::model::{App, FileState, Menu, Mic};
+use crate::model::{App, FileState, Menu, Mic, Screen, SentImage};
 use crate::view::{clip, human_size, is_web_link};
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
@@ -112,7 +112,7 @@ pub fn screen(s: &App, id: &str, t: &Theme, k: &Kit) -> El {
     }
     let pending = tr.map(|t| t.pending.as_slice()).unwrap_or(&[]);
     for p in pending {
-        lines = lines.child(row().w_full().key(format!("pending-{}", p.prompt_id)).child(el().grow(1.0)).child(col().max_w(520.0).child(prompt_bubble(&p.payload, t))));
+        lines = lines.child(row().w_full().key(format!("pending-{}", p.prompt_id)).child(el().grow(1.0)).child(prompt_column(s, &p.payload, t)));
     }
     if live.is_none() {
         if let Some(label) = crate::model::quiet_work(sess.state, events, !pending.is_empty()) {
@@ -713,14 +713,15 @@ pub(crate) fn str_of(v: &Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 
-/// A prompt bubble's text and attached file names.
-fn prompt_body(p: &Value, t: &Theme) -> Vec<El> {
+/// A prompt bubble's text and attached file names (images too, unless they show as pictures).
+fn prompt_body(p: &Value, with_images: bool, t: &Theme) -> Vec<El> {
     let mut v = vec![];
     let tx = p["text"].as_str().unwrap_or("");
     if !tx.is_empty() {
         v.push(text(tx.to_string()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round())).color(t.text).wrap().selectable(true));
     }
-    for a in p["attachments"].as_array().into_iter().flatten() {
+    let is_image = |a: &Value| a["mime"].as_str().is_some_and(|m| m.starts_with("image/"));
+    for a in p["attachments"].as_array().into_iter().flatten().filter(|a| with_images || !is_image(a)) {
         let name = a["name"].as_str().unwrap_or("file");
         let size = a["size"].as_u64().map(human_size).unwrap_or_default();
         v.push(
@@ -734,9 +735,115 @@ fn prompt_body(p: &Value, t: &Theme) -> Vec<El> {
     v
 }
 
-/// The user's message, right-aligned in its bubble.
-fn prompt_bubble(p: &Value, t: &Theme) -> El {
-    col().px(13.0).py(9.0).radius(16.0).fill(Color::WHITE.alpha(0.09)).gap(6.0).children(prompt_body(p, t))
+/// The user's message: its pictures, then the bubble with its words and other files
+/// (no bubble for pictures alone), right-aligned.
+fn prompt_column(s: &App, p: &Value, t: &Theme) -> El {
+    let pictures = s.host_keeps_images().then(|| image_strip(s, p, t)).flatten();
+    let body = prompt_body(p, pictures.is_none(), t);
+    let mut c = col().items_end().gap(6.0).max_w(520.0);
+    if let Some(strip) = pictures {
+        c = c.child(strip);
+    }
+    if !body.is_empty() {
+        c = c.child(col().px(13.0).py(9.0).radius(16.0).fill(Color::WHITE.alpha(0.09)).gap(6.0).children(body));
+    }
+    c
+}
+
+/// Largest thumbnail of a sent image, in points.
+const THUMB_W: f32 = 240.0;
+const THUMB_H: f32 = 180.0;
+
+/// A message's images as thumbnails; clicking one opens it in the viewer.
+fn image_strip(s: &App, p: &Value, t: &Theme) -> Option<El> {
+    let images = crate::model::sent_images(p);
+    if images.is_empty() {
+        return None;
+    }
+    let mut r = row().gap(6.0).flex_wrap().justify_end();
+    for (id, name) in images {
+        r = r.child(thumbnail(s, &id, &name, t));
+    }
+    Some(r)
+}
+
+fn thumbnail(s: &App, id: &str, name: &str, t: &Theme) -> El {
+    let shown = match s.images.get(id) {
+        Some(SentImage::Ready(img)) => img.size().map(|sz| (img, sz)),
+        _ => None,
+    };
+    let base = el().key(format!("img-{id}")).radius(12.0).clip_rounded(12.0).border(0.5, Color::WHITE.alpha(0.12));
+    if let Some((img, [w, h])) = shown {
+        // Fit the box, never larger than the picture itself.
+        let scale = (THUMB_W / w as f32).min(THUMB_H / h as f32).min(1.0);
+        let (w, h) = ((w as f32 * scale).round().max(24.0), (h as f32 * scale).round().max(24.0));
+        let open = id.to_string();
+        return base
+            .size(w, h)
+            .pixels_fit(img.pixels(), rune::SurfaceFit::Fill)
+            .role("button")
+            .label(format!("Show {name}"))
+            .help(name.to_string())
+            .focusable(true)
+            .cursor(rune::Cursor::Pointer)
+            .on_press(move |s: &mut App| s.view_image(Some(open.clone())));
+    }
+    let why = match s.images.get(id) {
+        Some(SentImage::Failed(e)) => Some(e.clone()),
+        Some(SentImage::Ready(img)) => img.error().map(|e| e.to_string()),
+        _ => None,
+    };
+    let note = if why.is_some() { "Can't show this image" } else { "Loading…" };
+    let mut b = base.size(160.0, 110.0).fill(Color::WHITE.alpha(0.05)).padding(10.0).center();
+    if let Some(why) = why {
+        b = b.help(why);
+    }
+    b = b.child(
+        col()
+            .items_center()
+            .gap(4.0)
+            .child(icon(&ic::FILE_SM, 16.0).color(t.text2))
+            .child(text(clip(name, 40)).font(TextStyle::new(12.0, 400.0)).color(t.text2).wrap().align(rune::Align::Center))
+            .child(text(note).font(TextStyle::new(11.0, 400.0)).color(t.text3)),
+    );
+    b.label(format!("{name}, {note}"))
+}
+
+/// The image being viewed, as large as the window allows, over everything. Esc, the close
+/// button or a click beside it closes it.
+pub fn image_viewer(s: &App, t: &Theme) -> Option<El> {
+    let id = s.viewing.as_ref()?;
+    let Screen::Session(sid) = &s.screen else { return None };
+    let SentImage::Ready(img) = s.images.get(id)? else { return None };
+    let [w, h] = img.size()?;
+    let name = s
+        .transcripts
+        .get(sid)
+        .and_then(|tr| tr.events.iter().filter(|e| e.kind == EventType::Prompt).flat_map(|e| crate::model::sent_images(&e.payload)).find(|(a, _)| a == id))
+        .map(|(_, n)| n)
+        .unwrap_or_else(|| "Image".into());
+    let close = |s: &mut App| s.view_image(None);
+    let bar = row()
+        .w_full()
+        .h(44.0)
+        .px(12.0)
+        .gap(8.0)
+        .center_y()
+        .child(text(format!("{name} · {w} × {h}")).font(TextStyle::new(13.0, 600.0)).color(Color::WHITE.alpha(0.9)).grow(1.0))
+        .child(t.icon_button(&ic::CLOSE, 11.0, "Close (Esc)", move |s: &mut App, _: &mut Tx| close(s)).key("viewer-close"));
+    let picture = el()
+        .key("viewer-image")
+        .aspect_fit(w as f32 / h as f32)
+        .max_w(w as f32)
+        .max_h(h as f32)
+        .pixels_fit(img.pixels(), rune::SurfaceFit::Fit)
+        .role("img")
+        .label(name.clone());
+    let stage = col().w_full().grow(1.0).min_h(0.0).px(24.0).pb(24.0).items_center().justify_center().child(picture);
+    Some(
+        crate::sheet::scrim("image-viewer", 0.88, close)
+            .child(col().key("viewer").w_full().h_full().modal(true, close).child(bar).child(stage)),
+    )
 }
 
 /// "Working…" with a spinner, while the agent is quiet.
@@ -787,7 +894,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
     Some(match e.kind {
         EventType::Prompt => {
             let device = agenthost_proto::device_display_name(&str_of(&p["device"])).to_string();
-            let mut c = col().items_end().gap(4.0).max_w(520.0).child(prompt_bubble(p, t));
+            let mut c = col().items_end().gap(4.0).max_w(520.0).child(prompt_column(s, p, t));
             if !device.is_empty() && device != "local" {
                 c = c.child(text(format!("From {device} · {}", crate::view::short_age(e.ts, s.look))).font(TextStyle::new(t.fs_small, 400.0)).color(t.text3));
             }

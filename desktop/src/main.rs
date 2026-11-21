@@ -23,6 +23,7 @@ use model::App;
 use rune::{AppSpec, Chrome, KeyEvent, Tx, Waker};
 
 fn setup(s: &mut App, waker: Waker) {
+    s.image_cache = Some(rune::ImageCache::new(waker.clone()));
     if std::env::var_os("AGENTHOST_DESKTOP_OFFLINE").is_none() {
         s.bridge = Some(bridge::start(waker));
         s.hostname = hostname();
@@ -37,6 +38,7 @@ fn hostname() -> String {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    s.fetch_images();
     if s.catch_up() {
         tx.wake_after(std::time::Duration::from_millis(500));
     }
