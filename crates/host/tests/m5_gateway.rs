@@ -264,6 +264,18 @@ async fn denied_write_never_reaches_the_server() {
         .iter()
         .any(|e| e.kind == EventType::ToolResult && e.payload["status"] == "denied"));
     assert!(s.server.state.calls.lock().unwrap().is_empty());
+    // A denial ends the wait like an approval: nothing left to answer, and
+    // the session stops asking for approval.
+    let pending: Vec<PendingApproval> = s.c.call(m::APPROVAL_LIST, json!({})).await.unwrap();
+    assert!(pending.is_empty());
+    let denied = ev
+        .iter()
+        .position(|e| e.kind == EventType::ApprovalResolved && e.payload["approval_id"] == id)
+        .unwrap();
+    assert!(ev[denied..]
+        .iter()
+        .any(|e| e.kind == EventType::SessionState && e.payload["state"] == "running"));
+    wait_state(&s.c, &s.sid, SessionState::Idle, T).await;
 }
 
 #[tokio::test]
