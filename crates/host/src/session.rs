@@ -90,9 +90,16 @@ pub enum Cmd {
     },
 }
 
+/// How the host introduces the files attached to a message, in the text it
+/// sends the agent.
+pub const ATTACHED_FILES: &str = "Attached files (read them from these paths):";
+
 /// Where asking the agent for a session's title has got to.
 #[derive(Debug, Clone, Copy)]
 pub enum TitleStep {
+    /// The agent's list of its sessions has come (`session/list`): it may
+    /// have titled this one already.
+    Listed,
     /// Its conversation exists (`session/new`).
     Created,
     /// It is on its quickest model (`session/set_config_option`).
@@ -850,6 +857,8 @@ struct Actor {
     side_routes: HashMap<String, String>,
     /// The agent can close a conversation (`session/close`).
     can_close: bool,
+    /// The agent can list its sessions, with their titles (`session/list`).
+    can_list: bool,
     /// The agent has been asked for a title since this actor started (once is enough).
     title_asked: bool,
     /// The title being asked for.
@@ -975,6 +984,7 @@ impl Actor {
             sides: HashMap::new(),
             side_routes: HashMap::new(),
             can_close: false,
+            can_list: false,
             title_asked: false,
             title_ask: None,
         }
@@ -1010,7 +1020,15 @@ impl Actor {
 
     async fn run(mut self, resume: bool) {
         let exit = match self.start(resume).await {
-            Ok(()) => self.main_loop().await,
+            Ok(()) => {
+                // A session still named by its first message (one from before
+                // the host titled sessions, or whose asking failed) is titled
+                // now, not at its next message, which may never come.
+                if resume {
+                    self.ask_title(None).await;
+                }
+                self.main_loop().await
+            }
             Err(e) => match e.downcast::<StartFailure>() {
                 Ok(f) => Exit::Failed(f.reason, f.detail),
                 Err(e) => Exit::Failed(format!("{e:#}"), Value::Null),
@@ -1228,6 +1246,9 @@ impl Actor {
             .unwrap_or(false);
         self.can_close = init["agentCapabilities"]["sessionCapabilities"]
             .get("close")
+            .is_some_and(|c| !c.is_null());
+        self.can_list = init["agentCapabilities"]["sessionCapabilities"]
+            .get("list")
             .is_some_and(|c| !c.is_null());
         if can_fork != self.session.side_questions {
             self.ctx
@@ -1859,22 +1880,34 @@ impl Actor {
         }));
     }
 
-    /// Ask the agent for a title for the session, unless it has a good one
-    /// already (the user's, or the agent's own). The session's first message
-    /// is what's titled; `fallback` (this message) if none is recorded.
-    async fn ask_title(&mut self, fallback: &str) {
-        self.title_asked = true;
+    /// Ask the agent for a title for the session, once per run of the agent,
+    /// unless it has a good one already (the user's, or the agent's own). The
+    /// session's first message is what's titled; `fallback` (the message
+    /// being sent) if none is recorded.
+    ///
+    /// A resumed session (no `fallback`) may have been titled by the agent
+    /// already, out of the host's sight, so its list of sessions is read first.
+    async fn ask_title(&mut self, fallback: Option<&str>) {
+        if self.title_asked {
+            return;
+        }
         let sid = self.session.session_id.clone();
         match self.ctx.store.session_wants_title(&sid) {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => {
+                self.title_asked = true;
+                return;
+            }
             Err(e) => {
                 tracing::warn!(session = %sid, "title: {e:#}");
                 return;
             }
         }
         let first = self.ctx.store.first_prompt_text(&sid).ok().flatten();
-        let request = first.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback.to_string());
+        let Some(request) = first.or(fallback.map(str::to_string)) else {
+            return; // nothing said yet: asked at the first message
+        };
+        self.title_asked = true;
         if request.trim().is_empty() {
             return; // only files: the name from the first message stands
         }
@@ -1885,16 +1918,52 @@ impl Actor {
             prompt: title::ask(&request),
             text: String::new(),
         });
+        if fallback.is_none() && self.can_list {
+            let params = json!({"cwd": self.workspace.path});
+            self.request_then("session/list", params, move |result| Cmd::Title {
+                ask: id,
+                step: TitleStep::Listed,
+                result,
+            })
+            .await;
+        } else {
+            self.title_conversation(id).await;
+        }
+    }
+
+    /// Start the hidden conversation the title is asked for in.
+    async fn title_conversation(&mut self, ask: u64) {
         let mut params = json!({"cwd": self.workspace.path, "mcpServers": []});
-        if let Some(m) = &self.spec.session_meta {
-            params["_meta"] = m.clone();
+        if let Some(m) = self.spec.title_session_meta() {
+            params["_meta"] = m;
         }
         self.request_then("session/new", params, move |result| Cmd::Title {
-            ask: id,
+            ask,
             step: TitleStep::Created,
             result,
         })
         .await;
+    }
+
+    /// Whether an agent's title for the session only repeats one of its
+    /// messages (see [`title::echoes`]).
+    fn echoes_a_message(&self, t: &str) -> bool {
+        match self.ctx.store.prompt_texts(&self.session.session_id) {
+            Ok(prompts) => title::echoes(t, prompts.iter().map(String::as_str)),
+            Err(e) => {
+                tracing::warn!(session = %self.session.session_id, "title: {e:#}");
+                false
+            }
+        }
+    }
+
+    /// A title the agent gave the session itself, unless it is only a message.
+    fn agent_title(&self, raw: &str) -> Option<String> {
+        if self.echoes_a_message(raw) {
+            tracing::debug!(session = %self.session.session_id, "the agent's title only repeats a message");
+            return None;
+        }
+        title::from_agent(raw)
     }
 
     async fn title_step(&mut self, ask: u64, step: TitleStep, result: Result<Value, RpcError>) {
@@ -1904,6 +1973,21 @@ impl Actor {
         let sid = self.session.session_id.clone();
         let then = move |step| move |result| Cmd::Title { ask, step, result };
         match step {
+            TitleStep::Listed => {
+                let main = self.session.acp_session_id.as_deref().unwrap_or_default();
+                let listed = result.as_ref().ok().and_then(|v| {
+                    v["sessions"].as_array()?.iter().find(|s| !main.is_empty() && s["sessionId"] == main)?["title"]
+                        .as_str()
+                        .map(str::to_string)
+                });
+                match listed.and_then(|t| self.agent_title(&t)) {
+                    Some(t) => {
+                        self.title_ask = None;
+                        self.set_auto_title(&t, TitleSource::Agent);
+                    }
+                    None => self.title_conversation(ask).await,
+                }
+            }
             TitleStep::Created => {
                 let Some(acp_id) = result.as_ref().ok().and_then(|v| v["sessionId"].as_str()).map(str::to_string) else {
                     tracing::info!(session = %sid, "could not ask the agent for a title: {:?}", result.err().map(|e| e.message));
@@ -1973,9 +2057,7 @@ impl Actor {
     }
 
     async fn start_turn(&mut self, q: Queued) -> Result<()> {
-        if !self.title_asked {
-            self.ask_title(&q.text).await;
-        }
+        self.ask_title(Some(&q.text)).await;
         let seq = q.seq;
         let acp_id = self.session.acp_session_id.clone().unwrap_or_default();
         let conn = self.agent.as_ref().unwrap().conn.clone();
@@ -2014,7 +2096,7 @@ impl Actor {
         std::fs::create_dir_all(&dir)?;
         let image_ok = self.prompt_caps["image"].as_bool().unwrap_or(false);
         let embed_ok = self.prompt_caps["embeddedContext"].as_bool().unwrap_or(false);
-        let mut listing = String::from("Attached files (read them from these paths):");
+        let mut listing = String::from(ATTACHED_FILES);
         let mut extra = vec![];
         for a in &q.attachments {
             let src = match self.ctx.uploads.get(&a.attachment_id) {
@@ -2197,8 +2279,10 @@ impl Actor {
                         return;
                     }
                 }
-                if !self.loading {
-                    self.on_update(&n.params["update"]).await;
+                // A replayed history isn't news, but the session's title is.
+                let u = &n.params["update"];
+                if !self.loading || u["sessionUpdate"] == "session_info_update" {
+                    self.on_update(u).await;
                 }
             }
             Incoming::Notification(_) => {}
@@ -2253,8 +2337,10 @@ impl Actor {
                 }
             }
             // The agent names the session itself: its name wins over the host's.
+            // Unless it only repeats a message, as an agent with no title of
+            // its own may: then the title it writes when asked is better.
             "session_info_update" => {
-                if let Some(t) = u["title"].as_str().and_then(title::from_agent) {
+                if let Some(t) = u["title"].as_str().and_then(|t| self.agent_title(t)) {
                     self.set_auto_title(&t, TitleSource::Agent);
                 }
             }

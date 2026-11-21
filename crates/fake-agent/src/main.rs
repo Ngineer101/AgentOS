@@ -1,8 +1,8 @@
 //! A scripted ACP agent (protocol version 1) over stdio.
 //!
 //! It behaves like a real agent from the host's point of view: it answers
-//! `initialize`, `session/new`, `session/load`, `session/prompt` and
-//! `session/cancel`, streams `session/update` notifications, and asks for
+//! `initialize`, `session/new`, `session/load`, `session/list`,
+//! `session/prompt` and `session/cancel`, streams `session/update` notifications, and asks for
 //! permission before running tools. What it does is decided by the prompt:
 //!
 //! | Prompt                 | Behaviour                                              |
@@ -16,6 +16,7 @@
 //! | `hang <secs>`          | Waits, ignoring `session/cancel`                       |
 //! | `crash`                | Exits the process mid-turn                             |
 //! | `retitle <title>`      | Names the session (`session_info_update`)              |
+//! | `echo-title …`         | Sends the whole prompt as the session's title, as an agent with no title of its own may |
 //! | `Name this conversation.…` | The host asking for a title: replies `Title: About <the request's first words>` |
 //! | anything else          | Thinks, then replies `echo: <prompt>` in chunks        |
 //!
@@ -23,7 +24,9 @@
 //! `fake-smart`, in a group) and `thought_level` (`low`, `medium`, `high`),
 //! changed with `session/set_config_option`, plus a `mode` select. A
 //! `session/fork` copies a session; a fork answers every prompt with a
-//! `peek` tool call and then `side answer: <prompt>`.
+//! `peek` tool call and then `side answer: <prompt>`. `session/list` lists
+//! every session it has a history of, titled with its last `retitle`, else
+//! (like Claude's adapter) its first message.
 //!
 //! Environment: `FAKE_AGENT_HOME` (state, default `$HOME/.fake-agent`),
 //! `FAKE_AGENT_LOGGED_OUT=1` (fail `session/new` with auth required),
@@ -223,9 +226,9 @@ async fn handle_request(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1);
             let session_caps = if std::env::var("FAKE_AGENT_NO_FORK").as_deref() == Ok("1") {
-                json!({})
+                json!({"list": {}})
             } else {
-                json!({"fork": {}})
+                json!({"fork": {}, "list": {}})
             };
             Ok(json!({
                 "protocolVersion": version,
@@ -278,6 +281,19 @@ async fn handle_request(
                 agent.append_history(&session_id, "system", "created");
                 Ok(json!({"sessionId": session_id, "configOptions": options}))
             }
+        }
+        "session/list" => {
+            let mut sessions = vec![];
+            for e in std::fs::read_dir(agent.home.join("sessions")).into_iter().flatten().flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let Some(sid) = name.strip_suffix(".json") else { continue };
+                let h = agent.load_history(sid);
+                let text = |role: &str| h.iter().filter(|i| i["role"] == role).map(|i| i["text"].clone()).collect::<Vec<_>>();
+                if let Some(title) = text("title").pop().or_else(|| text("user").into_iter().next()) {
+                    sessions.push(json!({"sessionId": sid, "cwd": params["cwd"], "title": title}));
+                }
+            }
+            Ok(json!({"sessions": sessions}))
         }
         "session/fork" => {
             if std::env::var("FAKE_AGENT_NO_FORK").as_deref() == Ok("1") {
@@ -656,10 +672,17 @@ async fn run_prompt(
             say(agent, sid, "started it").await;
         }
         "retitle" => {
+            agent.append_history(sid, "title", rest);
             agent
                 .update(sid, json!({"sessionUpdate": "session_info_update", "title": rest}))
                 .await;
             say(agent, sid, "retitled").await;
+        }
+        "echo-title" => {
+            agent
+                .update(sid, json!({"sessionUpdate": "session_info_update", "title": text}))
+                .await;
+            say(agent, sid, "echoed").await;
         }
         "crash" => {
             say(agent, sid, "about to crash").await;

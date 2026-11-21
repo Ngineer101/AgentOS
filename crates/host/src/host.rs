@@ -79,6 +79,14 @@ impl Host {
         cfg.prepare()?;
         let store = Arc::new(Store::open(&cfg.db_path())?);
         let host_id = store.ensure_host(os_name(), env!("CARGO_PKG_VERSION"))?;
+        // An agent's "title" that only repeats a message is not one: those
+        // sessions are named from their first message again until a better
+        // title is found (when they're next resumed).
+        match store.demote_echoed_titles() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("{n} sessions had only a message for a title"),
+            Err(e) => tracing::warn!("could not check the titles of older sessions: {e:#}"),
+        }
         // Sessions from before the host titled them are named from their first message.
         match store.backfill_prompt_titles() {
             Ok(0) => {}

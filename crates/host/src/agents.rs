@@ -62,6 +62,21 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
+    /// `_meta` for the hidden conversation a session's title is asked for in:
+    /// the session's own, and for Claude, not saved to its history (where it
+    /// would show among your sessions) and with no tools, which writing a
+    /// title doesn't need.
+    pub fn title_session_meta(&self) -> Option<serde_json::Value> {
+        let mut meta = self.session_meta.clone()?;
+        if self.kind == AgentKind::Claude {
+            if let Some(o) = meta.pointer_mut("/claudeCode/options").and_then(|o| o.as_object_mut()) {
+                o.insert("persistSession".into(), false.into());
+                o.insert("tools".into(), serde_json::json!([]));
+            }
+        }
+        Some(meta)
+    }
+
     /// Codex's config folder: the profile's, else `~/.codex`.
     pub fn codex_home(&self, cfg: &HostConfig) -> PathBuf {
         match &self.profile {

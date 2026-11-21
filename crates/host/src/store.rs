@@ -737,6 +737,49 @@ impl Store {
             .and_then(|v| v["text"].as_str().map(str::to_string)))
     }
 
+    /// The text of every message of a session, oldest first.
+    pub fn prompt_texts(&self, id: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT payload FROM events WHERE session_id = ?1 AND type = 'prompt' ORDER BY seq")?;
+        let rows = st.query_map(params![id], |r| r.get::<_, String>(0))?;
+        let mut texts = vec![];
+        for p in rows {
+            if let Some(t) = serde_json::from_str::<Value>(&p?).ok().and_then(|v| v["text"].as_str().map(str::to_string)) {
+                texts.push(t);
+            }
+        }
+        Ok(texts)
+    }
+
+    /// Put back the first message's title on every session whose title from
+    /// the agent only repeats one of its messages (see
+    /// [`crate::title::echoes`]), so that a better one is looked for. Hosts
+    /// before this took them for the agent's own.
+    pub fn demote_echoed_titles(&self) -> Result<usize> {
+        let rows: Vec<(String, String)> = {
+            let db = self.db();
+            let mut st = db.prepare("SELECT session_id, auto_title FROM sessions WHERE auto_title_source = ?1")?;
+            let rows = st
+                .query_map(params![TitleSource::Agent.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        let mut n = 0;
+        for (id, t) in rows {
+            let prompts = self.prompt_texts(&id)?;
+            if !crate::title::echoes(&t, prompts.iter().map(String::as_str)) {
+                continue;
+            }
+            let first = prompts.first().and_then(|p| crate::title::from_prompt(p));
+            self.db().execute(
+                "UPDATE sessions SET auto_title = ?2, auto_title_source = ?3 WHERE session_id = ?1",
+                params![id, first, first.as_ref().map(|_| TitleSource::Prompt.as_str())],
+            )?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
     /// Title, from its first message, every session that has neither the
     /// user's title nor the host's (those from before the host titled them).
     pub fn backfill_prompt_titles(&self) -> Result<usize> {

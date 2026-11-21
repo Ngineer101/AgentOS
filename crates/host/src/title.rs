@@ -3,13 +3,20 @@
 //! A session the user hasn't named is named by the host, so every client
 //! shows the same name. In order of preference:
 //!
-//! 1. the title the agent gives the session itself (ACP `session_info_update`);
+//! 1. the title the agent gives the session itself (ACP `session_info_update`,
+//!    or `session/list` for a session it titled before the host asked);
 //! 2. a title the agent writes when asked, in a hidden conversation of its
 //!    own, from the session's first message;
 //! 3. until one of those arrives, the first message itself, shortened.
 //!
+//! An agent "title" that only repeats one of the session's messages is not
+//! the agent's own: an agent with no title sends what it has instead (Claude's
+//! adapter sends the first or latest message), and it would otherwise rank
+//! over the title the agent writes when asked. See [`echoes`].
+//!
 //! A title the user gives a session (`session.rename`) always wins over them.
 
+use crate::session::ATTACHED_FILES;
 use agenthost_proto::SessionConfigOption;
 
 /// Where an automatic title came from. A title only replaces one of the same
@@ -81,11 +88,38 @@ pub fn from_prompt(text: &str) -> Option<String> {
 pub fn ask(request: &str) -> String {
     let request: String = request.chars().take(MAX_REQUEST).collect();
     format!(
-        "{ASK_PREFIX} Reply with only a short title for it: 2 to 6 words, in sentence case, \
-         in the language of the request, with no quotes and no full stop. Do not use any \
-         tools and do not do the task.\n\n<request>\n{}\n</request>",
+        "{ASK_PREFIX} Reply with only its title: 2 to 6 words that say what the work is \
+         (the task, the goal or the question), not how the request begins. In sentence \
+         case, in the language of the request, with no quotes and no full stop. For \
+         example: Fix flaky resume test, Add dark mode to settings, Why cargo test \
+         hangs. Do not use any tools and do not do the task.\n\n<request>\n{}\n</request>",
         request.trim()
     )
+}
+
+/// Whether an agent's `title` only repeats one of the session's messages
+/// (`prompts`): the whole message, or its start cut short, with or without
+/// the list of attached files the host sends along with it. Case, spacing
+/// and a trailing "…" don't count.
+pub fn echoes<'a>(title: &str, prompts: impl IntoIterator<Item = &'a str>) -> bool {
+    let loose = |s: &str| collapse_spaces(s).to_lowercase();
+    let (title, sent_with) = match title.find(ATTACHED_FILES) {
+        Some(i) => (&title[..i], true),
+        None => (title, false),
+    };
+    let t = loose(title.trim_end_matches(|c: char| c == '…' || c == '.' || c.is_whitespace()));
+    if t.is_empty() {
+        return sent_with; // only the list of files
+    }
+    let attached = loose(ATTACHED_FILES);
+    prompts.into_iter().any(|p| {
+        let p = loose(p);
+        !p.is_empty()
+            && (p.starts_with(&t)
+                // The list of files, cut short.
+                || t.strip_prefix(&p).is_some_and(|rest| rest.starts_with(' ') && attached.starts_with(rest.trim()))
+                || from_prompt(&p).is_some_and(|f| loose(&f) == t))
+    })
 }
 
 /// The title in the agent's answer to [`ask`], or `None` if it didn't give one.
@@ -218,6 +252,30 @@ mod tests {
         assert_eq!(from_answer("   "), None);
         assert_eq!(from_answer("\"\""), None);
         assert_eq!(from_answer(&"word ".repeat(40)), None, "an essay, not a title");
+    }
+
+    #[test]
+    fn a_title_that_repeats_a_message_is_an_echo() {
+        let first = "If a pr was created in a session, is it possible to show the pr id (e.g. #14) in the list?";
+        let prompts = [first, "now the docs"];
+        // Claude's adapter, with no title of its own: the message, cut at 256 characters with "…".
+        assert!(echoes(first, prompts));
+        assert!(echoes("If a pr was created in a session, is it possible to…", prompts));
+        assert!(echoes("if a PR was created   in a session", prompts));
+        assert!(echoes("Now the docs", prompts), "the latest message, too");
+        assert!(echoes("If a pr was created in a session, is it possible to show the pr id (e.g", prompts));
+        assert!(echoes("If a pr was created in a session, is it possible to show the pr id", prompts), "the host's own");
+        // With the files the host sent along, whole or cut short.
+        let sent = format!("{first}\n\n{ATTACHED_FILES}\n- /a.png (image/png, 3 KB)");
+        assert!(echoes(&sent, prompts));
+        assert!(echoes(&format!("{first} Attached files (read th…"), prompts));
+        assert!(echoes(&format!("{ATTACHED_FILES} - /a.png"), [""]), "only files");
+        // A title of the agent's own.
+        assert!(!echoes("Showing PR ID in sessions list", prompts));
+        assert!(!echoes("Hiking trip planning", ["hi"]));
+        assert!(!echoes("Dark mode settings", ["dark mode"]));
+        assert!(!echoes("", prompts));
+        assert!(!echoes("Anything", [""]));
     }
 
     #[test]
