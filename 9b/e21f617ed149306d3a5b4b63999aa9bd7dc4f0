@@ -1,0 +1,20 @@
+ios/AgentHost/App/AppModel.swift
+  h_e31f15a7c97762 134-136,564-565,861-870
+ios/AgentHost/Views/SessionView.swift
+  h_e31f15a7c97762 14-24,39-40
+ios/AgentHost/Views/SessionsView.swift
+  h_e31f15a7c97762 14-18,124,137-138,140,142,261,277,306,320-402,408-409,411
+ios/README.md
+  h_e31f15a7c97762 124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9be21f617ed149306d3a5b4b63999aa9bd7dc4f0",
+  "prompts": {},
+  "humans": {
+    "h_e31f15a7c97762": {
+      "author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
