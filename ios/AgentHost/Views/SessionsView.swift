@@ -11,10 +11,11 @@ enum Route: Hashable {
     case automation(String)
 }
 
-/// Sessions grouped by workspace (Quick tasks first) under a large title with
-/// the host's name; Search and Compose in glass at the bottom, Settings at
-/// the top right. Each workspace's name is the first row of its card; tapping
-/// it collapses the workspace into that row, or expands it again.
+/// Sessions grouped by workspace (Quick tasks first). The host's name and
+/// status sit at the top left of the navigation bar, level with Screen and
+/// Settings at the top right; Search and New in glass at the bottom. Each
+/// workspace's name is the first row of its card; tapping it collapses the
+/// workspace into that row, or expands it again.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
@@ -54,14 +55,6 @@ struct SessionsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                Section {
-                    HostStatusLine()
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-                        .frame(height: 20)
-                }
-                .listSectionSpacing(14)
-
                 if model.showsConnectionStatus {
                     Section {
                         ConnectionStatusRow()
@@ -128,7 +121,7 @@ struct SessionsView: View {
                     ContentUnavailableView {
                         Label("No Sessions", systemImage: "rectangle.stack")
                     } description: {
-                        Text("Start one with the compose button.")
+                        Text("Start one with the + button.")
                     }
                 } else if groups.isEmpty {
                     ContentUnavailableView.search(text: search)
@@ -141,8 +134,12 @@ struct SessionsView: View {
                     model.retryNow()
                 }
             }
+            // The title stays for the back button in pushed screens; the
+            // bar shows HostTitleItem instead.
             .navigationTitle(model.hostName)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                HostTitleItem()
                 if model.screenStatus?.policy.enabled == true {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -261,7 +258,7 @@ struct SessionsView: View {
     #endif
 }
 
-/// Search and Compose at the bottom: the system search field in the bottom
+/// Search and New at the bottom: the system search field in the bottom
 /// glass toolbar on iOS 26; a material capsule and a tinted circle before.
 private struct SessionsBottomBar: ViewModifier {
     @Binding var search: String
@@ -277,7 +274,7 @@ private struct SessionsBottomBar: ViewModifier {
                     ToolbarSpacer(.fixed, placement: .bottomBar)
                     ToolbarItem(placement: .bottomBar) {
                         Button(action: compose) {
-                            Image(systemName: "square.and.pencil")
+                            NewSessionIcon()
                         }
                         .buttonStyle(.glassProminent)
                         .disabled(!canCompose)
@@ -306,7 +303,7 @@ private struct SessionsBottomBar: ViewModifier {
                         .frame(height: 48)
                         .glassSurface(Capsule())
                         Button(action: compose) {
-                            Image(systemName: "square.and.pencil")
+                            NewSessionIcon()
                                 .foregroundStyle(.white)
                         }
                         .buttonStyle(GlassCircleButtonStyle(size: 48, tint: .accentColor))
@@ -320,16 +317,98 @@ private struct SessionsBottomBar: ViewModifier {
     }
 }
 
-/// "● Connected · 4 sessions" under the large title.
+/// The New session button's glyph: a bold plus, large enough to fill the
+/// button.
+private struct NewSessionIcon: View {
+    var body: some View {
+        Image(systemName: "plus")
+            .font(.title2.weight(.semibold))
+            .imageScale(.large)
+    }
+}
+
+/// The host's name over "● Connected · 4 sessions", at the top left of the
+/// sessions list's navigation bar, without the glass capsule iOS 26 would
+/// put behind it. The inline title is hidden by an empty principal item.
+struct HostTitleItem: ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(iOS 26, *) {
+            title.sharedBackgroundVisibility(.hidden)
+            blank.sharedBackgroundVisibility(.hidden)
+        } else {
+            title
+            blank
+        }
+    }
+
+    private var title: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            HostTitle()
+        }
+    }
+
+    private var blank: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct HostTitle: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        // The bar sizes a leading item by its compressed width, which for
+        // one-line text is a letter and "…"; IdealWidth asks for the full
+        // width instead, capped so a long name can't reach the buttons.
+        IdealWidth(max: 220) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.hostName)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HostStatusLine()
+            }
+        }
+        .padding(.leading, 4)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Sizes its content at its ideal width, up to `max`, whatever width it is
+/// offered (truncating beyond `max`). Like `fixedSize()`, but capped.
+private struct IdealWidth: Layout {
+    let max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let width = min(content.sizeThatFits(.unspecified).width, max)
+        return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
+}
+
+/// "● Connected · 4 sessions" under the host's name.
 struct HostStatusLine: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let line = Line(model: model)
-        HStack(spacing: 6) {
-            Circle().fill(line.color).frame(width: 8, height: 8)
+        HStack(spacing: 5) {
+            Circle().fill(line.color).frame(width: 7, height: 7)
             Text(line.text)
-                .font(.subheadline)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
