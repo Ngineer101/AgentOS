@@ -335,17 +335,42 @@ private struct HostTitle: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(model.hostName)
-                .font(.title2.weight(.bold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            HostStatusLine()
+        // The bar sizes a leading item by its compressed width, which for
+        // one-line text is a letter and "…"; IdealWidth asks for the full
+        // width instead, capped so a long name can't reach the buttons.
+        IdealWidth(max: 220) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.hostName)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HostStatusLine()
+            }
         }
         .padding(.leading, 4)
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Sizes its content at its ideal width, up to `max`, whatever width it is
+/// offered (truncating beyond `max`). Like `fixedSize()`, but capped.
+private struct IdealWidth: Layout {
+    let max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let width = min(content.sizeThatFits(.unspecified).width, max)
+        return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
     }
 }
 
