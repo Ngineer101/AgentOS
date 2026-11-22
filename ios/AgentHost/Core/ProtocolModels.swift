@@ -136,7 +136,8 @@ func agentDisplayName(_ agent: String) -> String {
     case "claude": return "Claude Code"
     case "opencode": return "OpenCode"
     case "cursor": return "Cursor"
-    case "gemini": return "Gemini CLI"
+    case "antigravity": return "Antigravity CLI"
+    case "gemini": return "Gemini CLI" // hosts before Antigravity replaced it
     case "fake": return "Fake agent"
     default: return agent
     }
