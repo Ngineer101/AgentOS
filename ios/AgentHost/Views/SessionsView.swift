@@ -115,7 +115,7 @@ struct SessionsView: View {
             .animation(.bouncy, value: collapsedIds)
             .sensoryFeedback(.selection, trigger: collapsedIds)
             .environment(\.defaultMinListRowHeight, 20)
-            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.top, 14, for: .scrollContent)
             .overlay {
                 if model.sessions.isEmpty {
                     ContentUnavailableView {
