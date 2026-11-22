@@ -13,7 +13,9 @@ enum Route: Hashable {
 
 /// Sessions grouped by workspace (Quick tasks first). The host's name and
 /// status sit at the top left of the navigation bar, level with Screen and
-/// Settings at the top right; Search and New in glass at the bottom.
+/// Settings at the top right; Search and New in glass at the bottom. Each
+/// workspace's name is the first row of its card; tapping it collapses the
+/// workspace into that row, or expands it again.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
@@ -24,6 +26,18 @@ struct SessionsView: View {
     @State private var search = ""
     /// Asking before archiving a live session.
     @State private var archiving: SessionInfo?
+    /// Workspaces collapsed on this phone: their ids, one per line.
+    @AppStorage("collapsedWorkspaces") private var collapsedIds = ""
+
+    private var collapsed: Set<String> {
+        Set(collapsedIds.split(separator: "\n").map(String.init))
+    }
+
+    private func toggleCollapsed(_ workspaceId: String) {
+        var ids = collapsed
+        if ids.remove(workspaceId) == nil { ids.insert(workspaceId) }
+        collapsedIds = ids.sorted().joined(separator: "\n")
+    }
 
     private var groups: [SessionGroup] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -61,34 +75,45 @@ struct SessionsView: View {
                 }
 
                 ForEach(groups) { group in
+                    // Searching shows every match, collapsed or not.
+                    let isCollapsed = search.isEmpty && collapsed.contains(group.workspaceId)
                     Section {
-                        ForEach(group.sessions) { s in
-                            NavigationLink(value: Route.session(s.sessionId)) {
-                                SessionRow(session: s)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                        WorkspaceRow(
+                            title: model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName,
+                            sessions: group.sessions,
+                            collapsed: isCollapsed,
+                            toggle: search.isEmpty ? { toggleCollapsed(group.workspaceId) } : nil
+                        )
+                        .listRowSeparator(.hidden)
+                        if !isCollapsed {
+                            ForEach(group.sessions) { s in
+                                NavigationLink(value: Route.session(s.sessionId)) {
+                                    SessionRow(session: s)
                                 }
-                                .tint(.indigo)
-                            }
-                            .contextMenu {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.indigo)
+                                }
+                                .contextMenu {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
                                 }
                             }
                         }
-                    } header: {
-                        GroupHeader(model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName)
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .animation(.default, value: model.showsConnectionStatus)
+            .animation(.bouncy, value: collapsedIds)
+            .sensoryFeedback(.selection, trigger: collapsedIds)
             .environment(\.defaultMinListRowHeight, 20)
             .contentMargins(.top, 0, for: .scrollContent)
             .overlay {
@@ -428,6 +453,97 @@ struct GroupHeader: View {
             .font(.footnote)
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// A workspace's name as the first row of its card. Expanded: small
+/// capitals above the sessions, a chevron pointing down. Collapsed: the
+/// sessions fold away and the name grows into a headline with a jump, over
+/// the session count and the most urgent status; the chevron turns to point
+/// right like the session rows. `toggle` is nil while searching: then there
+/// is no chevron and nothing to tap.
+struct WorkspaceRow: View {
+    let title: String
+    let sessions: [SessionInfo]
+    let collapsed: Bool
+    var toggle: (() -> Void)?
+
+    /// How far the name rises and how much it grows mid-jump.
+    private struct Jump {
+        var lift = 0.0
+        var scale = 1.0
+    }
+
+    var body: some View {
+        if let toggle {
+            Button(action: toggle) { content }
+                .buttonStyle(.plain)
+                .accessibilityValue(collapsed ? "Collapsed, \(summary)" : "Expanded")
+                .accessibilityHint(collapsed ? "Shows this project's sessions" : "Hides this project's sessions")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(collapsed ? .headline : .footnote)
+                    .textCase(collapsed ? nil : .uppercase)
+                    .foregroundStyle(collapsed ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .keyframeAnimator(initialValue: Jump(), trigger: collapsed) { name, jump in
+                        name
+                            .scaleEffect(jump.scale, anchor: .leading)
+                            .offset(y: -jump.lift)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.lift) {
+                            SpringKeyframe(6, duration: 0.14, spring: .snappy)
+                            SpringKeyframe(0, duration: 0.5, spring: .bouncy(extraBounce: 0.15))
+                        }
+                        KeyframeTrack(\.scale) {
+                            SpringKeyframe(1.06, duration: 0.14, spring: .snappy)
+                            SpringKeyframe(1, duration: 0.5, spring: .bouncy(extraBounce: 0.15))
+                        }
+                    }
+                if collapsed {
+                    HStack(spacing: 5) {
+                        SessionStatusMark(status: urgent)
+                        Text(summary)
+                            .font(.footnote)
+                            .foregroundStyle(urgent == .needsYou || urgent == .failed ? urgent.color : .secondary)
+                            .lineLimit(1)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if toggle != nil {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+            }
+        }
+        .padding(.vertical, collapsed ? 2 : -4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// The status that most needs attention among the workspace's sessions.
+    private var urgent: SessionStatus {
+        let all = sessions.map { SessionStatus(state: $0.state) }
+        let order: [SessionStatus] = [.needsYou, .failed, .working, .yourTurn]
+        return order.first { all.contains($0) } ?? .ended
+    }
+
+    /// "3 sessions · Needs approval"
+    private var summary: String {
+        let n = sessions.count
+        return "\(n) \(n == 1 ? "session" : "sessions") · \(urgent.label)"
     }
 }
 
