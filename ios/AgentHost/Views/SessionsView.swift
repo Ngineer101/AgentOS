@@ -13,7 +13,7 @@ enum Route: Hashable {
 
 /// Sessions grouped by workspace (Quick tasks first) under a large title with
 /// the host's name; Search and Compose in glass at the bottom, Settings at
-/// the top right.
+/// the top right. Tapping a workspace's header collapses or expands it.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
@@ -24,6 +24,18 @@ struct SessionsView: View {
     @State private var search = ""
     /// Asking before archiving a live session.
     @State private var archiving: SessionInfo?
+    /// Workspaces collapsed on this phone: their ids, one per line.
+    @AppStorage("collapsedWorkspaces") private var collapsedIds = ""
+
+    private var collapsed: Set<String> {
+        Set(collapsedIds.split(separator: "\n").map(String.init))
+    }
+
+    private func toggleCollapsed(_ workspaceId: String) {
+        var ids = collapsed
+        if ids.remove(workspaceId) == nil { ids.insert(workspaceId) }
+        collapsedIds = ids.sorted().joined(separator: "\n")
+    }
 
     private var groups: [SessionGroup] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -69,34 +81,46 @@ struct SessionsView: View {
                 }
 
                 ForEach(groups) { group in
+                    // Searching shows every match, collapsed or not.
+                    let isCollapsed = search.isEmpty && collapsed.contains(group.workspaceId)
                     Section {
-                        ForEach(group.sessions) { s in
-                            NavigationLink(value: Route.session(s.sessionId)) {
-                                SessionRow(session: s)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                        if !isCollapsed {
+                            ForEach(group.sessions) { s in
+                                NavigationLink(value: Route.session(s.sessionId)) {
+                                    SessionRow(session: s)
                                 }
-                                .tint(.indigo)
-                            }
-                            .contextMenu {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.indigo)
+                                }
+                                .contextMenu {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
                                 }
                             }
                         }
                     } header: {
-                        GroupHeader(model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName)
+                        let title = model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName
+                        if search.isEmpty {
+                            CollapsibleGroupHeader(title: title, count: group.sessions.count, collapsed: isCollapsed) {
+                                toggleCollapsed(group.workspaceId)
+                            }
+                        } else {
+                            GroupHeader(title)
+                        }
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .animation(.default, value: model.showsConnectionStatus)
+            .animation(.default, value: collapsedIds)
             .environment(\.defaultMinListRowHeight, 20)
             .contentMargins(.top, 0, for: .scrollContent)
             .overlay {
@@ -350,6 +374,41 @@ struct GroupHeader: View {
             .font(.footnote)
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// A workspace's header in the sessions list: a chevron at the trailing edge
+/// (down while expanded, right with the session count while collapsed), and
+/// tapping anywhere on it collapses or expands the workspace.
+struct CollapsibleGroupHeader: View {
+    let title: String
+    let count: Int
+    let collapsed: Bool
+    var toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .textCase(.uppercase)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if collapsed {
+                    Text("\(count)")
+                        .monospacedDigit()
+                }
+                Image(systemName: "chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(collapsed ? "Collapsed, \(count) \(count == 1 ? "session" : "sessions")" : "Expanded")
+        .accessibilityHint(collapsed ? "Shows this project's sessions" : "Hides this project's sessions")
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
