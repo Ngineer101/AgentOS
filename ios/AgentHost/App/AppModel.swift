@@ -131,6 +131,9 @@ final class AppModel: ObservableObject {
     /// Unsent text in each session's composer, kept while you look at
     /// another session. Not published: only the session's own view reads it.
     var drafts: [String: String] = [:]
+    /// Each session's composer attachments (pasted screenshots, photos,
+    /// files) for the same reason; uploads still running carry on.
+    private var composers: [String: ComposerModel] = [:]
     /// Set when the cache was written last (shown when offline).
     @Published private(set) var cachedAt: Date?
     /// The host's protocol version from `hello` on the last connection.
@@ -558,6 +561,8 @@ final class AppModel: ObservableObject {
     private func clearContent() {
         saveTask?.cancel()
         drafts = [:]
+        for c in composers.values { c.clear() }
+        composers = [:]
         hostInfo = nil
         workspaces = []
         sessions = []
@@ -852,6 +857,16 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Sessions
+
+    /// The attachments being prepared in a session's composer, the same
+    /// object each time the session is shown (not published: reading it
+    /// from a view's body must not change anything the view watches).
+    func composer(for sessionId: String) -> ComposerModel {
+        if let c = composers[sessionId] { return c }
+        let c = ComposerModel()
+        composers[sessionId] = c
+        return c
+    }
 
     /// The user opened a session: subscribe (once per connection) from the
     /// last seq this device has.
