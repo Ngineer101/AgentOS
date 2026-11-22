@@ -1,0 +1,49 @@
+README.md
+  s_deffc9c8d12118::t_a23f7cb74f674e 5,42-51,69-70
+assets/agents/antigravity.svg
+  s_deffc9c8d12118::t_56209eb1d478c3 1
+crates/cli/src/main.rs
+  s_deffc9c8d12118::t_5938f4e02b22a8 57,133-134,136,886
+crates/host/src/agents.rs
+  s_deffc9c8d12118::t_064a770dba1029 84,88-113,540-552,555,557-560,563-567,569-570,572,574-579,582,584-586,639-640,673
+crates/host/src/sandbox.rs
+  s_deffc9c8d12118::t_a3d8c45b1e84c2 970,978-981,1007-1014,1022-1030,1032-1046
+crates/host/src/session.rs
+  s_deffc9c8d12118::t_80c99a2fb5b5c2 1022-1031,2594-2601,2625-2631
+crates/proto/src/types.rs
+  s_deffc9c8d12118::t_421dd27289edf6 18-21,32,41,52-54,67-69,86,1578-1588
+desktop/src/demo.rs
+  s_deffc9c8d12118::t_ab3c695ddaeb7a 220-221,223,227-228
+desktop/src/icons.rs
+  s_deffc9c8d12118::t_b3623ab7320e04 87,97,143
+desktop/src/look.rs
+  s_deffc9c8d12118::t_429e095016c384 503
+docs/status.md
+  s_deffc9c8d12118::t_06ee4110cd2000 36,60,169-174,176,216-226
+ios/AgentHost/App/DemoData.swift
+  s_deffc9c8d12118::t_e9883b8a023039 174
+ios/AgentHost/Assets.xcassets/AgentAntigravity.imageset/Contents.json
+  s_deffc9c8d12118::t_b6e411bcbcb95a 3
+ios/AgentHost/Assets.xcassets/AgentAntigravity.imageset/antigravity.svg
+  s_deffc9c8d12118::t_694a9d9bab5fcf 1
+ios/AgentHost/Core/ProtocolModels.swift
+  s_deffc9c8d12118::t_d632892b80b4c5 139-140
+ios/AgentHost/Views/Glass.swift
+  s_deffc9c8d12118::t_15276ebc92ad58 183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b9da1d9cb2a09f564c4dcde61087a3b952db130c",
+  "prompts": {},
+  "sessions": {
+    "s_deffc9c8d12118": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_deffc9c8d12118",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
