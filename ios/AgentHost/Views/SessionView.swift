@@ -11,6 +11,17 @@ struct SessionView: View {
     @EnvironmentObject private var model: AppModel
     let sessionId: String
 
+    var body: some View {
+        // The session's attachments outlive this screen, like its draft text,
+        // so a pasted screenshot is still there when you come back.
+        SessionScreen(sessionId: sessionId, composer: model.composer(for: sessionId))
+    }
+}
+
+private struct SessionScreen: View {
+    @EnvironmentObject private var model: AppModel
+    let sessionId: String
+
     @State private var draft = ""
     @State private var actionError: String?
     @State private var archiving: SessionInfo?
@@ -25,7 +36,8 @@ struct SessionView: View {
     @Environment(\.openURL) private var openURL
 
     // Attachments (protocol 2 hosts) and voice input (iOS dictation).
-    @StateObject private var composer = ComposerModel()
+    /// The session's attachments, kept by the model (`AppModel.composer(for:)`).
+    @ObservedObject var composer: ComposerModel
     @StateObject private var dictation = SpeechDictation()
     @State private var showPhotoPicker = false
     @State private var photoItems: [PhotosPickerItem] = []
