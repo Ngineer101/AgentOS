@@ -1,0 +1,35 @@
+.github/ISSUE_TEMPLATE/bug_report.yml
+  s_5e78c6639e8539::t_f57eeffe66f5a0 1-54
+.github/ISSUE_TEMPLATE/config.yml
+  s_5e78c6639e8539::t_cd6a525bf1b53f 1-5
+.github/ISSUE_TEMPLATE/feature_request.yml
+  s_5e78c6639e8539::t_244e024547a945 1-25
+.github/pull_request_template.md
+  s_5e78c6639e8539::t_e58ac7847cf09a 1-11
+CONTRIBUTING.md
+  s_5e78c6639e8539::t_a3435e634a5fe1 1-49
+README.md
+  s_5e78c6639e8539::t_1de43643e5b984 3-8,10-13,15,17-34,36-66,69-80,82-84,90-91,93,95-96,99,102,105-106,109-142,150,155-163,166-174
+SECURITY.md
+  s_5e78c6639e8539::t_ff95e7c3de4b9c 1-33
+docs/security.md
+  s_5e78c6639e8539::t_bef00a0879f9b9 1-68
+docs/usage.md
+  s_5e78c6639e8539::t_306198176be9ec 1-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54c7c85ca9b013db47c76670a458faf3bf2cf7ba",
+  "prompts": {},
+  "sessions": {
+    "s_5e78c6639e8539": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_5e78c6639e8539",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
