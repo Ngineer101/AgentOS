@@ -1,194 +1,145 @@
 # agenthost
 
-*(working name)* A self-hosted agent host. A daemon on your own Linux or macOS
-machine runs **Codex**, **Claude Code**, **OpenCode**, **Cursor** and
-**Gemini CLI** on your existing
-subscriptions, each session inside an OS sandbox, with approvals on auto
-because the sandbox is the boundary. A desktop app, a command-line client and
-an iOS app control it through one protocol; the phone reaches it through a
-relay that only ever carries ciphertext. All data stays on the host.
+A self-hosted agent host. A daemon on your own Linux or macOS machine runs
+**Claude Code**, **Codex**, **OpenCode**, **Cursor** and **Gemini CLI** on
+your existing subscriptions, each session inside an OS sandbox. You drive it
+from a desktop app, a command-line client or an iOS app; the phone reaches
+your machine through a relay you deploy yourself, which only ever carries
+ciphertext. Your code, transcripts and credentials stay on your machine.
 
-The host never implements its own agent loop: each CLI runs as shipped, driven
-over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP).
+> **Status:** early, and built for one person's own use. It's developed
+> mainly on Linux; macOS and the iOS app have had less testing.
+> [docs/status.md](docs/status.md) records what has been verified and how.
+> Expect rough edges.
 
-## Layout
+## How it works
+
+```
+ ┌───────────── your computer ─────────────┐
+ │                                         │
+ │  desktop app ─┐                         │
+ │               ├─ Unix socket ─┐         │        ┌──────────────────┐
+ │  agenthost ───┘  (CLI)        │         │        │  relay           │      ┌────────┐
+ │                               ▼         │  wss   │  (Cloudflare     │ wss  │ iPhone │
+ │                          agenthostd ────┼───────►│  Worker, yours)  │◄─────┤  app   │
+ │                               │         │        └──────────────────┘      └────────┘
+ │             ┌─────────────────┼──────┐  │         forwards end-to-end
+ │             ▼                 ▼      ▼  │         encrypted frames only
+ │         sandbox           sandbox  ...  │
+ │      claude-agent-acp     codex-acp     │
+ │             │                 │         │
+ │             └── egress proxy ─┘         │
+ │                 (allow-list)            │
+ └─────────────────────────────────────────┘
+```
+
+- **The host never runs its own agent loop.** Each CLI runs as shipped,
+  driven over the [Agent Client Protocol](https://agentclientprotocol.com)
+  (ACP) through its pinned adapter. Your existing logins and subscriptions
+  are used as they are.
+- **The sandbox is the boundary.** Each session runs in bubblewrap + seccomp
+  (Linux) or Seatbelt (macOS) via Anthropic's `sandbox-runtime`. It can write
+  only its workspace and its own state, can't read your secrets or other
+  agents' logins, and reaches the network only through a per-session proxy
+  that allows the agent's provider plus the hosts you allow. That's why
+  agent approvals can be left on auto.
+- **Anything that needs your credentials asks you first.** MCP connectors,
+  `git push`, opening pull requests, installing tools and other commands that
+  need your logins go through the host, which shows you exactly what will run
+  and waits for approval (on the desktop or your phone).
+- **The host listens on no network port.** Local clients use a Unix socket.
+  For remote access the host dials out to the relay; phones pair by QR code
+  and talk to the host over end-to-end Noise tunnels the relay can't read.
+- **Everything is logged on the host.** Sessions are an append-only event log
+  in SQLite, so clients can disconnect and catch up without gaps.
+
+More detail: [security model](docs/security.md),
+[relay protocol](docs/relay-protocol.md).
+
+## Setup
+
+### 1. The host (Linux or macOS)
+
+Prerequisites: [Rust](https://rustup.rs) 1.85+, Node 22+, and the agent CLIs
+you want to use, installed and logged in. On Linux also `bubblewrap`,
+`socat` and `ripgrep` (on Ubuntu 24.04, unprivileged user namespaces must be
+allowed for bubblewrap: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
+
+```sh
+git clone https://github.com/Ngineer101/relay.git agenthost && cd agenthost
+scripts/install.sh            # build and install the host, the CLI and the desktop app
+agenthost status              # sandbox health, agents, login state
+```
+
+`scripts/install.sh` puts `agenthostd` and `agenthost` in `~/.local/bin`,
+downloads the pinned ACP adapters and sandbox runtime (`agenthostd
+install-tools`), and starts the host at login (systemd user service on Linux,
+launch agent on macOS). Run it again after pulling to rebuild and restart; `--uninstall`
+removes it and keeps your data. To try things without installing, use
+`scripts/dev.sh` (builds and runs the host and desktop together; `--fresh`
+for a throwaway data folder).
+
+### 2. Your first session
+
+```sh
+agenthost workspace add ~/code/myproject --profile packages
+agenthost run ~/code/myproject claude "Summarise this repo"
+agenthost chat ~/code/myproject codex         # interactive
+```
+
+Or open the desktop app (`agenthost-desktop`, or AgentHost in your
+Applications on macOS) and press ⌘N / Ctrl+N.
+
+### 3. Remote access (optional)
+
+Deploy the relay to your own Cloudflare account (the Workers Free plan is
+enough):
+
+```sh
+cd relay && npm ci && npx wrangler login && npx wrangler deploy
+```
+
+Then point the host at it and pair a device:
+
+```sh
+scripts/install.sh --relay wss://agenthost-relay.<your-subdomain>.workers.dev
+agenthost device pair         # shows a QR code (or use Settings → Devices on the desktop)
+```
+
+See [relay/README.md](relay/README.md) for what the relay stores and logs. No
+Cloudflare account? `agenthostd dev-relay` runs one locally for testing.
+
+### 4. The iOS app (optional)
+
+There is no App Store build; you build it yourself on a Mac with Xcode,
+XcodeGen and rustup. See [ios/README.md](ios/README.md), including the
+optional push-notification setup (needs a paid Apple Developer account).
+
+## Documentation
+
+| | |
+| --- | --- |
+| [docs/usage.md](docs/usage.md) | Quick tasks, projects, several logins per agent, notifications, automations and webhooks |
+| [docs/security.md](docs/security.md) | The security model in full |
+| [docs/relay-protocol.md](docs/relay-protocol.md) | The relay wire protocol, pairing and tunnels |
+| [docs/status.md](docs/status.md) | What has been verified, how, and the known limits |
+| [desktop/README.md](desktop/README.md) | The desktop app |
+| [ios/README.md](ios/README.md) | Building and running the iOS app |
+| [relay/README.md](relay/README.md) | Deploying and testing the relay |
+
+## Repository layout
 
 | Path | What |
 | --- | --- |
 | `crates/proto` | Shared protocol: JSON-RPC types, method/capability table, and the Noise tunnel (pairing, handshakes, framing). One implementation for host, CLI and (via bindings) iOS |
 | `crates/host` | `agenthostd`: session manager, ACP client, sandbox launcher, egress proxy, MCP gateway, SQLite event log, relay connector, dev relay |
 | `crates/cli` | `agenthost`: the command-line client (everything the desktop can do), also usable as a paired remote device |
+| `crates/ffi` | UniFFI bindings to the protocol code for the iOS app |
 | `crates/fake-agent` | A scripted ACP agent for tests |
-| `desktop/` | The desktop app (Rune), its own Cargo workspace |
+| `desktop/` | The desktop app ([Rune](https://github.com/anomalyco/rune)), its own Cargo workspace |
+| `ios/` | The SwiftUI iOS app |
 | `relay/` | The relay: a Cloudflare Worker with one Durable Object per host |
-| `docs/` | [Relay protocol](docs/relay-protocol.md), [status against the v1 spec](docs/status.md) |
-
-## Quick start (Linux)
-
-```sh
-# Prerequisites: Rust, Node 22+, bubblewrap, socat, ripgrep
-cargo build --release
-./target/release/agenthostd install-tools     # pinned adapters, sandbox runtime, screen-relay
-./target/release/agenthostd run &             # listens only on a Unix socket
-
-agenthost status                              # sandbox health, agents, login state
-agenthost workspace add ~/code/myproject --profile packages
-agenthost run ~/code/myproject claude "Summarise this repo"
-agenthost chat ~/code/myproject codex         # interactive
-agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
-agenthost voice download                      # local speech model for voice input (once)
-```
-
-No project needed? Use the built-in **Quick tasks** workspace: each session
-gets a fresh, empty folder of its own, and open web lets the agent look things
-up on any public site (local and private addresses stay refused). Switch open
-web off on the desktop's Workspaces screen, or with
-`agenthost workspace set quick --profile agent-only`.
-
-```sh
-agenthost run quick claude "What changed in the latest Rust release?"
-```
-
-New projects from the phone: the phone can turn a folder inside your project
-folders (default `~/Code`) into a workspace, or create a new one there. Only
-the desktop chooses those folders (`agenthost project roots --set ~/Code,~/Work`);
-`agenthost project ls|use|new` does the same from the CLI.
-
-Several subscriptions of one agent (a work and a personal Claude account,
-say)? Give each its own config folder, as you would with `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME`, `GEMINI_CLI_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux
-only, `XDG_CONFIG_HOME`), and add it as a profile. New sessions then pick it,
-here as `agent:name`, on the desktop and the phone from the agent list:
-
-```sh
-agenthost agent add claude work --config-dir ~/.claude-work
-agenthost agent list                          # shows the login command if needed
-agenthost run ~/code/myproject claude:work "Summarise this repo"
-```
-
-A profile's folder is writable only to sessions that use it and hidden from
-every other session, like the other agents' logins.
-
-To install the host as a login service plus the CLI and desktop app (macOS or
-Linux), run `scripts/install.sh --relay wss://<your-relay>`; run it again after
-pulling or changing code to rebuild and restart everything. `--uninstall` removes
-it and keeps your data. For a throwaway test run instead, use `scripts/dev.sh`.
-
-Remote access: deploy `relay/` to your own Cloudflare account (see
-[relay/README.md](relay/README.md)), start the host with
-`--relay-url wss://<your-relay>`, then `agenthost device pair` shows a QR
-code. To try it without Cloudflare: `agenthostd dev-relay` and
-`--relay-url ws://127.0.0.1:8787`; `agenthost remote pair '<qr payload>' --state phone.json`
-pairs the CLI as a device, and `agenthost --remote phone.json …` runs any
-command through the relay.
-
-Notifications: the iPhone app can notify you when a session needs your
-approval (and, if you ask, when an agent finishes its turn or a session
-fails). Turn them on while pairing or in Settings → Notifications; there is
-nothing to set up on the host. Apple takes notifications for an app only
-with the APNs key of the team that signs it, so the relay of whoever
-publishes the app holds that key and passes notifications on to Apple
-([relay/README.md](relay/README.md#push-notifications-if-you-publish-the-ios-app)).
-If you build the app yourself under another team and run no such relay, the
-host sends to Apple itself with your team's key (`.p8`): the phone asks for
-it once per host, or run `agenthost push setup --key AuthKey_XXXXXXXXXX.p8 --team-id <TEAM ID>`.
-What a notification says is encrypted to the phone; Apple (and the relay)
-only see "A session needs you". `agenthost push status` and `agenthost push
-test` show and check it.
-
-## Automations
-
-An automation is a saved session that starts by itself: on a schedule
-(routine maintenance, upgrading dependencies), when a webhook arrives (a
-Sentry alert to investigate), or when you press Run Now. Each run is an
-ordinary session, so its transcript is the run's output; the run list shows
-when it ran, why, how it ended and the agent's last words. The newest run's
-session stays open for follow-up questions until the next run starts. Set
-them up on the desktop (Automations in the sidebar), on the phone (Settings →
-Automations; schedules and Run Now, not webhooks or pre-approved tools), or:
-
-```sh
-agenthost automation add "Upgrade dependencies" -w ~/code/myproject -a claude \
-  --cron "0 3 * * 1" --auto-approve create_pull_request,git_push \
-  --prompt "Upgrade dependencies, run the tests, open a pull request."
-agenthost automation ls                         # next run, last result
-agenthost automation run <id> --wait            # now, and print the summary
-agenthost automation runs <id>                  # history; each run names its session
-```
-
-Schedules are cron in this computer's time (at most every 5 minutes). The
-host only runs while the computer is awake: a time missed by up to 12 hours
-runs once when it's back, an older one is recorded as skipped. A run still
-going after its time limit (60 minutes by default) is stopped, and a
-scheduled run is skipped while the previous one is still going. An
-automation may let its runs open pull requests and push their own branch
-without asking (desktop only; a force-push still asks); anything else asks as
-usual, and your phone gets 12 hours to answer instead of 10 minutes.
-
-**Webhooks** (desktop only) come in through your relay: each webhook
-automation gets a URL `https://<your-relay>/v1/hook/<relay id>/<hook id>`.
-The relay seals each request to the host the moment it arrives, keeps it
-(sealed, for up to a day) until the host has it, and answers the sender at
-once; the host checks the sender's signature, filters and dedupes, then
-starts a run. This is the one place the relay sees plaintext: the request
-while it seals it, in memory, on your Cloudflare account (see
-[docs/relay-protocol.md](docs/relay-protocol.md#webhooks)). For Sentry:
-
-1. Connect the Sentry MCP connector (Settings → Connectors) and switch it on
-   for the workspace, so runs can read the issue.
-2. `agenthost automation add "Investigate Sentry alerts" -w ~/code/myproject -a claude --webhook sentry --secret <client secret>`
-   (or New Automation → Webhook → Sentry on the desktop) and copy its webhook URL.
-3. In Sentry: Settings → Developer Settings → Custom Integrations → New
-   Internal Integration. Paste the URL as the Webhook URL, turn on **Alert
-   Rule Action**, save, and copy its Client Secret into the automation.
-4. In the alert rules you want investigated, add the action "Send a
-   notification via" your integration.
-
-Issue alerts, new issues and metric alerts (not resolved ones) start a run;
-the same issue starts at most one run a day. Alert text is passed to the agent
-as untrusted data, never as instructions. GitHub webhooks (`--webhook github`,
-signed with the webhook's secret) and any other sender (`--webhook generic`,
-optionally with a bearer token) work the same way; the payload is attached to
-the run as `webhook.json` and fields can go in the prompt as
-`{{payload.some.field}}`.
-
-## Security model in one paragraph
-
-Every session runs in a sandbox (bubblewrap + seccomp on Linux, Seatbelt on
-macOS, via Anthropic's `sandbox-runtime` at a pinned version) that can write
-only its workspace, its temp folder, its agent's own state and a shared
-session tools folder (where agents install helpers for themselves with npm,
-pipx, uv, cargo or go, never into your home folder), cannot read
-secrets folders, other agents' credentials or the host's data, and has no
-network except the host's per-session egress proxy, which allows only the
-agent's provider hosts plus the workspace's profile, resolves names itself
-and refuses private addresses. Each agent gets a host-controlled
-configuration (no personal MCP servers, hooks or plugins). MCP connectors are
-reached only through the host's gateway, which holds the credentials and asks
-before write tools by default. Installing a tool on your computer goes only
-through the gateway's built-in `agenthost__install_tool`: you see the exact
-command and the agent's reason, and it runs as you, outside the sandbox, only
-after you approve (a registry package name and plain version only, no shell,
-one at a time, logged to the audit log). Pushing works the same way: the
-sandbox can't read your git credentials, so `agenthost__git_push` asks you
-to approve the exact `git push` and the host runs it with your credentials
-(fetching runs without asking), and `agenthost__create_pull_request` opens
-a pull request with your GitHub CLI after you approve its title and
-description. Any other command that needs your logins (`gh pr edit`, `gh
-issue create`, a deploy CLI) goes through `agenthost__run_command`: you see
-the exact argument list and its input, and the host runs it as you in the
-session's folder after you approve, never through a shell and never a
-program from a folder a session can write. "Always Allow" lets a prefix such
-as `gh pr edit` run without asking from then on (listed, and undone, under
-Settings → Connectors); shells, interpreters and build tools always ask.
-Nothing from the repository, such as its hooks, runs outside the sandbox.
-Push notifications go from the host to the relay that serves the phone's
-build of the app, which passes them to Apple's APNs (or, for builds without
-one, from the host straight to APNs); their content is sealed with a key each
-phone gives the host (ChaCha20-Poly1305) and opened on the phone, so Apple
-and the relay see only a generic alert. The phone's APNs token goes to that
-relay, never to the host. The host listens on no network port. See
-[docs/status.md](docs/status.md) for what is verified and the limits.
+| `scripts/` | Install and development scripts |
 
 ## Development
 
@@ -196,10 +147,28 @@ relay, never to the host. The host listens on no network port. See
 scripts/dev.sh                                           # build + run host and desktop together (--fresh, --fake)
 cargo test --workspace                                   # unit + integration tests
 AGENTHOST_TEST_TOOLS=<data-dir>/tools cargo test -p agenthost-host --test m3_escape   # sandbox escape suite
+cd desktop && cargo test                                 # desktop model and bridge
 cd relay && npm test                                     # relay tests
 AGENTHOST_ACP_TRACE=1 agenthostd run                     # log raw ACP traffic per session
 ```
 
+## Contributing
+
+This is a personal project, shared so you can run it and adapt it. The best
+way to make it your own is to **fork it and change your fork**. If you'd like
+to help this project, a **detailed issue** (what you did, what you expected,
+what happened, your platform and versions) is more useful than a pull
+request. See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security
+problems privately, as described in [SECURITY.md](SECURITY.md).
+
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option. Unless you explicitly state
+otherwise, any contribution intentionally submitted for inclusion in this
+work by you, as defined in the Apache-2.0 license, shall be dual licensed as
+above, without any additional terms or conditions.
+
+agenthost is an independent project, not affiliated with or endorsed by
+Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names
+belong to their owners.
