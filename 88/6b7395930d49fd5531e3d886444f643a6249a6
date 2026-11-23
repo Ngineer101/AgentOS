@@ -1,0 +1,29 @@
+docs/status.md
+  s_7f216dfb375fcb::t_3013f6a78c3e56 47
+ios/AgentHost/App/AppModel.swift
+  s_7f216dfb375fcb::t_902c18dc841b2f 126-130,351-352,1051-1053
+ios/AgentHost/Views/Composer.swift
+  s_7f216dfb375fcb::t_063270e0fbe9c5 337-344,358-359,376-378,384-385,420-427,433-440,442-471,473,481-482,499-566,572,603-607,610,680,715-857
+ios/AgentHost/Views/SessionView.swift
+  s_7f216dfb375fcb::t_4bd5413eeb8db4 465,611,664-667,695,697-704,708-719,946-959
+ios/AgentHost/Views/SessionsView.swift
+  s_7f216dfb375fcb::t_abfa1d7fdad1fc 116-117,122
+ios/README.md
+  s_7f216dfb375fcb::t_958f012ee84fb7 126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "886b7395930d49fd5531e3d886444f643a6249a6",
+  "prompts": {},
+  "sessions": {
+    "s_7f216dfb375fcb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7f216dfb375fcb",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
