@@ -1,0 +1,57 @@
+crates/host/src/api.rs
+  s_0f5016e00ab0f0::t_9202597d95ce56 380-383
+crates/host/src/push.rs
+  s_0f5016e00ab0f0::t_284584d6d406b1 991,1183
+crates/host/src/session.rs
+  s_0f5016e00ab0f0::t_eb536f548b615a 242,340-358
+crates/host/src/store.rs
+  s_0f5016e00ab0f0::t_d3507a348de9a9 284,287,289,327-328,649,669-670,687-694,1637,1682-1693
+crates/host/tests/archive_and_defaults.rs
+  s_0f5016e00ab0f0::t_ad0de3e23c0130 156-189
+crates/proto/src/lib.rs
+  s_0f5016e00ab0f0::t_8c0b8aa4da3cc8 29-30
+crates/proto/src/methods.rs
+  s_0f5016e00ab0f0::t_a7f01b085c6019 30-31,212,289
+crates/proto/src/types.rs
+  s_0f5016e00ab0f0::t_81daa20d2b7184 422-425,494-500
+desktop/README.md
+  s_0f5016e00ab0f0::t_b2485593c900fd 11-21,65-66
+desktop/src/commands.rs
+  s_0f5016e00ab0f0::t_d96dfd49e5d9ae 257
+desktop/src/demo.rs
+  s_0f5016e00ab0f0::t_03a7ed85c3ea3a 91,352,621,682-716,718-737
+desktop/src/icons.rs
+  s_0f5016e00ab0f0::t_9fbb5e35ff99fc 77-84
+desktop/src/look.rs
+  s_0f5016e00ab0f0::t_a7f28598bf4a53 61-62,117,123-124,142,165,189
+desktop/src/main.rs
+  s_0f5016e00ab0f0::t_df4de227a22f7a 12,31-32,94-99,116
+desktop/src/model.rs
+  s_0f5016e00ab0f0::t_13810e861d792d 654-666,669-671,777-782,907-912,952-974,976,984,995-1030,1032-1036,1039-1073
+desktop/src/prefs.rs
+  s_0f5016e00ab0f0::t_e97f2a1be82e22 1-57
+desktop/src/settings.rs
+  s_0f5016e00ab0f0::t_32f0344650618f 697,703-706
+desktop/src/tests.rs
+  s_0f5016e00ab0f0::t_eb9b401fb71eca 1023-1049,1789-1913
+desktop/src/view.rs
+  s_0f5016e00ab0f0::t_3ad4a9d1621458 88-89,93,97-101,229-241,243,245-247,251-253,255-257,259,261,263-269,271-285,287-293,296,343,350-404,407,409-410,415,417-563,565-579,583-595,602-604,606-613,615,617-629,633,636-637,641,645-646,656-660,663-715,717,847-854,925-929,934,937,1157,1159-1164,1168,1178-1179
+docs/status.md
+  s_0f5016e00ab0f0::t_3d82f48766e851 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e44538605262f107c5424b4f438d9882dea8c9d9",
+  "prompts": {},
+  "sessions": {
+    "s_0f5016e00ab0f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_0f5016e00ab0f0",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
