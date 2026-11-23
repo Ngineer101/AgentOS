@@ -694,13 +694,16 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
 // Workspaces
 // ---------------------------------------------------------------------------
 
-fn pick_workspace_folder(tx: &mut Tx) {
+pub(crate) fn pick_workspace_folder(tx: &mut Tx) {
     let options = rune::FileDialogOptions { title: "Add a folder agents may work in".into(), ..Default::default() };
     tx.open_folder(options, |s: &mut App, result, _| match result {
         Ok(Some(p)) => s.add_workspace_path(&p.display().to_string(), false),
         Ok(None) => {}
         Err(_) => {
-            // No picker here (no portal, headless): type the path instead.
+            // No picker here (no portal, headless): type the path in Settings › Workspaces.
+            if s.settings != Some(Tab::Workspaces) {
+                s.open_settings(Tab::Workspaces);
+            }
             s.adding_workspace = true;
             s.ws_path.focused = true;
         }

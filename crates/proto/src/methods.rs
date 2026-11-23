@@ -27,6 +27,8 @@ pub const SESSION_ARCHIVE: &str = "session.archive";
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
 /// Give a session a title of its own (or clear it, back to the host's).
 pub const SESSION_RENAME: &str = "session.rename";
+/// Pin or unpin a session (protocol 8): `SessionPinParams`, returns the session.
+pub const SESSION_PIN: &str = "session.pin";
 /// Change one of the agent's session settings (model, effort, …).
 pub const SESSION_SET_CONFIG: &str = "session.set_config";
 /// Ask a side question (`/btw`) in a fork of the conversation.
@@ -207,7 +209,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | SCREEN_STATUS | PUSH_STATUS | AUTOMATION_LIST | AUTOMATION_GET | AUTOMATION_RUNS
         | AUTOMATION_CHECK_SCHEDULE => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
-        | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
+        | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_PIN | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | ATTACHMENT_READ | VOICE_DOWNLOAD
         | VOICE_TRANSCRIBE | VOICE_STREAM_BEGIN | VOICE_STREAM_APPEND | VOICE_STREAM_FINISH
         // Bounded by the project folders, which only an admin sets.
@@ -284,6 +286,7 @@ mod tests {
             SESSION_SET_CONFIG,
             SESSION_SIDE_ASK,
             SESSION_RENAME,
+            SESSION_PIN,
             SCREEN_STATUS,
             SCREEN_START,
             SCREEN_STOP,
