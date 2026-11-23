@@ -2,7 +2,7 @@
 
 *(working name)* A self-hosted agent host. A daemon on your own Linux or macOS
 machine runs **Codex**, **Claude Code**, **OpenCode**, **Cursor** and
-**Gemini CLI** on your existing
+Google's **Antigravity CLI** (`agy`) on your existing
 subscriptions, each session inside an OS sandbox, with approvals on auto
 because the sandbox is the boundary. A desktop app, a command-line client and
 an iOS app control it through one protocol; the phone reaches it through a
@@ -39,6 +39,16 @@ agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
 agenthost voice download                      # local speech model for voice input (once)
 ```
 
+Antigravity is a standalone binary, not one of the pinned tools: install it
+with `curl -fsSL https://antigravity.google/cli/install.sh | bash` (or set
+`AGENTHOST_ANTIGRAVITY_BIN`), then sign in once with the command
+`agenthost status` shows. On Linux that is
+`DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent agy acp --login`: sessions
+can't reach your keyring, so the login has to be kept in Antigravity's own
+folder (`~/.gemini/antigravity-cli`). Sessions see that folder and its
+conversations, not your plugins, MCP servers, hooks or skills in
+`~/.gemini/config`.
+
 No project needed? Use the built-in **Quick tasks** workspace: each session
 gets a fresh, empty folder of its own, and open web lets the agent look things
 up on any public site (local and private addresses stay refused). Switch open
@@ -56,8 +66,8 @@ the desktop chooses those folders (`agenthost project roots --set ~/Code,~/Work`
 
 Several subscriptions of one agent (a work and a personal Claude account,
 say)? Give each its own config folder, as you would with `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME`, `GEMINI_CLI_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux
-only, `XDG_CONFIG_HOME`), and add it as a profile. New sessions then pick it,
+`CODEX_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux only,
+`XDG_CONFIG_HOME`; Antigravity: not yet), and add it as a profile. New sessions then pick it,
 here as `agent:name`, on the desktop and the phone from the agent list:
 
 ```sh

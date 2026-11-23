@@ -500,7 +500,7 @@ pub fn agent_badge(t: &Theme, agent: agenthost_proto::AgentKind, size: f32, enab
     let (bg, fg) = match agent {
         A::Claude => (c("#d97757"), Color::WHITE),
         A::Codex => (c("#f2f2f2"), c("#111111")),
-        A::Gemini => (c("#3d5afe"), Color::WHITE),
+        A::Antigravity => (c("#3d5afe"), Color::WHITE),
         A::Opencode => (c("#3a3a3c"), Color::WHITE),
         A::Cursor => (c("#111111"), Color::WHITE),
         A::Fake => (c("#5e5ce6"), Color::WHITE),

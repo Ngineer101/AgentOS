@@ -84,7 +84,7 @@ macro_rules! agent_logo {
 
 agent_logo!(LOGO_CLAUDE, "ah-logo-claude", "claude.svg");
 agent_logo!(LOGO_CODEX, "ah-logo-codex", "codex.svg");
-agent_logo!(LOGO_GEMINI, "ah-logo-gemini", "gemini.svg");
+agent_logo!(LOGO_ANTIGRAVITY, "ah-logo-antigravity", "antigravity.svg");
 agent_logo!(LOGO_OPENCODE, "ah-logo-opencode", "opencode.svg");
 agent_logo!(LOGO_CURSOR, "ah-logo-cursor", "cursor.svg");
 
@@ -94,7 +94,7 @@ pub fn agent_logo(agent: agenthost_proto::AgentKind) -> Option<&'static Icon> {
     match agent {
         A::Claude => Some(&LOGO_CLAUDE),
         A::Codex => Some(&LOGO_CODEX),
-        A::Gemini => Some(&LOGO_GEMINI),
+        A::Antigravity => Some(&LOGO_ANTIGRAVITY),
         A::Opencode => Some(&LOGO_OPENCODE),
         A::Cursor => Some(&LOGO_CURSOR),
         A::Fake => None,
@@ -140,7 +140,7 @@ mod tests {
         }
         same!("claude.svg", "AgentClaude");
         same!("codex.svg", "AgentCodex");
-        same!("gemini.svg", "AgentGemini");
+        same!("antigravity.svg", "AgentAntigravity");
         same!("opencode.svg", "AgentOpenCode");
         same!("cursor.svg", "AgentCursor");
     }

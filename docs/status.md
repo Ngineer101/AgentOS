@@ -33,7 +33,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Quick tasks (no project folder) | Host ✅: built-in `ws_quick` workspace (kind `scratch`), a fresh owner-only folder per session next to the data folder (hidden from every other session), several at once; can't be removed. New `web` network preset (any public host; private and local addresses still refused by the proxy, every connection logged), on for Quick tasks by default, a switch on every workspace. Tested with the fake agent and unit tests; **no real agent has looked anything up through it yet**, and quick tasks' sandbox (a writable folder inside a hidden one, like each session's temp folder) is as untested on macOS as the rest. Desktop ✅ (Workspaces: "Open web" switch, Quick tasks built in). iOS: listed first on New session; builds, not run |
 | Projects from the phone | Host ✅: `project.browse` / `project.create` (phones may call them) only inside the project folders, default `~/Code`, set with `project.set_roots` (admin only); hidden folders and symlinks out of a project folder are skipped; the usual workspace checks apply. Tested as a phone connection. CLI ✅ `agenthost project …`. Desktop ✅ "Project folders" card. iOS: "New Project…" on New session (browse, use or create a folder); builds for the simulator, not run |
 | Session statuses, archive, per-workspace default login | Host ✅: `session.archive` (ends a live session, hides it from `session.list`; `archived: true` lists them) and `session.unarchive`; workspaces remember a default login, set by their first session and changed with `workspace.set_default_agent` (phones may call all three). Tested with the fake agent, including archive surviving a restart. CLI ✅ (`session archive/unarchive`, `session list --archived`, `workspace default`). Desktop and iOS: statuses (working, needs you, failed, your turn, ended), archive actions, an Archived list in Settings, and the default login preselected in New Session |
-| Agent profiles (several logins per agent) | Host ✅: `agent.profile_add/remove/list`, one `host.info` entry per login, `session.create` takes `profile_id`; the folder goes in the agent's own setting (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, OpenCode `XDG_DATA_HOME`, Cursor `XDG_CONFIG_HOME` on Linux; read from each CLI's code). Folders are checked against home, secrets, host data, other logins and workspaces; each session's sandbox hides every other login. Tested with the fake agent (state lands in the profile folder, resume of a removed profile fails) and the policy unit tests; **not tried with a real second subscription**. CLI ✅ (`agenthost agent …`, `claude:work`). Desktop ✅ choose on New session, add/remove on Host status (rendered headless). iOS: choose on New session; builds for the simulator, not run |
+| Agent profiles (several logins per agent) | Host ✅: `agent.profile_add/remove/list`, one `host.info` entry per login, `session.create` takes `profile_id`; the folder goes in the agent's own setting (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, OpenCode `XDG_DATA_HOME`, Cursor `XDG_CONFIG_HOME` on Linux; read from each CLI's code; none yet for Antigravity, whose folder is the `--gemini-dir` flag). Folders are checked against home, secrets, host data, other logins and workspaces; each session's sandbox hides every other login. Tested with the fake agent (state lands in the profile folder, resume of a removed profile fails) and the policy unit tests; **not tried with a real second subscription**. CLI ✅ (`agenthost agent …`, `claude:work`). Desktop ✅ choose on New session, add/remove on Host status (rendered headless). iOS: choose on New session; builds for the simulator, not run |
 | Installing tools | Host ✅: the gateway's built-in `agenthost__install_tool` (npm, pipx, uv, cargo, brew, go; offered only for managers found on PATH) always asks first, shows the exact command, the agent's reason and "runs as you, outside the sandbox", and only then runs it, as an argument list with no shell, one at a time, with a 15-minute limit; registry package names and plain versions only (no URLs, paths, git specs, flags or ranges); decisions and results go to the audit log. Each session can also write a shared session tools folder next to the data folder (npm prefix, pip user base, pipx, uv, cargo and go homes, their `bin` first on PATH), so agents install helpers for themselves without approval and without touching your home folder. Tested with a fake package manager (denied runs nothing, approved runs exactly what was shown) and unit tests; **no real package manager or real agent has used it yet**. Desktop ✅ install card (rendered headless in both looks). iOS: install card and approval sheet; builds, checked in the simulator demo |
 | Model and effort | Host ✅: the agent's ACP `configOptions` (select kind; `mode` left out, the host sets it) in `Session.config_options`, changed with `session.set_config`; the last choice per login is applied to new sessions. Tested with the fake agent; **not tried with the real Claude adapter** (shapes read from its source). Desktop and iOS: model and effort pickers in the composer; rendered with demo data |
 | Side questions (`/btw`) | Host ✅: `session.side_ask` forks the conversation (ACP `session/fork`, offered when the agent advertises it) and answers alongside a running turn; the fork's output never reaches the main transcript (`side.*` events); forks get no connectors. Tested with the fake agent; **not tried with a real agent**. Desktop: side panel with a tab per question; iOS: a sheet. Rendered with demo data |
@@ -57,7 +57,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Agents' built-in sandboxes nested in ours | ❌ not tested. Codex's is switched off (ACP mode `agent-full-access`); Claude Code's and OpenCode's are not used. The host's own sandbox is the boundary |
 | Hosts needed for a turn | Codex: `chatgpt.com` ✅. Claude Code: `api.anthropic.com` sufficed (also allowed: `console.anthropic.com`, `claude.ai`, `platform.claude.com`). OpenCode: `opencode.ai`/`models.dev` sufficed for this account's model; it also tries `auth.openai.com` (refused) for an OpenAI login it holds |
 | Cursor completes a turn in the sandbox | ✅ yes (CLI 2026.11.13), with an MCP call through the gateway; `~/.cursor` and `~/.ssh` were unreadable from inside. Resume ❌ not tried |
-| Gemini CLI completes a turn in the sandbox | ❌ not tried: no Google login on the test machine. Installs (0.68.0), reports "not logged in" with the fix, ACP `initialize` checked |
+| Antigravity CLI completes a turn in the sandbox | ❌ not tried: no Google login on the test machine, and agy was not run in a session. Flags read from `agy acp --help` (1.5.14); folders, hosts and the keyring fallback read from the 1.5.14 binary's strings and changelog |
 | Anything on macOS | ❌ |
 
 ## Agent checklist (per agent, Linux)
@@ -166,13 +166,14 @@ is refused. The host listened on no TCP port throughout.
     `CURSOR_CONFIG_DIR`/`CURSOR_DATA_DIR` point at `~/.local/share/agenthost-cursor`;
     the login in `~/.config/cursor` stays readable. `--sandbox disabled`,
     ACP `authenticate` with `cursor_login`.
-  - Gemini CLI: a host-written system settings file (`GEMINI_CLI_SYSTEM_SETTINGS_PATH`,
-    which overrides `~/.gemini/settings.json`) allows only the `agenthost` MCP
-    server and turns off hooks, extensions, skills, auto-update and usage
-    statistics; also `--allowed-mcp-server-names agenthost`. ACP
-    `authenticate` with `oauth-personal`.
+  - Antigravity CLI (`agy acp --disable-telemetry`, its own `--sandbox` off):
+    only `~/.gemini/antigravity-cli` (settings, logs, the file login) and
+    `~/.gemini/antigravity` (conversations) are writable; `~/.gemini/config`
+    (plugins, `mcp_config.json`, hooks, skills, rules), `~/.gemini/skills`,
+    `extensions` and `commands` are hidden. `antigravity-cli/hooks.json` sits
+    in a writable folder, so it can't be hidden.
 - **Gateway without the proxy.** Cursor's MCP client ignores `HTTP_PROXY`, so
-  Cursor and Gemini get the gateway at the proxy's own address
+  Cursor and Antigravity get the gateway at the proxy's own address
   (`http://127.0.0.1:3128/s/<token>/mcp` on Linux, which the sandbox runtime
   bridges to the session proxy and excludes via `NO_PROXY`); the proxy sends
   origin-form `/s/…` requests to the gateway.
@@ -212,10 +213,17 @@ is refused. The host listened on no TCP port throughout.
 - Cursor's blocking extension requests (`cursor/ask_question`,
   `cursor/create_plan`) are answered "method not found"; they could be passed
   to the desktop and phone instead.
-- Gemini CLI: only the Google login is detected (`~/.gemini/oauth_creds.json`);
-  an API key login is not offered. Its network hosts are a best guess
-  (`generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`,
-  `oauth2.googleapis.com`, `www.googleapis.com`) until a real turn runs.
+- Antigravity CLI: its login is in the keyring, which no session can reach
+  (D-Bus is a Unix socket), or else in a file in `~/.gemini/antigravity-cli`
+  whose name it doesn't document. "Logged in" therefore means that folder
+  exists, and the Linux fix signs in with D-Bus out of reach
+  (`DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent agy acp --login`, which
+  asks for the code from the browser) so the login goes to the file; **not
+  checked end to end**. A session the agent refuses for want of a login now
+  fails with that fix. No profiles yet, and no API key login. Its hosts are
+  read from the binary (Cloud Code, AI Code, Gemini API, Vertex, OAuth,
+  `antigravity.google`) until a real turn runs. Sessions and profiles stored
+  as `gemini` (Gemini CLI, which it replaced) load as Antigravity.
 - Voice: on the desktop the words appear while you talk (about a second
   behind); the model is multilingual and detects the language itself.
   Recordings up to 10 minutes. The model loads on first use (about 1.5 s,

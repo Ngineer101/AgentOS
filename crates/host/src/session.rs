@@ -1019,7 +1019,16 @@ impl Actor {
             Ok(()) => self.main_loop().await,
             Err(e) => match e.downcast::<StartFailure>() {
                 Ok(f) => Exit::Failed(f.reason, f.detail),
-                Err(e) => Exit::Failed(format!("{e:#}"), Value::Null),
+                Err(e) => {
+                    let reason = format!("{e:#}");
+                    // The agent turned the session down for want of a login.
+                    let detail = if is_login_error(&reason) {
+                        json!({"fix": self.spec.login_fix})
+                    } else {
+                        Value::Null
+                    };
+                    Exit::Failed(reason, detail)
+                }
             },
         };
         self.end_sides(match exit {
@@ -2582,6 +2591,14 @@ impl std::fmt::Display for StartFailure {
 
 impl std::error::Error for StartFailure {}
 
+/// An agent's "log in first" error, as ACP's `auth_required` or in words.
+fn is_login_error(reason: &str) -> bool {
+    let r = reason.to_ascii_lowercase();
+    ["authentication required", "auth_required", "not logged in", "please log in", "log back in", "sign in again", "not signed in"]
+        .iter()
+        .any(|p| r.contains(p))
+}
+
 fn prefix_failure(e: anyhow::Error, prefix: &str) -> anyhow::Error {
     match e.downcast::<StartFailure>() {
         Ok(f) => StartFailure::new(format!("{prefix}: {}", f.reason), f.detail),
@@ -2604,6 +2621,13 @@ impl From<StartFailure> for RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_errors() {
+        assert!(is_login_error("session/new: Authentication required"));
+        assert!(is_login_error("Authentication expired. Please log back in."));
+        assert!(!is_login_error("agent exited (code 1)"));
+    }
 
     #[test]
     fn gateway_tools_by_agent() {
