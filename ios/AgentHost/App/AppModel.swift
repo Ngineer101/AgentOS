@@ -123,6 +123,11 @@ final class AppModel: ObservableObject {
     /// Archived sessions, loaded when Settings → Archived Sessions is shown
     /// (nil until then). Not cached.
     @Published private(set) var archivedSessions: [SessionInfo]?
+    /// Sessions on their way to the archive: out of the list at once, before
+    /// the host answers. (It ends a live session first, and that "ended"
+    /// would otherwise move the row to the top just before it goes.) Back in
+    /// the list if archiving fails.
+    @Published private(set) var archiving: Set<String> = []
     @Published private(set) var approvals: [PendingApprovalModel] = []
     @Published private(set) var deviceName: String?
     @Published private(set) var transcripts: [String: Transcript] = [:]
@@ -343,7 +348,8 @@ final class AppModel: ObservableObject {
     /// Sessions grouped by workspace: Quick tasks first, then most recent
     /// activity first.
     var groupedSessions: [SessionGroup] {
-        let groups = Dictionary(grouping: sessions, by: { $0.workspaceId })
+        let listed = sessions.filter { !archiving.contains($0.sessionId) }
+        let groups = Dictionary(grouping: listed, by: { $0.workspaceId })
         return groups
             .map { entry in
                 SessionGroup(
@@ -1042,6 +1048,9 @@ final class AppModel: ObservableObject {
     /// Archive a session (the host ends it first if it is live). It leaves
     /// the list and stops being followed.
     func archive(_ sessionId: String) async throws {
+        archiving.insert(sessionId)
+        // After the answer has taken it out of `sessions`, or failed.
+        defer { archiving.remove(sessionId) }
         #if DEBUG
         if isDemo, var s = session(sessionId) {
             s.archivedAt = Int64(Date().timeIntervalSince1970 * 1000)
