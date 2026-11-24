@@ -7,7 +7,7 @@
 use crate::bridge::{Refresh, Tag};
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
-use crate::model::{login_key, App, Tab};
+use crate::model::{login_key, App, Conn, Tab};
 use crate::session::pre;
 use crate::sheet::{scrim, tilde};
 use crate::view::{clip, short_age};
@@ -327,13 +327,25 @@ fn split(t: &Theme, list: El, detail: El) -> El {
 }
 
 // ---------------------------------------------------------------------------
-// General: host status
+// General: connection, host status
 // ---------------------------------------------------------------------------
+
+/// The note under settings this connection refuses to change: a paired
+/// device gets sessions and approvals, never policy.
+fn local_only(t: &Theme, what: &str) -> El {
+    footnote(t, &format!("{what} can be changed only from the host's own computer, not over a paired connection."))
+}
 
 fn general(s: &App, t: &Theme) -> El {
     let mut c = col().key("general").w_full().gap(18.0);
+    c = c.child(connection(s, t));
     let Some(info) = &s.info else {
         return c.child(t.small("Waiting for the host…"));
+    };
+    let rerun = if s.admin {
+        t.button("Re-run Checks", Btn::Default, None, |s| s.call(Tag::HostInfo, m::HOST_CHECK, json!({})))
+    } else {
+        t.button_dimmed("Re-run Checks", Btn::Default, None)
     };
     c = c.child(
         row()
@@ -349,7 +361,7 @@ fn general(s: &App, t: &Theme) -> El {
                     .child(text("AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
                     .help(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)),
             )
-            .child(t.button("Re-run Checks", Btn::Default, None, |s| s.call(Tag::HostInfo, m::HOST_CHECK, json!({}))).key("rerun")),
+            .child(rerun.key("rerun")),
     );
     let ok = |b: bool, yes: &str, no: &str| t.status(if b { t.ok } else { t.warn }, if b { yes } else { no }, !b);
     let sb = &info.sandbox;
@@ -380,7 +392,109 @@ fn general(s: &App, t: &Theme) -> El {
         ),
         form_row(t, "Address", None, t.mono(r.url.clone().unwrap_or_else(|| "Not configured: start the host with --relay-url to pair phones".into())).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text2)),
     ];
-    c.child(section(t, "Relay", Some("How your phone reaches this computer".into()), t.group(relay, if t.mac() { 12.0 } else { 0.0 })))
+    let relay_note = if s.link_remote {
+        "This app is paired with the host through it"
+    } else {
+        "How your phone reaches this computer"
+    };
+    c.child(section(t, "Relay", Some(relay_note.into()), t.group(relay, if t.mac() { 12.0 } else { 0.0 })))
+}
+
+/// How this app reaches its host: the local one, or a paired remote host
+/// through the relay. This is where a laptop pairs with the machine that
+/// runs the agents.
+fn connection(s: &App, t: &Theme) -> El {
+    let here = if cfg!(target_os = "macos") && t.mac() { "this Mac" } else { "this computer" };
+    let now = if s.link_remote {
+        format!("Remote host {}", s.remote_host.clone().unwrap_or_default())
+    } else if s.conn == Conn::Connected {
+        here.to_string()
+    } else {
+        "Not connected".to_string()
+    };
+    let mut rows = vec![form_row(
+        t,
+        "Connection",
+        if s.link_remote { Some("Sessions and approvals from here; the host keeps its settings to its own computer".to_string()) } else { None },
+        t.label(now),
+    )];
+    if s.link_remote {
+        rows.push(form_row(
+            t,
+            "Paired host",
+            Some(format!("Switch back to the host on {here}")),
+            t.small_button(&format!("Use {here}"), |s| s.use_local_host()).key("use-local"),
+        ));
+    } else if let Some(name) = s.remote_host.clone() {
+        rows.push(form_row(
+            t,
+            "Paired host",
+            Some("Reached through the relay, end to end".into()),
+            t.small_button(&format!("Connect to {name}"), move |s| s.connect_remote()).key("connect-remote"),
+        ));
+    }
+    let mut c = col().w_full().gap(if t.mac() { 6.0 } else { 10.0 })
+        .child(section(
+            t,
+            "Connection",
+            Some(format!("The host this app talks to: {here}'s own, or a paired one")),
+            t.group(rows, if t.mac() { 12.0 } else { 0.0 }),
+        ));
+    if let Some(p) = &s.pair_remote {
+        c = c.child(pair_remote_form(p, t));
+    } else {
+        c = c.child(
+            row().w_full().child(el().grow(1.0))
+                .child(t.small_button("Pair with a Remote Host…", |s| s.start_remote_pair()).key("pair-remote")),
+        );
+    }
+    c
+}
+
+/// The form that pairs this app with a remote host: paste the code its
+/// `agenthost device pair` shows, name this app, and wait for the host to
+/// accept. While it waits, the 6-digit code to compare appears.
+fn pair_remote_form(p: &crate::model::PairRemote, t: &Theme) -> El {
+    let mut rows = vec![];
+    if p.busy {
+        if let Some(code) = &p.code {
+            rows.push(form_row(
+                t,
+                "Compare the code",
+                Some("The host shows the same code. Confirm there, and pairing finishes.".into()),
+                text(code.clone()).font(TextStyle::new(if t.mac() { 17.0 } else { 20.0 }, t.w_bold)).color(t.text).selectable(true),
+            ));
+        } else {
+            rows.push(form_row(t, "Reaching the relay", Some("The host's pairing slot is single-use and expires in two minutes.".into()), t.small("…")));
+        }
+    } else {
+        rows.push(form_row(
+            t,
+            "Pairing code",
+            Some("On the host, run `agenthost device pair`, then paste here what it shows (agenthost://pair?…).".into()),
+            row().w(360.0).child(t.field_submit(&p.payload, "agenthost://pair?…", |s| &mut s.pair_remote.as_mut().unwrap().payload, |s, _| s.send_remote_pair())),
+        ));
+        rows.push(form_row(
+            t,
+            "This app's name",
+            Some("What the host's device list shows for this app.".into()),
+            row()
+                .w(360.0)
+                .gap(6.0)
+                .center_y()
+                .child(t.field(&p.name, "Desktop on laptop", |s| &mut s.pair_remote.as_mut().unwrap().name))
+                .child(t.small_button("Pair", |s| s.send_remote_pair()).key("pair-send"))
+                .child(t.small_button("Cancel", |s| s.cancel_remote_pair()).key("pair-cancel")),
+        ));
+    }
+    if let Some(e) = &p.error {
+        rows.push(form_row(t, "Pairing failed", Some(e.clone()), el()));
+    }
+    let mut c = col().w_full().gap(if t.mac() { 6.0 } else { 10.0 }).child(t.group(rows, if t.mac() { 12.0 } else { 0.0 }));
+    if p.busy {
+        c = c.child(row().w_full().pt(2.0).child(el().grow(1.0)).child(t.small_button("Close", |s| s.cancel_remote_pair()).key("pair-close")));
+    }
+    c
 }
 
 fn voice_box(s: &App, t: &Theme) -> El {
@@ -461,22 +575,33 @@ fn agents(s: &App, t: &Theme) -> El {
     }
     let sel = info.agents.iter().find(|a| Some(login_key(a)) == selected);
     let removable = sel.and_then(|a| a.profile_name.as_ref().and(a.profile_id.clone()));
-    let remove: Option<Box<dyn Fn(&mut App)>> = removable.map(|id| {
-        Box::new(move |s: &mut App| {
-            s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo);
-            s.sel_agent = None;
-        }) as Box<dyn Fn(&mut App)>
-    });
-    let list = t.group(rows, 48.0).child(t.plus_minus(
-        "Add a Login",
-        |s: &mut App, _: &mut Tx| {
-            s.adding_profile = true;
-            s.profile_name.focused = true;
-        },
-        remove,
-        "+ adds another login (a profile) of an agent",
-    ));
+    let remove: Option<Box<dyn Fn(&mut App)>> = if s.admin {
+        removable.map(|id| {
+            Box::new(move |s: &mut App| {
+                s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo);
+                s.sel_agent = None;
+            }) as Box<dyn Fn(&mut App)>
+        })
+    } else {
+        None
+    };
+    let list = if s.admin {
+        t.group(rows, 48.0).child(t.plus_minus(
+            "Add a Login",
+            |s: &mut App, _: &mut Tx| {
+                s.adding_profile = true;
+                s.profile_name.focused = true;
+            },
+            remove,
+            "+ adds another login (a profile) of an agent",
+        ))
+    } else {
+        t.group(rows, 48.0)
+    };
     let mut c = col().key("agents").w_full().gap(18.0).child(section(t, "Agent logins", Some("Each login can be picked per session".into()), list));
+    if !s.admin {
+        c = c.child(local_only(t, "Logins"));
+    }
     if s.adding_profile {
         c = c.child(profile_form(s, info, t));
     } else if let Some(a) = sel {
@@ -500,12 +625,15 @@ fn agent_detail(s: &App, a: &AgentStatus, t: &Theme) -> El {
     }
     if let Some(d) = &a.config_dir {
         let dir = d.clone();
-        rows.push(form_row(
-            t,
-            "Config folder",
-            Some(format!("What {env} points at")),
-            row().gap(10.0).center_y().child(t.mono(tilde(d)).color(t.text2)).child(t.small_button(if t.mac() { "Show in Finder" } else { "Open Folder" }, move |s| s.reveal(&dir))),
-        ));
+        // Over a paired connection the folder is on another computer; opening
+        // it here would show the wrong thing, or nothing.
+        let trailing = if s.admin {
+            let btn = t.small_button(if t.mac() { "Show in Finder" } else { "Open Folder" }, move |s| s.reveal(&dir));
+            row().gap(10.0).center_y().child(t.mono(tilde(d)).color(t.text2)).child(btn)
+        } else {
+            row().child(t.mono(tilde(d)).color(t.text2))
+        };
+        rows.push(form_row(t, "Config folder", Some(format!("What {env} points at")), trailing));
     }
     let login_state = if a.available { "Logged in".to_string() } else { capitalize(a.problem.as_deref().unwrap_or("not logged in")) };
     let fix = a.fix.clone();
@@ -636,11 +764,16 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
                 );
             }
             if let Some(d) = &a.config_dir {
-                let dir = d.clone();
+                let trailing = if s.admin {
+                    let dir = d.clone();
+                    row().size(34.0, 34.0).center().radius(7.0).role("button").label("Open the folder").hover(Color::WHITE.alpha(0.08)).on_press(move |s: &mut App| s.reveal(&dir)).child(icon(&ic::FOLDER, 16.0).color(t.text))
+                } else {
+                    el()
+                };
                 block = block.child(sub(
                     "Config Folder",
                     t.mono_small(format!("{} · {env}", tilde(d))),
-                    row().size(34.0, 34.0).center().radius(7.0).role("button").label("Open the folder").hover(Color::WHITE.alpha(0.08)).on_press(move |s: &mut App| s.reveal(&dir)).child(icon(&ic::FOLDER, 16.0).color(t.text)),
+                    trailing,
                 ));
             }
             let login = if a.available { format!("Logged in · {live} live session{}", if live == 1 { "" } else { "s" }) } else { capitalize(a.problem.as_deref().unwrap_or("")) };
@@ -652,7 +785,7 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
                 None => el(),
             };
             block = block.child(sub("Login", t.small(login), copy));
-            if let Some(id) = a.profile_id.clone() {
+            if let Some(id) = a.profile_id.clone().filter(|_| s.admin) {
                 block = block.child(
                     row().w_full().pl(58.0).py(10.0).border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25)).child(t.button("Remove Profile…", Btn::Destructive, None, move |s| {
                         s.act("Remove profile", m::AGENT_PROFILE_REMOVE, json!({"profile_id": id}), Refresh::HostInfo);
@@ -664,26 +797,31 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
         }
         rows.push(block);
     }
+    let add = row()
+        .h(34.0)
+        .px(12.0)
+        .gap(6.0)
+        .center_y()
+        .radius(7.0)
+        .fill(t.control)
+        .role("button")
+        .label("Add Profile")
+        .hover(Color::WHITE.alpha(0.06))
+        .child(icon(&ic::PLUS, 13.0).color(t.text))
+        .child(text("Add Profile").font(TextStyle::new(14.5, 700.0)).color(t.text));    let add = if s.admin {
+        add.on_press(|s: &mut App| s.adding_profile = true)
+    } else {
+        add.disabled(true).opacity(0.55)
+    };
     let head = row()
         .w_full()
         .center_y()
         .child(col().grow(1.0).gap(2.0).child(t.section_title("Agent Logins")).child(t.small("Each login can be picked when you start a session").font(TextStyle::new(14.0, 400.0))))
-        .child(
-            row()
-                .h(34.0)
-                .px(12.0)
-                .gap(6.0)
-                .center_y()
-                .radius(7.0)
-                .fill(t.control)
-                .role("button")
-                .label("Add Profile")
-                .hover(Color::WHITE.alpha(0.06))
-                .on_press(|s: &mut App| s.adding_profile = true)
-                .child(icon(&ic::PLUS, 13.0).color(t.text))
-                .child(text("Add Profile").font(TextStyle::new(14.5, 700.0)).color(t.text)),
-        );
+        .child(add);
     let mut c = col().key("agents").w_full().gap(24.0).child(col().w_full().gap(12.0).child(head).child(t.group(rows, 0.0)));
+    if !s.admin {
+        c = c.child(local_only(t, "Logins"));
+    }
     if s.adding_profile {
         c = c.child(profile_form(s, info, t));
     }
@@ -730,15 +868,23 @@ fn workspaces(s: &App, t: &Theme) -> El {
         list = list.child(source_row(t, format!("ws-{}", w.workspace_id), on, glyph, if quick { "Quick tasks" } else { &w.name }, detail, move |s| s.sel_ws = Some(id.clone())));
     }
     let sel = selected.as_ref().and_then(|id| s.workspace(id));
-    let remove: Option<Box<dyn Fn(&mut App)>> = sel.filter(|w| w.kind != WorkspaceKind::Scratch).map(|w| {
-        let id = w.workspace_id.clone();
-        Box::new(move |s: &mut App| {
-            s.act("Remove workspace", m::WORKSPACE_REMOVE, json!({"workspace_id": id}), Refresh::Workspaces);
-            s.sel_ws = None;
-        }) as Box<dyn Fn(&mut App)>
-    });
+    let remove: Option<Box<dyn Fn(&mut App)>> = if s.admin {
+        sel.filter(|w| w.kind != WorkspaceKind::Scratch).map(|w| {
+            let id = w.workspace_id.clone();
+            Box::new(move |s: &mut App| {
+                s.act("Remove workspace", m::WORKSPACE_REMOVE, json!({"workspace_id": id}), Refresh::Workspaces);
+                s.sel_ws = None;
+            }) as Box<dyn Fn(&mut App)>
+        })
+    } else {
+        None
+    };
     let mut left = col().w_full().child(list);
-    if mac {
+    if !s.admin {
+        // The folder picker would choose a folder on this computer; the host
+        // would never see it.
+        left = left.child(row().w_full().px(if t.mac() { 12.0 } else { 14.0 }).py(8.0).child(footnote(t, "Folders are added on the host's own computer.")));
+    } else if mac {
         left = left.child(t.plus_minus("Add Folder", |_, tx| pick_workspace_folder(tx), remove, ""));
     } else {
         let mut bar = row().w_full().gap(6.0).padding(8.0).child(t.small_button_tx("Add Folder…", |_, tx| pick_workspace_folder(tx)));
@@ -772,6 +918,9 @@ fn workspaces(s: &App, t: &Theme) -> El {
         ));
     }
     c = c.child(split(t, left, detail));
+    if !s.admin {
+        c = c.child(local_only(t, "Workspace settings"));
+    }
     c.child(project_roots(s, t))
 }
 
@@ -779,14 +928,13 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
     let mac = t.mac();
     let quick = w.kind == WorkspaceKind::Scratch;
     let id = w.workspace_id.clone();
+    // A paired connection may look, not change: the host refuses updates anyway.
+    let edit = s.admin;
     let preset = |p: NetworkPreset, name: &str, detail: &str| {
         let on = w.network.presets.contains(&p);
         let net = w.network.clone();
         let id = id.clone();
-        form_row(
-            t,
-            name,
-            Some(detail.to_string()),
+        let control = if edit {
             t.switch(on, name, move |s: &mut App| {
                 let mut net = net.clone();
                 if on {
@@ -796,38 +944,43 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
                 }
                 s.act("Change network rules", m::WORKSPACE_UPDATE, json!({"workspace_id": id, "network": net}), Refresh::Workspaces);
             })
-            .key(format!("{}-{:?}", w.workspace_id, p)),
-        )
+        } else {
+            t.switch_dimmed(on, name)
+        };
+        form_row(t, name, Some(detail.to_string()), control.key(format!("{}-{:?}", w.workspace_id, p)))
     };
     let mut hosts = row().gap(6.0).center_y().flex_wrap();
     for h in &w.network.custom_hosts {
         let (id2, h2) = (id.clone(), h.clone());
         let net = w.network.clone();
-        hosts = hosts.child(
-            row()
-                .h(if mac { 22.0 } else { 28.0 })
-                .pl(8.0)
-                .pr(5.0)
-                .gap(5.0)
-                .center_y()
-                .radius(11.0)
-                .fill(Color::WHITE.alpha(0.1))
-                .child(text(h.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0)).color(t.text))
-                .child(
-                    row()
-                        .role("button")
-                        .label(format!("Remove {h}"))
-                        .on_press(move |s: &mut App| {
-                            let mut n = net.clone();
-                            n.custom_hosts.retain(|x| *x != h2);
-                            s.act("Remove host", m::WORKSPACE_UPDATE, json!({"workspace_id": id2, "network": n}), Refresh::Workspaces);
-                        })
-                        .child(icon(&ic::XMARK_CIRCLE, 12.0).color(Color::WHITE.alpha(0.3))),
-                ),
-        );
+        let mut chip = row()
+            .h(if mac { 22.0 } else { 28.0 })
+            .pl(8.0)
+            .pr(5.0)
+            .gap(5.0)
+            .center_y()
+            .radius(11.0)
+            .fill(Color::WHITE.alpha(0.1))
+            .child(text(h.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0)).color(t.text));
+        if edit {
+            chip = chip.child(
+                row()
+                    .role("button")
+                    .label(format!("Remove {h}"))
+                    .on_press(move |s: &mut App| {
+                        let mut n = net.clone();
+                        n.custom_hosts.retain(|x| *x != h2);
+                        s.act("Remove host", m::WORKSPACE_UPDATE, json!({"workspace_id": id2, "network": n}), Refresh::Workspaces);
+                    })
+                    .child(icon(&ic::XMARK_CIRCLE, 12.0).color(Color::WHITE.alpha(0.3))),
+            );
+        }
+        hosts = hosts.child(chip);
     }
     let editing = s.host_for.as_deref() == Some(w.workspace_id.as_str());
-    let add_host = if editing {
+    let add_host = if !edit {
+        el()
+    } else if editing {
         let idh = id.clone();
         row().w(220.0).child(
             t.field_submit(&s.custom_host, "api.example.com", |s| &mut s.custom_host, move |s: &mut App, _: &mut Tx| {
@@ -871,6 +1024,19 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         let on = w.connectors.contains(&c.connector_id);
         let (idc, cid) = (id.clone(), c.connector_id.clone());
         let current = w.connectors.clone();
+        let box_el = if edit {
+            t.checkbox(on, &c.name, move |s: &mut App| {
+                let mut list = current.clone();
+                if on {
+                    list.retain(|x| *x != cid);
+                } else {
+                    list.push(cid.clone());
+                }
+                s.act("Change connectors", m::WORKSPACE_UPDATE, json!({"workspace_id": idc, "connectors": list}), Refresh::Workspaces);
+            })
+        } else {
+            t.checkbox_dimmed(on, &c.name)
+        };
         conns.push(
             row()
                 .w_full()
@@ -878,18 +1044,7 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
                 .px(if mac { 12.0 } else { 14.0 })
                 .py(if mac { 8.0 } else { 12.0 })
                 .center_y()
-                .child(
-                    t.checkbox(on, &c.name, move |s: &mut App| {
-                        let mut list = current.clone();
-                        if on {
-                            list.retain(|x| *x != cid);
-                        } else {
-                            list.push(cid.clone());
-                        }
-                        s.act("Change connectors", m::WORKSPACE_UPDATE, json!({"workspace_id": idc, "connectors": list}), Refresh::Workspaces);
-                    })
-                    .key(format!("{}-{}", w.workspace_id, c.connector_id)),
-                )
+                .child(box_el.key(format!("{}-{}", w.workspace_id, c.connector_id)))
                 .child(t.label(c.name.clone()))
                 .child(el().grow(1.0))
                 .child(t.small(format!("{} tools", c.tools.len()))),
@@ -960,15 +1115,21 @@ fn project_roots(s: &App, t: &Theme) -> El {
             Err(e) => s.error = Some(format!("Could not open the folder picker: {e}")),
         });
     };
-    let remove: Option<Box<dyn Fn(&mut App)>> = s.sel_root.clone().filter(|r| s.project_roots.contains(r)).map(|r| {
-        Box::new(move |s: &mut App| {
-            let rest: Vec<String> = s.project_roots.iter().filter(|x| **x != r).cloned().collect();
-            s.set_project_roots(rest);
-            s.sel_root = None;
-        }) as Box<dyn Fn(&mut App)>
-    });
+    let remove: Option<Box<dyn Fn(&mut App)>> = if s.admin {
+        s.sel_root.clone().filter(|r| s.project_roots.contains(r)).map(|r| {
+            Box::new(move |s: &mut App| {
+                let rest: Vec<String> = s.project_roots.iter().filter(|x| **x != r).cloned().collect();
+                s.set_project_roots(rest);
+                s.sel_root = None;
+            }) as Box<dyn Fn(&mut App)>
+        })
+    } else {
+        None
+    };
     let mut b = t.group(rows, 0.0);
-    if mac {
+    if !s.admin {
+        b = b.child(row().w_full().px(if mac { 12.0 } else { 14.0 }).py(8.0).child(footnote(t, "Project folders are chosen on the host's own computer.")));
+    } else if mac {
         b = b.child(t.plus_minus("Add Project Folder", add, remove, ""));
     } else {
         let mut bar = row().w_full().gap(6.0).padding(8.0).border_sides([1.0, 0.0, 0.0, 0.0], Color::BLACK.alpha(0.25)).child(t.small_button_tx("Add Folder…", add));
@@ -1038,15 +1199,21 @@ fn connectors(s: &App, t: &Theme) -> El {
     if s.connectors.is_empty() {
         list = list.child(t.small("No connectors yet.").padding(8.0));
     }
-    let remove: Option<Box<dyn Fn(&mut App)>> = selected.clone().filter(|_| !s.adding_connector).map(|id| {
-        Box::new(move |s: &mut App| {
-            s.act("Remove connector", m::CONNECTOR_REMOVE, json!({"connector_id": id}), Refresh::Connectors);
-            s.sel_conn = None;
-        }) as Box<dyn Fn(&mut App)>
-    });
+    let remove: Option<Box<dyn Fn(&mut App)>> = if s.admin {
+        selected.clone().filter(|_| !s.adding_connector).map(|id| {
+            Box::new(move |s: &mut App| {
+                s.act("Remove connector", m::CONNECTOR_REMOVE, json!({"connector_id": id}), Refresh::Connectors);
+                s.sel_conn = None;
+            }) as Box<dyn Fn(&mut App)>
+        })
+    } else {
+        None
+    };
     let mut left = col().w_full().child(list);
     let start_add = |s: &mut App, _: &mut Tx| s.open_add_connector();
-    if mac {
+    if !s.admin {
+        left = left.child(row().w_full().px(if t.mac() { 12.0 } else { 14.0 }).py(8.0).child(footnote(t, "Connectors are added on the host's own computer.")));
+    } else if mac {
         left = left.child(t.plus_minus("Add a Connector", start_add, remove, ""));
     } else {
         let mut bar = row().w_full().gap(6.0).padding(8.0).child(t.small_button_tx("Add…", start_add));
@@ -1056,7 +1223,7 @@ fn connectors(s: &App, t: &Theme) -> El {
         left = left.child(bar);
     }
     let detail = if s.adding_connector || s.connectors.is_empty() {
-        add_connector(s, t)
+        if s.admin { add_connector(s, t) } else { col().child(t.small("No connectors yet.")) }
     } else {
         match selected.as_ref().and_then(|id| s.connectors.iter().find(|c| &c.connector_id == id)) {
             Some(c) => connector_detail(s, c, t),
@@ -1064,6 +1231,9 @@ fn connectors(s: &App, t: &Theme) -> El {
         }
     };
     let mut c = col().key("connectors").w_full().gap(18.0).child(split(t, left, detail));
+    if !s.admin {
+        c = c.child(local_only(t, "Connector settings"));
+    }
     if !s.builtins.is_empty() {
         c = c.child(builtin_tools(s, t));
     }
@@ -1087,54 +1257,69 @@ fn builtin_tools(s: &App, t: &Theme) -> El {
         .builtins
         .iter()
         .flat_map(|b| {
-            let mut rows = vec![builtin_row(t, b)];
+            let mut rows = vec![builtin_row(s, t, b)];
             for rule in &b.allowed {
                 let shown = format!("{} \u{2026}", rule.join(" "));
                 let (r, key) = (rule.clone(), format!("allowed-{}", rule.join("-")));
-                let undo = t.button("Ask First", Btn::Default, None, move |s| s.forget_command(&r)).key(key.clone()).label(format!("Ask first before {shown}"));
                 let names = col()
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(1.0)
-                    .child(pre(t, shown))
+                    .child(pre(t, shown.clone()))
                     .child(t.small("Runs without asking"));
+                let undo = if s.admin {
+                    t.button("Ask First", Btn::Default, None, move |s| s.forget_command(&r)).key(key.clone()).label(format!("Ask first before {shown}"))
+                } else {
+                    el()
+                };
                 rows.push(row().w_full().gap(10.0).pl(if mac { 28.0 } else { 30.0 }).pr(if mac { 12.0 } else { 14.0 }).py(if mac { 6.0 } else { 10.0 }).center_y().child(names).child(undo).key(format!("row-{key}")));
             }
             rows
         })
         .collect();
+    let note = if s.admin {
+        "AgentOS's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins. Shells, interpreters and build tools always ask."
+    } else {
+        "These run on the host itself; their policy is set on the host's own computer."
+    };
     section(
         t,
         if mac { "Built-in tools" } else { "Built-in Tools" },
         None,
-        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentOS's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins. Shells, interpreters and build tools always ask.")),
+        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, note)),
     )
     .key("builtin-tools")
 }
 
 /// One built-in tool: its title, what it does, and Ask First / Don't Ask (or Always Asks).
-fn builtin_row(t: &Theme, b: &BuiltinTool) -> El {
+fn builtin_row(s: &App, t: &Theme, b: &BuiltinTool) -> El {
     let trailing = if b.can_auto {
         let key = format!("builtin-{}", b.name);
         let (k2, name, current) = (key.clone(), b.name.clone(), b.policy);
         let label = builtin_policy_name(t, b.policy);
-        let names = [builtin_policy_name(t, ToolPolicy::Ask), builtin_policy_name(t, ToolPolicy::Auto)];
-        popup_button(t, key, label).label(format!("{}: {label}", b.title)).on_press_tx(move |s: &mut App, tx: &mut Tx| {
-            if rune::popup_menu_supported() {
-                let menu = [ToolPolicy::Ask, ToolPolicy::Auto]
-                    .into_iter()
-                    .zip(names)
-                    .fold(rune::PopupMenu::new(), |m, (p, n)| m.item(rune::PopupItem::new(policy_id(p), n).checked(p == current)));
-                let name = name.clone();
-                tx.popup_menu(menu, k2.clone(), move |s: &mut App, picked, _| {
-                    if let Some(p) = picked.and_then(policy_of).filter(|p| *p != current) {
-                        s.set_builtin_policy(&name, p);
-                    }
-                });
-            } else {
-                s.set_builtin_policy(&name, if current == ToolPolicy::Auto { ToolPolicy::Ask } else { ToolPolicy::Auto });
-            }
-        })
+        let mut popup = popup_button(t, key, label).label(format!("{}: {label}", b.title));
+        if s.admin {
+            let names = [builtin_policy_name(t, ToolPolicy::Ask), builtin_policy_name(t, ToolPolicy::Auto)];
+            popup = popup.on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                if rune::popup_menu_supported() {
+                    let menu = [ToolPolicy::Ask, ToolPolicy::Auto]
+                        .into_iter()
+                        .zip(names)
+                        .fold(rune::PopupMenu::new(), |m, (p, n)| m.item(rune::PopupItem::new(policy_id(p), n).checked(p == current)));
+                    let name = name.clone();
+                    tx.popup_menu(menu, k2.clone(), move |s: &mut App, picked, _| {
+                        if let Some(p) = picked.and_then(policy_of).filter(|p| *p != current) {
+                            s.set_builtin_policy(&name, p);
+                        }
+                    });
+                } else {
+                    s.set_builtin_policy(&name, if current == ToolPolicy::Auto { ToolPolicy::Ask } else { ToolPolicy::Auto });
+                }
+            });
+        } else {
+            popup = popup.disabled(true).opacity(0.55);
+        }
+        popup
     } else {
         t.small("Always Asks").key(format!("builtin-{}", b.name))
     };
@@ -1367,46 +1552,54 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
     } else {
         let idr = id.clone();
         let idb = id.clone();
-        row()
+        let mut name = text(c.name.clone())
+            .key("conn-name")
+            .font(TextStyle::new(15.0, t.w_bold))
+            .color(t.text)
+            .truncate()
+            .shrink()
+            .role("button")
+            .label(format!("Rename {}", c.name))
+            .help(if s.admin { "Double-click to rename" } else { c.name.as_str() });
+        let mut title_row = row()
             .gap(10.0)
             .center_y()
             .min_w(0.0)
-            .child(conn_badge(t, c, if mac { 26.0 } else { 30.0 }))
-            .child(
-                text(c.name.clone())
-                    .key("conn-name")
-                    .font(TextStyle::new(15.0, t.w_bold))
-                    .color(t.text)
-                    .truncate()
-                    .shrink()
-                    .role("button")
-                    .label(format!("Rename {}", c.name))
-                    .help("Double-click to rename")
-                    .on_double_press(move |s: &mut App| s.start_rename(&idr)),
-            )
-            .child(t.small_button("Rename…", move |s| s.start_rename(&idb)).key("conn-rename"))
+            .child(conn_badge(t, c, if mac { 26.0 } else { 30.0 }));
+        if s.admin {
+            name = name.on_double_press(move |s: &mut App| s.start_rename(&idr));
+            title_row = title_row.child(name).child(t.small_button("Rename…", move |s| s.start_rename(&idb)).key("conn-rename"));
+        } else {
+            title_row = title_row.child(name.disabled(true));
+        }
+        title_row
     };
     let mut actions = row().gap(8.0).center_y();
-    match signing {
-        Some(link) if !link.is_empty() => {
-            let l = link.clone();
-            actions = actions.child(t.small_button("Open Browser Again", move |s| s.open_queue.push(l.clone())));
+    if s.admin {
+        match signing {
+            Some(link) if !link.is_empty() => {
+                let l = link.clone();
+                actions = actions.child(t.small_button("Open Browser Again", move |s| s.open_queue.push(l.clone())));
+            }
+            Some(_) => {}
+            None if c.status == "needs_sign_in" || (c.status == "error" && c.auth == ConnectorAuth::Oauth) => {
+                let ids = id.clone();
+                actions = actions.child(t.button("Sign In…", Btn::Primary, None, move |s| s.sign_in(&ids)).key("sign-in"));
+            }
+            None => {}
         }
-        Some(_) => {}
-        None if c.status == "needs_sign_in" || (c.status == "error" && c.auth == ConnectorAuth::Oauth) => {
-            let ids = id.clone();
-            actions = actions.child(t.button("Sign In…", Btn::Primary, None, move |s| s.sign_in(&ids)).key("sign-in"));
-        }
-        None => {}
+        let idf = id.clone();
+        actions = actions.child(t.small_button("Refresh Tools", move |s| s.act("Refresh", m::CONNECTOR_REFRESH, json!({"connector_id": idf}), Refresh::Connectors)));
+        let ide = id.clone();
+        let enabled = c.enabled;
+        actions = actions.child(
+            t.switch(enabled, "On", move |s: &mut App| s.act("Turn connector on or off", m::CONNECTOR_UPDATE, json!({"connector_id": ide, "enabled": !enabled}), Refresh::Connectors))
+                .key(format!("{}-enabled", c.connector_id)),
+        );
+    } else {
+        let (st, _) = conn_status(s, c);
+        actions = actions.child(t.small(st));
     }
-    let idf = id.clone();
-    actions = actions.child(t.small_button("Refresh Tools", move |s| s.act("Refresh", m::CONNECTOR_REFRESH, json!({"connector_id": idf}), Refresh::Connectors)));
-    let ide = id.clone();
-    let enabled = c.enabled;
-    actions = actions.child(
-        t.switch(enabled, "On", move |s: &mut App| s.act("Turn connector on or off", m::CONNECTOR_UPDATE, json!({"connector_id": ide, "enabled": !enabled}), Refresh::Connectors))
-            .key(format!("{}-enabled", c.connector_id)),
-    );
     let mut d = col()
         .w_full()
         .gap(if mac { 6.0 } else { 10.0 })
@@ -1432,7 +1625,12 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
     let default_row = |label: &str, which: &'static str, p: ToolPolicy| {
         let key = format!("pol-{}-{which}", c.connector_id);
         let (k2, cid) = (key.clone(), c.connector_id.clone());
-        form_row(t, label, None, popup_button(t, key, policy_name(p)).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), which.into(), p, false)))
+        let picker = if s.admin {
+            popup_button(t, key, policy_name(p)).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), which.into(), p, false))
+        } else {
+            popup_button(t, key, policy_name(p)).disabled(true).opacity(0.55)
+        };
+        form_row(t, label, None, picker)
     };
     d = d.child(el().h(8.0)).child(t.group_title("By default")).child(t.group(
         vec![default_row("Tools that read", "read", c.read_policy), default_row("Tools that change things", "write", c.write_policy)],
@@ -1491,21 +1689,24 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
     }
     for (i, tool) in c.tools.iter().enumerate() {
         let key = format!("pol-{}-{}", c.connector_id, tool.name);
-        let (k2, cid, name, p) = (key.clone(), c.connector_id.clone(), tool.name.clone(), tool.policy);
         let color = match tool.policy {
             ToolPolicy::Auto => t.text,
             ToolPolicy::Ask => t.warn,
             ToolPolicy::Disabled => t.danger,
         };
+        let (k2, cid, name, p) = (key.clone(), c.connector_id.clone(), tool.name.clone(), tool.policy);
         let mut pol = row()
-            .key(key)
             .gap(6.0)
             .center_y()
             .role("combobox")
             .label(format!("{} policy: {}", tool.name, policy_short(tool.policy)))
-            .focusable(true)
-            .on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), name.clone(), p, true))
-            .child(text(policy_short(tool.policy)).font(t.font()).color(color));
+            .child(text(policy_short(tool.policy)).font(t.font()).color(color))
+            .key(key);
+        if s.admin {
+            pol = pol.focusable(true).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_policy(s, tx, k2.clone(), cid.clone(), name.clone(), p, true));
+        } else {
+            pol = pol.disabled(true);
+        }
         if tool.policy_override.is_some() {
             pol = pol.child(row().gap(4.0).center_y().child(t.dot(t.accent, 6.0)).child(text("changed").font(TextStyle::new(11.0, 400.0)).color(t.accent_text)));
         }
@@ -1554,29 +1755,36 @@ fn devices(s: &App, t: &Theme) -> El {
             col().gap(1.0).child(t.label(d.name.clone())).child(t.small(seen.unwrap_or_else(|| "Never seen".into())))
         };
         let (idr, idv, nm) = (id.clone(), id.clone(), d.name.clone());
-        rows.push(
-            row()
-                .key(format!("dev-{}", d.device_id))
-                .w_full()
-                .gap(10.0)
-                .px(12.0)
-                .py(10.0)
-                .center_y()
-                .child(icon(&ic::PHONE, 22.0).color(t.text2))
-                .child(name)
-                .child(el().grow(1.0))
+        let mut r = row()
+            .key(format!("dev-{}", d.device_id))
+            .w_full()
+            .gap(10.0)
+            .px(12.0)
+            .py(10.0)
+            .center_y()
+            .child(icon(&ic::PHONE, 22.0).color(t.text2))
+            .child(name)
+            .child(el().grow(1.0));
+        if s.admin {
+            r = r
                 .child(t.small_button("Rename…", move |s| {
                     s.renaming = Some(idr.clone());
                     s.rename = rune::TextEdit::new(nm.clone());
                     s.rename.focused = true;
                 }))
-                .child(t.small_button_danger("Revoke…", move |s| s.act("Revoke device", m::DEVICE_REVOKE, json!({"device_id": idv}), Refresh::Devices)).key(format!("revoke-{}", d.device_id))),
-        );
+                .child(t.small_button_danger("Revoke…", move |s| s.act("Revoke device", m::DEVICE_REVOKE, json!({"device_id": idv}), Refresh::Devices)).key(format!("revoke-{}", d.device_id)));
+        }
+        rows.push(r);
     }
     if rows.is_empty() {
         rows.push(form_row(t, "No paired devices", Some("Pair your iPhone to start sessions and answer approvals from it.".into()), el()));
     }
-    let pair = row().w_full().pt(6.0).child(el().grow(1.0)).child(t.small_button("Pair iPhone…", |s| s.call(Tag::PairStart, m::DEVICE_PAIR_START, json!({}))).key("pair"));
+    let pair_button = if s.admin {
+        t.small_button("Pair iPhone…", |s| s.call(Tag::PairStart, m::DEVICE_PAIR_START, json!({})))
+    } else {
+        t.small_button_dimmed("Pair iPhone…")
+    };
+    let pair = row().w_full().pt(6.0).child(el().grow(1.0)).child(pair_button.key("pair"));
     let r = s.info.as_ref().map(|i| i.relay.clone()).unwrap_or_default();
     let relay = vec![
         form_row(
@@ -1592,12 +1800,15 @@ fn devices(s: &App, t: &Theme) -> El {
         form_row(t, "Address", None, t.mono(r.url.clone().unwrap_or_else(|| "Not configured".into())).font(TextStyle::new(t.fs_mono, 400.0).mono()).color(t.text2)),
     ];
     let here = if cfg!(target_os = "macos") && mac { "this Mac" } else { "this computer" };
-    col()
+    let mut c = col()
         .key("devices")
         .w_full()
         .gap(18.0)
-        .child(col().w_full().gap(0.0).child(section(t, if mac { "Paired devices" } else { "Paired Devices" }, Some(format!("Phones reach {here} through your relay")), t.group(rows, 44.0))).child(pair))
-        .child(section(t, "Relay", None, t.group(relay, if mac { 12.0 } else { 0.0 })))
+        .child(col().w_full().gap(0.0).child(section(t, if mac { "Paired devices" } else { "Paired Devices" }, Some(format!("Phones reach {here} through your relay")), t.group(rows, 44.0))).child(pair));
+    if !s.admin {
+        c = c.child(local_only(t, "Pairing, renaming and revoking"));
+    }
+    c.child(section(t, "Relay", None, t.group(relay, if mac { 12.0 } else { 0.0 })))
         .child(screen_sharing(s, t))
 }
 
@@ -1610,28 +1821,39 @@ fn screen_sharing(s: &App, t: &Theme) -> El {
         return section(t, title, None, t.group(vec![form_row(t, "Not available", Some("Update agenthostd to share this screen with your phone.".into()), el())], 0.0));
     };
     let p = st.policy;
+    let see_switch = if s.admin {
+        t.switch(p.enabled, "Let phones see this screen", move |s: &mut App| {
+            s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": !p.enabled, "allow_control": p.allow_control && !p.enabled}))
+        })
+    } else {
+        t.switch_dimmed(p.enabled, "Let phones see this screen")
+    };
+    let control_switch = if s.admin && p.enabled {
+        t.switch(p.allow_control, "Let phones click and type", move |s: &mut App| {
+            s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": true, "allow_control": !p.allow_control}))
+        })
+    } else if !s.admin && p.enabled {
+        t.switch_dimmed(p.allow_control, "Let phones click and type")
+    } else {
+        t.small("Off")
+    };
     let mut rows = vec![
         form_row(
             t,
             "Let phones see this screen",
             Some("For a sign-in page or an approval in a browser while you're away".into()),
-            t.switch(p.enabled, "Let phones see this screen", move |s: &mut App| {
-                s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": !p.enabled, "allow_control": p.allow_control && !p.enabled}))
-            }),
+            see_switch,
         ),
         form_row(
             t,
             "Let phones click and type",
             Some(if p.enabled { "Full control of everything you're logged in to".into() } else { "Turn on screen sharing first".into() }),
-            if p.enabled {
-                t.switch(p.allow_control, "Let phones click and type", move |s: &mut App| {
-                    s.call(Tag::Screen, m::SCREEN_SET_POLICY, json!({"enabled": true, "allow_control": !p.allow_control}))
-                })
-            } else {
-                t.small("Off")
-            },
+            control_switch,
         ),
     ];
+    if !s.admin {
+        rows.push(form_row(t, "Screen sharing policy", None, t.small("Set on the host's own computer")));
+    }
     for mode in &st.modes {
         let name = match mode.mode {
             ScreenMode::Desktop => "Your desktop",
@@ -1746,7 +1968,11 @@ fn default_login_row(s: &App, w: &Workspace, t: &Theme) -> El {
     let label = current.as_ref().and_then(|k| agents.iter().find(|a| &login_key(a) == k)).map(|a| a.label()).unwrap_or_else(|| NO_DEFAULT.to_string());
     let key = format!("default-login-{}", w.workspace_id);
     let (k2, ws) = (key.clone(), w.workspace_id.clone());
-    let picker = popup_button(t, key, &label).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_default_login(s, tx, k2.clone(), ws.clone()));
+    let picker = if s.admin {
+        popup_button(t, key, &label).on_press_tx(move |s: &mut App, tx: &mut Tx| pick_default_login(s, tx, k2.clone(), ws.clone()))
+    } else {
+        popup_button(t, key, &label).disabled(true).opacity(0.55)
+    };
     form_row(t, "Default agent", Some("New sessions here start with this login".into()), picker)
 }
 

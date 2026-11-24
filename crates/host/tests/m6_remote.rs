@@ -210,7 +210,7 @@ async fn revoked_device_is_disconnected_and_cannot_return() {
     );
     assert!(told, "phone was not told it was removed");
     let reason = closed.borrow().clone();
-    assert!(reason.as_deref().unwrap_or("").contains("4401"), "expected close code 4401, got {reason:?}");
+    assert!(reason.as_ref().is_some_and(|c| c.code == 4401), "expected close code 4401, got {reason:?}");
     assert!(phone.request(m::SESSION_LIST, json!({})).await.is_err());
     // Reconnecting fails.
     let e = remote::connect(&state)
@@ -285,7 +285,7 @@ async fn silent_relay_link_is_noticed_and_reconnect_catches_up() {
         .await
         .expect("a dead link was not noticed")
         .unwrap();
-    let reason = closed.borrow().clone().unwrap();
+    let reason = closed.borrow().clone().unwrap().to_string();
     assert!(reason.contains("connection lost"), "{reason}");
     // Back online: a new connection works and replays what happened meanwhile.
     relay.tamper.lock().unwrap().stall_devices = false;

@@ -1,6 +1,8 @@
-//! What the app remembers between launches on this computer: which sidebar groups are
-//! collapsed. A small JSON file in the platform's config folder; a missing or unreadable one
-//! is the defaults. Pins live on the host (`session.pin`), so every device sees them.
+//! What the app remembers between launches on this computer: which sidebar
+//! groups are collapsed, and which host to connect to when one was paired.
+//! A small JSON file in the platform's config folder; a missing or unreadable
+//! one is the defaults. Pins live on the host (`session.pin`), so every
+//! device sees them.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -11,17 +13,32 @@ pub struct Prefs {
     /// Workspace ids whose sidebar group is collapsed.
     #[serde(default)]
     pub collapsed: HashSet<String>,
+    /// Connect to the paired remote host (whose keys sit in `remote.json` in
+    /// the same folder) rather than this computer's own host. Set by pairing
+    /// while no local host answers, or by choosing "Connect to …"; a laptop's
+    /// normal state. "Use this computer" clears it.
+    #[serde(default)]
+    pub prefer_remote: bool,
 }
 
-/// `~/Library/Application Support/AgentHost/desktop.json` on macOS,
-/// `$XDG_CONFIG_HOME/agenthost/desktop.json` (or `~/.config/…`) elsewhere.
-fn path() -> Option<PathBuf> {
+/// `~/Library/Application Support/AgentHost/` on macOS,
+/// `$XDG_CONFIG_HOME/agenthost/` (or `~/.config/…`) elsewhere;
+/// `$AGENTHOST_DESKTOP_DIR` overrides both, for tests.
+pub fn config_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("AGENTHOST_DESKTOP_DIR") {
+        return Some(PathBuf::from(d));
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
-        return home.map(|h| h.join("Library/Application Support/AgentHost/desktop.json"));
+        return home.map(|h| h.join("Library/Application Support/AgentHost"));
     }
     let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.map(|h| h.join(".config")));
-    config.map(|c| c.join("agenthost/desktop.json"))
+    config.map(|c| c.join("agenthost"))
+}
+
+/// The prefs file, `desktop.json` in the config folder.
+fn path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("desktop.json"))
 }
 
 pub fn load() -> Prefs {
@@ -48,10 +65,10 @@ mod tests {
 
     #[test]
     fn prefs_read_back_and_tolerate_old_files() {
-        let p = Prefs { collapsed: ["ws_1".to_string()].into() };
+        let p = Prefs { collapsed: ["ws_1".to_string()].into(), prefer_remote: true };
         let back: Prefs = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         let empty: Prefs = serde_json::from_str("{}").unwrap();
-        assert!(empty.collapsed.is_empty());
+        assert!(empty.collapsed.is_empty() && !empty.prefer_remote, "a file from before either field is fine");
     }
 }

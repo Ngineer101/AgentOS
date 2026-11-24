@@ -108,21 +108,25 @@ fn workspace_rows(s: &App, t: &Theme) -> Vec<El> {
         }
         rows.push(r);
     }
-    let add = row()
-        .key("add-folder")
-        .w_full()
-        .gap(8.0)
-        .px(if mac { 10.0 } else { 14.0 })
-        .py(if mac { 7.0 } else { 12.0 })
-        .center_y()
-        .role("button")
-        .label("Add Folder…")
-        .focusable(true)
-        .hover(Color::WHITE.alpha(0.03))
-        .on_press_tx(|_: &mut App, tx: &mut Tx| pick_folder(tx))
-        .child(icon(&ic::PLUS_SMALL, 11.0).color(t.accent_text))
-        .child(text("Add Folder…").font(TextStyle::new(if mac { 12.0 } else { t.fs }, 400.0)).color(t.accent_text));
-    rows.push(add);
+    // Adding a folder picks one on this computer; a paired host would never
+    // see it (its folders are its own).
+    if s.admin {
+        let add = row()
+            .key("add-folder")
+            .w_full()
+            .gap(8.0)
+            .px(if mac { 10.0 } else { 14.0 })
+            .py(if mac { 7.0 } else { 12.0 })
+            .center_y()
+            .role("button")
+            .label("Add Folder…")
+            .focusable(true)
+            .hover(Color::WHITE.alpha(0.03))
+            .on_press_tx(|_: &mut App, tx: &mut Tx| pick_folder(tx))
+            .child(icon(&ic::PLUS_SMALL, 11.0).color(t.accent_text))
+            .child(text("Add Folder…").font(TextStyle::new(if mac { 12.0 } else { t.fs }, 400.0)).color(t.accent_text));
+        rows.push(add);
+    }
     rows
 }
 

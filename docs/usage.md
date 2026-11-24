@@ -76,7 +76,15 @@ shows a QR code.
 To try it without Cloudflare: `agenthostd dev-relay` and
 `--relay-url ws://127.0.0.1:8787`; `agenthost remote pair '<qr payload>' --state phone.json`
 pairs the CLI as a device, and `agenthost --remote phone.json …` runs any
-command through the relay.
+command through the relay. The desktop app pairs too: Settings → General →
+Connection → "Pair with a Remote Host…" (or the button on its offline
+screen) pastes the same payload, shows the 6-digit code to compare, and from
+then on the laptop starts sessions and answers approvals through the relay —
+pairing once, reconnecting on its own, keeping its keys in `remote.json`
+(`$AGENTHOST_REMOTE` to choose the file, the same one the CLI's `--state`
+writes). A paired app gets no policy rights by design: workspaces,
+connectors, devices and webhook automations are read-only over the tunnel
+and stay managed from the host's own desktop.
 
 ## Notifications
 

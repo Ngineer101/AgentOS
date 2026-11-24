@@ -1039,10 +1039,46 @@ fn home(s: &App, t: &Theme) -> El {
     let mut c = col().key("home").w_full().grow(1.0).min_h(0.0).center().gap(10.0).px(24.0);
     c = c.child(el().w(64.0).h(64.0).pixels(crate::brand::logo()));
     if let Conn::Down(e) = &s.conn {
-        return c
+        let mut d = c
             .child(text("Not connected to the host").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
-            .child(t.small(format!("{e}")).wrap().align(rune::Align::Center).max_w(460.0))
-            .child(t.small("The app keeps retrying. Is agenthostd running?").wrap().align(rune::Align::Center).max_w(460.0));
+            .child(t.small(format!("{e}")).wrap().align(rune::Align::Center).max_w(460.0));
+        if s.link_remote {
+            // A paired connection that dropped: the host is asleep, or the
+            // relay is unreachable; only time (or its owner) fixes that.
+            d = d.child(
+                t.small("The host may be asleep or the relay unreachable. The app keeps retrying.")
+                    .wrap()
+                    .align(rune::Align::Center)
+                    .max_w(460.0),
+            );
+            d = d.child(
+                row().gap(8.0).pt(6.0).child(
+                    t.button("Pair with Another Host…", Btn::Default, None, |s: &mut App| {
+                        s.open_settings(Tab::General);
+                        s.start_remote_pair();
+                    })
+                    .key("pair-other"),
+                ),
+            );
+        } else {
+            d = d.child(
+                t.small("The app keeps retrying. Is agenthostd running?").wrap().align(rune::Align::Center).max_w(460.0),
+            );
+            let mut buttons = row().gap(8.0).pt(6.0);
+            if let Some(name) = s.remote_host.clone() {
+                let label = format!("Connect to {name}");
+                buttons = buttons.child(t.button(&label, Btn::Primary, None, move |s: &mut App| s.connect_remote()).key("connect-remote"));
+            }
+            buttons = buttons.child(
+                t.button("Pair with a Remote Host…", Btn::Default, None, |s: &mut App| {
+                    s.open_settings(Tab::General);
+                    s.start_remote_pair();
+                })
+                .key("pair-remote"),
+            );
+            d = d.child(buttons);
+        }
+        return d;
     }
     c.child(text("No Session Selected").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
         .child(t.small(format!("Start a session with {}, or a quick task with {}.", keys(s.look, Cmd::NewSession), keys(s.look, Cmd::QuickTask))).wrap().align(rune::Align::Center))
@@ -1170,6 +1206,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),
+                Some(Item::new("Pair with a Remote Host…", String::new(), |s, tx| run(s, Cmd::PairRemoteHost, tx))),
                 Some(Item::new("Keyboard Shortcuts", keys(look, Cmd::Shortcuts), |s, tx| run(s, Cmd::Shortcuts, tx))),
                 None,
                 Some(Item::new("Quit", keys(look, Cmd::Quit), |s, tx| run(s, Cmd::Quit, tx))),

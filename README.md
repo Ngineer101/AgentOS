@@ -110,6 +110,12 @@ scripts/install.sh --relay wss://agenthost-relay.<your-subdomain>.workers.dev
 agenthost device pair         # shows a QR code (or use Settings → Devices on the desktop)
 ```
 
+Any paired device — the iPhone app, the CLI (`agenthost remote pair`), or the
+desktop app on another computer (Settings → General → Connection) — gets
+sessions and approvals through the relay, never policy: management stays on
+the host's own screen. See [docs/usage.md](docs/usage.md#remote-access) for
+the CLI and desktop pairing in one place.
+
 See [relay/README.md](relay/README.md) for what the relay stores and logs. No
 Cloudflare account? `agenthostd dev-relay` runs one locally for testing.
 

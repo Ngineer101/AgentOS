@@ -115,6 +115,7 @@ Nothing here was run on macOS. The macOS code paths (Seatbelt through
 | Replayed or altered frames close the connection, state intact | ✅ tests |
 | Revoked device disconnected in < 2 s and cannot reconnect | ✅ dev relay test; ✅ by hand through the deployed Worker: a connected remote CLI was dropped 0.2 s after revoke, later connections refused (4403) |
 | No open network ports | ✅ `ss -ltnp` shows none for an idle `agenthostd`; see deviations for per-session loopback ports |
+| The desktop app pairs as a device | ✅ model and bridge tests through the dev relay: paste the payload, compare the 6-digit code, connect, run a session over the tunnel, an admin method refused (`workspace.add`), revoked once and not retried; a computer with its own host in use is not switched by pairing. Settings pages render read-only with a note (checked headless in both looks). ❌ not tried against the deployed Worker |
 
 ## Deployed relay check (16 Nov 2026)
 
@@ -127,6 +128,15 @@ is refused. The host listened on no TCP port throughout.
 
 ## Decisions made while building (worth reviewing)
 
+- **A paired desktop stays read-only.** The desktop app can pair with a remote
+  host through the relay like the CLI and the phone, but a paired connection
+  holds phone capabilities on purpose: sessions and approvals, never policy.
+  Admin methods stay reachable only from the host's own socket, so keys
+  lifted from a laptop (a 0600 `remote.json`) cannot reconfigure the host,
+  and `device.revoke` ends them. If full remote management is ever wanted,
+  the pairing protocol grows a device kind and the host grants it
+  deliberately at pair-confirm — `PairHello` and that prompt are the only
+  places that would change.
 - **Egress proxy listens on loopback.** `sandbox-runtime` bridges the sandbox to
   a TCP port on the host, so each live session has two ephemeral
   `127.0.0.1` ports. On Linux the proxy refuses connections from sockets owned

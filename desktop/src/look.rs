@@ -384,6 +384,54 @@ impl Theme {
         b = if on { b.fill(self.accent).child(icon(&crate::icons::CHECK, s - 4.0).color(Color::WHITE)) } else { b.border(1.0, white(0.3)) };
         b
     }
+    // ---- controls this connection may not use --------------------------------------------
+    // A paired device gets sessions and approvals, never policy: when the app
+    // is connected that way, these are the same controls drawn dimmed, with
+    // their handlers left off (the host would refuse them anyway).
+
+    /// A push button drawn dimmed and inert; a note by it says where the
+    /// action still works.
+    pub fn button_dimmed(&self, t: &str, kind: Btn, hint: Option<&str>) -> El {
+        self.button_el(t, kind, hint).disabled(true).opacity(0.55)
+    }
+    /// A small bezel button drawn dimmed and inert (see [`Theme::button_dimmed`]).
+    pub fn small_button_dimmed(&self, t: &str) -> El {
+        self.small_button_el(t, false).disabled(true).opacity(0.55)
+    }
+    /// An on/off switch drawn dimmed and inert (see [`Theme::button_dimmed`]).
+    pub fn switch_dimmed(&self, on: bool, label: &str) -> El {
+        let (w, h) = if self.mac() { (32.0, 18.0) } else { (40.0, 22.0) };
+        let knob = h - 4.0;
+        let track = if on { self.accent } else { white(if self.mac() { 0.12 } else { 0.18 }) };
+        row()
+            .size(w, h)
+            .radius(h / 2.0)
+            .fill(track)
+            .px(2.0)
+            .center_y()
+            .role("switch")
+            .label(label.to_string())
+            .checked(on)
+            .disabled(true)
+            .opacity(0.55)
+            .child(el().w(if on { w - knob - 4.0 } else { 0.0 }))
+            .child(el().size(knob, knob).radius(knob / 2.0).fill(c("#e8e8e8")).shadow(1.0, 2.0, black(0.3)))
+    }
+    /// A checkbox drawn dimmed and inert (see [`Theme::button_dimmed`]).
+    pub fn checkbox_dimmed(&self, on: bool, label: &str) -> El {
+        let s = if self.mac() { 14.0 } else { 18.0 };
+        let mut b = row()
+            .size(s, s)
+            .center()
+            .radius(if self.mac() { 3.5 } else { 5.0 })
+            .role("checkbox")
+            .label(label.to_string())
+            .checked(on)
+            .disabled(true)
+            .opacity(0.55);
+        b = if on { b.fill(self.accent).child(icon(&crate::icons::CHECK, s - 4.0).color(Color::WHITE)) } else { b.border(1.0, white(0.3)) };
+        b
+    }
     /// A radio button's circle.
     pub fn radio(&self, on: bool, enabled: bool) -> El {
         let s = if self.mac() { 14.0 } else { 16.0 };

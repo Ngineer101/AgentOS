@@ -38,11 +38,13 @@ pub enum Cmd {
     Shortcuts,
     MainMenu,
     PairPhone,
+    /// Pair this app with a remote host (Settings → General).
+    PairRemoteHost,
     CheckHost,
     Quit,
 }
 
-const KEYED: [Cmd; 22] = [
+const KEYED: [Cmd; 23] = [
     Cmd::Archive,
     Cmd::NewSession,
     Cmd::QuickTask,
@@ -64,6 +66,7 @@ const KEYED: [Cmd; 22] = [
     Cmd::Quit,
     Cmd::Send,
     Cmd::PairPhone,
+    Cmd::PairRemoteHost,
     Cmd::CheckHost,
 ];
 
@@ -122,7 +125,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
         Cmd::MainMenu => if mac { "" } else { "F10" },
         Cmd::Quit => if mac { "⌘Q" } else { "Ctrl+Q" },
-        Cmd::PairPhone | Cmd::CheckHost | Cmd::RenameSession | Cmd::CopyBranch => "",
+        Cmd::PairPhone | Cmd::PairRemoteHost | Cmd::CheckHost | Cmd::RenameSession | Cmd::CopyBranch => "",
     };
     s.to_string()
 }
@@ -304,6 +307,10 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
                 s.call(Tag::PairStart, m::DEVICE_PAIR_START, json!({}));
             }
         }
+        Cmd::PairRemoteHost => {
+            s.open_settings(Tab::General);
+            s.start_remote_pair();
+        }
         Cmd::CheckHost => {
             s.open_settings(Tab::General);
             s.call(Tag::HostInfo, m::HOST_CHECK, json!({}));
@@ -340,6 +347,7 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
     vec![
         (Some("Settings…"), None, Some("cmd+comma"), |s, tx| run(s, Cmd::Settings, tx)),
         (Some("Pair iPhone…"), None, None, |s, tx| run(s, Cmd::PairPhone, tx)),
+        (Some("Pair with a Remote Host…"), None, None, |s, tx| run(s, Cmd::PairRemoteHost, tx)),
         (Some("Check Host"), None, None, |s, tx| run(s, Cmd::CheckHost, tx)),
         (Some("New Session…"), Some("File"), Some("cmd+n"), |s, tx| run(s, Cmd::NewSession, tx)),
         (Some("New Quick Task…"), Some("File"), Some("cmd+shift+n"), |s, tx| run(s, Cmd::QuickTask, tx)),

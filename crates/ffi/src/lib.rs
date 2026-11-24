@@ -412,19 +412,19 @@ impl RemoteClient {
                 let _ =
                     tokio::time::timeout(Duration::from_secs(2), closed.wait_for(|r| r.is_some()))
                         .await;
-                let reason = closed
-                    .borrow()
-                    .clone()
-                    .unwrap_or_else(|| "connection closed".to_string());
                 // Before `on_closed`, so the listener sees `is_connected()` false.
                 open.store(false, Ordering::SeqCst);
                 if by_app.load(Ordering::SeqCst) {
                     return;
                 }
+                let (reason, code) = match closed.borrow().clone() {
+                    Some(c) => (c.to_string(), c.code),
+                    None => ("connection closed".to_string(), 0),
+                };
                 let code = if revoked {
                     CLOSE_DEVICE_REVOKED
                 } else {
-                    close_code_from_reason(&reason)
+                    code
                 };
                 listener.on_closed(reason, code);
             });
@@ -741,40 +741,17 @@ impl Drop for ScreenSession {
     }
 }
 
-/// Pull the close code out of the CLI's closed-reason text
-/// (`"… (code 4401: …)"`), or 0 when there is none.
-fn close_code_from_reason(reason: &str) -> u16 {
-    reason
-        .split("(code ")
-        .nth(1)
-        .map(|rest| {
-            rest.chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect::<String>()
-        })
-        .and_then(|d| d.parse().ok())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn close_codes_are_parsed() {
-        let r = Closed {
-            code: 4401,
-            reason: "bye".into(),
-        }
-        .to_string();
-        assert_eq!(close_code_from_reason(&r), 4401);
-        let r = Closed {
-            code: 4404,
-            reason: String::new(),
-        }
-        .to_string();
-        assert_eq!(close_code_from_reason(&r), 4404);
-        assert_eq!(close_code_from_reason("tunnel integrity failure: x"), 0);
+    fn closed_carries_its_code() {
+        let c = Closed { code: 4401, reason: "bye".into() };
+        assert_eq!(c.code, 4401);
+        assert!(c.to_string().contains("4401"));
+        assert_eq!(Closed::other("tunnel integrity failure: x").code, 0);
+        assert_eq!(Closed::other("tunnel integrity failure: x").to_string(), "tunnel integrity failure: x");
     }
 
     #[test]
