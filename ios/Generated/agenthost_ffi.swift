@@ -2670,7 +2670,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_agenthost_ffi_checksum_func_pair() != 19282) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agenthost_ffi_checksum_func_parse_pairing_qr() != 15244) {
+    if (uniffi_agenthost_ffi_checksum_func_parse_pairing_qr() != 11631) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agenthost_ffi_checksum_func_protocol_constants() != 59933) {
