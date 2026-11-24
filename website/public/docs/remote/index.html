@@ -20,7 +20,7 @@
       <a class="hide-s" href="/#how">How it works</a>
       <a href="/#setup">Setup</a>
       <a href="/docs/" aria-current="page">Docs</a>
-      <a class="btn small" href="https://github.com/Ngineer101/relay">GitHub</a>
+      <a class="btn small" href="https://github.com/Ngineer101/AgentOS">GitHub</a>
     </nav>
   </div>
 </header>
@@ -31,9 +31,9 @@
       <ul><li><a href="/docs/">Getting started</a></li><li><a href="/docs/usage/">Using AgentOS</a></li><li><a href="/docs/remote/" aria-current="page">Remote access and iOS</a></li><li><a href="/docs/security/">Security model</a></li></ul>
       <h2>Reference</h2>
       <ul>
-        <li><a href="https://github.com/Ngineer101/relay/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
-        <li><a href="https://github.com/Ngineer101/relay/blob/main/docs/status.md">What has been verified</a></li>
-        <li><a href="https://github.com/Ngineer101/relay/blob/main/CONTRIBUTING.md">Contributing</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/CONTRIBUTING.md">Contributing</a></li>
       </ul>
     </nav>
   </aside>
@@ -64,7 +64,7 @@
 <span class="p">$ </span>xcodegen generate
 <span class="p">$ </span>open AgentHost.xcodeproj</code></pre>
 <p>Pick your team under Signing &amp; Capabilities, then run on your iPhone. The app needs iOS 17 or later.</p>
-<p class="note">The iPhone app has had the least testing of any part of the project. See <a href="https://github.com/Ngineer101/relay/blob/main/ios/README.md">ios/README.md</a> for the details and known limits.</p>
+<p class="note">The iPhone app has had the least testing of any part of the project. See <a href="https://github.com/Ngineer101/AgentOS/blob/main/ios/README.md">ios/README.md</a> for the details and known limits.</p>
 
 <h3 id="ios-does">What the app does</h3>
 <ul>
@@ -93,7 +93,7 @@
 <p>Without such a relay, the host can send to Apple itself with your team's key; the app asks for it once per host. Check the setup with <code>agenthost push status</code> and <code>agenthost push test</code>.</p>
 
 <h2 id="relay-sees">What the relay can see</h2>
-<p>Everything between your phones and the host is end-to-end encrypted, so the relay forwards frames it cannot read. The one exception is webhooks: services like Sentry send plain HTTPS requests, which the relay seals to your host in memory as they arrive. The <a href="/docs/security/">security model</a> and the <a href="https://github.com/Ngineer101/relay/blob/main/docs/relay-protocol.md">relay protocol</a> have the details.</p>
+<p>Everything between your phones and the host is end-to-end encrypted, so the relay forwards frames it cannot read. The one exception is webhooks: services like Sentry send plain HTTPS requests, which the relay seals to your host in memory as they arrive. The <a href="/docs/security/">security model</a> and the <a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">relay protocol</a> have the details.</p>
 
     <div class="pager"><a class="btn" href="/docs/usage/">← Using AgentOS</a><a class="btn" href="/docs/security/">Security model →</a></div>
   </main>
@@ -104,8 +104,8 @@
     <nav aria-label="Footer">
       <a href="/docs/">Docs</a>
       <a href="/docs/security/">Security</a>
-      <a href="https://github.com/Ngineer101/relay">GitHub</a>
-      <a href="https://github.com/Ngineer101/relay/issues">Issues</a>
+      <a href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+      <a href="https://github.com/Ngineer101/AgentOS/issues">Issues</a>
     </nav>
   </div>
 </footer>

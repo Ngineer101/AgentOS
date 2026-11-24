@@ -70,7 +70,7 @@ you want to use, installed and logged in. On Linux also `bubblewrap`,
 allowed for bubblewrap: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
 
 ```sh
-git clone https://github.com/Ngineer101/relay.git agentos && cd agentos
+git clone https://github.com/Ngineer101/AgentOS.git && cd AgentOS
 scripts/install.sh            # build and install the host, the CLI and the desktop app
 agenthost status              # sandbox health, agents, login state
 ```
