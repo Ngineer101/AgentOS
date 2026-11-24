@@ -1843,6 +1843,11 @@ fn accept_pairing(rt: &tokio::runtime::Runtime, socket: std::path::PathBuf) {
     });
 }
 
+/// The pair request the form is waiting on.
+fn pair_attempt(app: &model::App) -> u64 {
+    app.pair_remote.as_ref().map_or(0, |p| p.attempt)
+}
+
 /// A paired host's keys, as the pairing handshake hands them over.
 fn sample_state() -> agenthost_cli::remote::DeviceState {
     agenthost_cli::remote::DeviceState {
@@ -1862,18 +1867,22 @@ fn sample_state() -> agenthost_cli::remote::DeviceState {
 /// with nothing local of its own switches at once — and remembers it.
 #[test]
 fn remote_pairing_result_switches_a_laptop_with_no_local_host() {
+    // The env vars below are the whole process's: no other test may start a
+    // bridge (which reads them) meanwhile.
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::Builder::new().prefix("ahmp").tempdir_in("/tmp").unwrap();
+    // A laptop that has remembered nothing yet: no config folder exists, and
+    // the keys are the first thing kept in it.
     let cfg = dir.path().join("cfg");
-    std::fs::create_dir_all(&cfg).unwrap();
     let _env = EnvGuard::new(vec![
         ("AGENTHOST_DESKTOP_DIR", cfg.to_string_lossy().into_owned()),
-        ("AGENTHOST_REMOTE", dir.path().join("remote.json").to_string_lossy().into_owned()),
+        ("AGENTHOST_REMOTE", cfg.join("remote.json").to_string_lossy().into_owned()),
     ]);
     let mut app = model::init();
     app.conn = Conn::Down("no host here".into());
 
     // A stray code with no form open is dropped.
-    app.apply(bridge::FromHost::PairCode("314 159".into()));
+    app.apply(bridge::FromHost::PairCode { attempt: 0, code: "314 159".into() });
     assert!(app.pair_remote.is_none());
 
     app.start_remote_pair();
@@ -1881,11 +1890,25 @@ fn remote_pairing_result_switches_a_laptop_with_no_local_host() {
     app.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
     app.send_remote_pair();
     assert!(app.pair_remote.as_ref().is_some_and(|p| p.busy));
-    app.apply(bridge::FromHost::PairCode("314 159".into()));
+    let first = pair_attempt(&app);
+    app.apply(bridge::FromHost::PairCode { attempt: first, code: "314 159".into() });
     assert!(app.pair_remote.as_ref().is_some_and(|p| p.code.as_deref() == Some("314 159")));
 
+    // Closing the form gives that request up: a late answer to it keeps no
+    // keys and switches nothing, with the form closed or open on a new try.
+    app.cancel_remote_pair();
+    app.apply(bridge::FromHost::PairResult { attempt: first, result: Ok(sample_state()) });
+    assert!(app.remote_host.is_none() && !bridge::remote_state_path().exists(), "a cancelled pairing keeps nothing");
+    assert!(matches!(app.conn, Conn::Down(_)) && !crate::prefs::load().prefer_remote);
+    app.start_remote_pair();
+    app.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
+    app.send_remote_pair();
+    app.apply(bridge::FromHost::PairCode { attempt: first, code: "271 828".into() });
+    app.apply(bridge::FromHost::PairResult { attempt: first, result: Err("too late".into()) });
+    assert!(app.pair_remote.as_ref().is_some_and(|p| p.busy && p.code.is_none() && p.error.is_none()), "the new try is not answered by the old one");
+
     // The host accepts.
-    app.apply(bridge::FromHost::PairResult(Ok(sample_state())));
+    app.apply(bridge::FromHost::PairResult { attempt: pair_attempt(&app), result: Ok(sample_state()) });
     assert!(app.pair_remote.is_none(), "the form closes on success");
     assert_eq!(app.remote_host.as_deref(), Some("workstation"));
     let saved = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
@@ -1893,12 +1916,22 @@ fn remote_pairing_result_switches_a_laptop_with_no_local_host() {
     assert!(app.conn == Conn::Connecting, "a laptop with no host of its own goes there at once");
     assert!(crate::prefs::load().prefer_remote, "and comes back there next launch");
     assert!(app.notice.as_deref().is_some_and(|n| n.contains("Paired with workstation")));
+
+    // The bridge says where it is headed before it gets there, so a paired
+    // host that is asleep is still shown as the paired host, read-only.
+    app.apply(bridge::FromHost::Link { remote: true, switched: true });
+    assert!(app.link_remote && !app.admin);
+    app.apply(bridge::FromHost::Disconnected("the host is offline (code 4404)".into()));
+    assert!(app.link_remote, "being down does not change which host this is");
+    app.apply(bridge::FromHost::Link { remote: false, switched: true });
+    assert!(!app.link_remote && app.admin);
 }
 
 /// The same result on a computer whose own host is in use: nothing switches,
 /// and the next launch is still this computer's.
 #[test]
 fn remote_pairing_result_leaves_a_live_local_host_alone() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::Builder::new().prefix("ahmq").tempdir_in("/tmp").unwrap();
     let cfg = dir.path().join("cfg");
     std::fs::create_dir_all(&cfg).unwrap();
@@ -1912,7 +1945,7 @@ fn remote_pairing_result_leaves_a_live_local_host_alone() {
     app.start_remote_pair();
     app.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
     app.send_remote_pair();
-    app.apply(bridge::FromHost::PairResult(Ok(sample_state())));
+    app.apply(bridge::FromHost::PairResult { attempt: pair_attempt(&app), result: Ok(sample_state()) });
 
     // Still on the local host; the keys are kept but nothing is hijacked.
     assert!(app.conn == Conn::Connected);
@@ -1926,7 +1959,7 @@ fn remote_pairing_result_leaves_a_live_local_host_alone() {
     app2.start_remote_pair();
     app2.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
     app2.send_remote_pair();
-    app2.apply(bridge::FromHost::PairResult(Err("pairing refused: not today".into())));
+    app2.apply(bridge::FromHost::PairResult { attempt: pair_attempt(&app2), result: Err("pairing refused: not today".into()) });
     assert!(app2.pair_remote.as_ref().is_some_and(|p| !p.busy && p.error.as_deref() == Some("pairing refused: not today")));
     assert!(app2.remote_host.is_none(), "no keys were kept for a refused pairing");
 }
@@ -1968,8 +2001,9 @@ fn remote_pairing_connects_runs_and_stays_read_only() {    let _turn = HOST_TEST
     });
 
     // Nothing local was in use, so the app went there by itself — and will
-    // next launch too.
-    pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin);
+    // next launch too. (Wait for the host's workspaces as well: the quick
+    // task below starts in one.)
+    pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin && a.info.is_some() && !a.workspaces.is_empty());
     assert!(crate::prefs::load().prefer_remote, "a laptop with no host of its own comes back to the paired one");
     let state = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
     assert_eq!(state.host_name, app.remote_host.clone().unwrap());

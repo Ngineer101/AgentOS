@@ -970,6 +970,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
             code: None,
             error: None,
             busy: false,
+            attempt: 0,
         });
     }),
     ("pair-remote-code", |s| {
@@ -981,6 +982,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
             code: Some("314 159".into()),
             error: None,
             busy: true,
+            attempt: 0,
         });
     }),
     // Connected as a paired device: the host's settings are read-only here.

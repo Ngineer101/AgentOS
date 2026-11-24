@@ -484,7 +484,7 @@ fn pair_remote_form(p: &crate::model::PairRemote, t: &Theme) -> El {
                 .center_y()
                 .child(t.field(&p.name, "Desktop on laptop", |s| &mut s.pair_remote.as_mut().unwrap().name))
                 .child(t.small_button("Pair", |s| s.send_remote_pair()).key("pair-send"))
-                .child(t.small_button("Cancel", |s| s.pair_remote = None).key("pair-cancel")),
+                .child(t.small_button("Cancel", |s| s.cancel_remote_pair()).key("pair-cancel")),
         ));
     }
     if let Some(e) = &p.error {
@@ -492,7 +492,7 @@ fn pair_remote_form(p: &crate::model::PairRemote, t: &Theme) -> El {
     }
     let mut c = col().w_full().gap(if t.mac() { 6.0 } else { 10.0 }).child(t.group(rows, if t.mac() { 12.0 } else { 0.0 }));
     if p.busy {
-        c = c.child(row().w_full().pt(2.0).child(el().grow(1.0)).child(t.small_button("Close", |s| s.pair_remote = None).key("pair-close")));
+        c = c.child(row().w_full().pt(2.0).child(el().grow(1.0)).child(t.small_button("Close", |s| s.cancel_remote_pair()).key("pair-close")));
     }
     c
 }

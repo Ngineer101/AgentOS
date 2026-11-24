@@ -513,6 +513,9 @@ pub struct PairRemote {
     pub error: Option<String>,
     /// A pair request is under way; the fields stand still until it ends.
     pub busy: bool,
+    /// Which request that is: answers to any other (one cancelled, or from a
+    /// form since closed) are dropped.
+    pub attempt: u64,
 }
 
 pub struct App {
@@ -593,6 +596,8 @@ pub struct App {
     pub pairing: Option<Pairing>,
     /// Pairing this app with a remote host.
     pub pair_remote: Option<PairRemote>,
+    /// Pair requests sent so far; the next one's [`PairRemote::attempt`].
+    pub pair_attempts: u64,
     /// A paired remote host exists to connect to (its name).
     pub remote_host: Option<String>,
     /// The current connection goes through the relay, as a paired device
@@ -780,6 +785,7 @@ pub fn init() -> App {
         project_roots: vec![],
         pairing: None,
         pair_remote: None,
+        pair_attempts: 0,
         remote_host: None,
         link_remote: false,
         admin: true,
@@ -1248,6 +1254,7 @@ impl App {
     /// Open the form that pairs this app with a remote host: paste the pairing
     /// code that host's `agenthost device pair` shows.
     pub fn start_remote_pair(&mut self) {
+        self.cancel_remote_pair();
         let name = if self.hostname.is_empty() {
             "Desktop".to_string()
         } else {
@@ -1259,9 +1266,21 @@ impl App {
             code: None,
             error: None,
             busy: false,
+            attempt: 0,
         });
         if let Some(p) = self.pair_remote.as_mut() {
             p.payload.focused = true;
+        }
+    }
+
+    /// Close the pairing form, giving up a request under way: its answer, if
+    /// one still comes, changes nothing.
+    pub fn cancel_remote_pair(&mut self) {
+        let Some(p) = self.pair_remote.take() else { return };
+        if p.busy {
+            if let Some(b) = &self.bridge {
+                b.send(ToHost::CancelPair);
+            }
         }
     }
 
@@ -1279,13 +1298,16 @@ impl App {
             let n = p.name.text.trim().to_string();
             if n.is_empty() { "AgentOS Desktop".to_string() } else { n }
         };
+        self.pair_attempts += 1;
+        let attempt = self.pair_attempts;
         if let Some(p) = self.pair_remote.as_mut() {
             p.busy = true;
             p.error = None;
             p.code = None;
+            p.attempt = attempt;
         }
         if let Some(b) = &self.bridge {
-            b.send(ToHost::PairRemote { payload, name });
+            b.send(ToHost::PairRemote { attempt, payload, name });
         }
     }
 
@@ -1295,7 +1317,13 @@ impl App {
         match r {
             Ok(st) => {
                 let name = st.host_name.clone();
-                if let Err(e) = st.save(&remote_state_path()) {
+                // A laptop that has remembered nothing yet has no config
+                // folder; the keys are the first thing kept there.
+                let path = remote_state_path();
+                if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if let Err(e) = st.save(&path) {
                     if let Some(p) = self.pair_remote.as_mut() {
                         p.error = Some(format!("Paired, but the keys could not be kept: {e:#}"));
                         p.busy = false;
@@ -1349,6 +1377,79 @@ impl App {
         let mut prefs = crate::prefs::load();
         prefs.prefer_remote = false;
         crate::prefs::save(&prefs);
+    }
+
+    /// The app talks to another host from here on: everything the last one
+    /// said, and everything on screen that names its sessions, workspaces or
+    /// connectors, goes. Settings, the pairing form and the window stay.
+    fn forget_host(&mut self) {
+        if self.live.take().is_some() {
+            self.mic = Mic::Idle;
+            self.send_after_dictation = false;
+        }
+        if matches!(self.screen, Screen::Session(_)) {
+            self.screen = Screen::Home;
+        }
+        self.menu = None;
+        self.new_open = false;
+        self.auto_open = false;
+        self.viewing = None;
+        self.info = None;
+        self.voice = None;
+        self.screen_share = None;
+        self.workspaces.clear();
+        self.sessions.clear();
+        self.archived.clear();
+        self.connectors.clear();
+        self.builtins.clear();
+        self.devices.clear();
+        self.approvals.clear();
+        self.project_roots.clear();
+        self.automations.clear();
+        self.runs.clear();
+        self.notes.clear();
+        self.suggestions.clear();
+        self.transcripts.clear();
+        self.subscribed.clear();
+        self.sub_ids.clear();
+        self.behind.clear();
+        self.expanded.clear();
+        self.show_all.clear();
+        self.prompt = TextEdit::new("");
+        self.prompt_for = None;
+        self.drafts.clear();
+        self.files.clear();
+        self.images.clear();
+        self.signing_in.clear();
+        self.toasts.clear();
+        self.toasted_approvals.clear();
+        self.side_closed.clear();
+        self.side_tab.clear();
+        self.side_pending.clear();
+        self.pairing = None;
+        self.sel_agent = None;
+        self.sel_ws = None;
+        self.sel_conn = None;
+        self.sel_root = None;
+        self.sel_auto = None;
+        self.sel_note = None;
+        self.new_ws = None;
+        self.new_agent = None;
+        self.new_note_ws = None;
+        self.start_note = None;
+        self.pick_added = None;
+        self.host_for = None;
+        self.renaming = None;
+        self.session_rename = None;
+        self.agent_open = None;
+        self.hover_row = None;
+        self.confirm_archive = None;
+        self.confirm_delete_auto = None;
+        self.confirm_rotate = None;
+        self.confirm_delete_note = None;
+        self.adding_profile = false;
+        self.adding_connector = false;
+        self.adding_workspace = false;
     }
 
     /// Add a folder as a workspace; from the New session sheet it's then selected.
@@ -1872,12 +1973,27 @@ impl App {
                     self.remote_host = name;
                 }
             }
-            FromHost::PairCode(code) => {
-                if let Some(p) = &mut self.pair_remote {
+            FromHost::Link { remote, switched } => {
+                self.link_remote = remote;
+                // The local socket manages its host and a paired device never
+                // does; `Connected` says what this link really holds.
+                self.admin = !remote;
+                if switched {
+                    self.forget_host();
+                }
+            }
+            // Answers to the request the form is waiting on; any other is from
+            // one cancelled or replaced.
+            FromHost::PairCode { attempt, code } => {
+                if let Some(p) = self.pair_remote.as_mut().filter(|p| p.busy && p.attempt == attempt) {
                     p.code = Some(code);
                 }
             }
-            FromHost::PairResult(r) => self.paired_remotely(r),
+            FromHost::PairResult { attempt, result } => {
+                if self.pair_remote.as_ref().is_some_and(|p| p.busy && p.attempt == attempt) {
+                    self.paired_remotely(result);
+                }
+            }
             FromHost::Connected { admin, remote } => {
                 self.conn = Conn::Connected;
                 self.admin = admin;
