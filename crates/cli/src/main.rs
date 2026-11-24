@@ -99,6 +99,9 @@ enum Cmd {
     /// Automations: sessions that run on a schedule, from a webhook or by hand.
     #[command(subcommand, alias = "auto")]
     Automation(AutoCmd),
+    /// Notes: ideas and todos kept with a workspace for later.
+    #[command(subcommand)]
+    Note(NoteCmd),
     /// Send any protocol method.
     Raw {
         method: String,
@@ -319,6 +322,99 @@ enum AutoCmd {
     Rm { id: String },
     /// Check a cron expression and show its next times.
     Check { cron: String },
+}
+
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// Open notes (with --all, done ones too), by workspace.
+    Ls {
+        /// Only this workspace (id, name or folder).
+        #[arg(long, short)]
+        workspace: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Add a note; the first line is its title.
+    Add {
+        text: String,
+        /// Workspace id, name or folder.
+        #[arg(long, short)]
+        workspace: String,
+    },
+    /// Replace a note's text.
+    Edit { id: String, text: String },
+    /// Mark a note done.
+    Done { id: String },
+    /// Open a done note again.
+    Reopen { id: String },
+    /// Delete a note (sessions started from it stay).
+    Rm { id: String },
+}
+
+async fn note_cmd(c: &Client, cmd: NoteCmd, json_out: bool) -> Result<()> {
+    let show = |n: &Note| -> Result<()> {
+        if json_out {
+            print_json(&serde_json::to_value(n)?);
+        } else {
+            print_note(n);
+        }
+        Ok(())
+    };
+    match cmd {
+        NoteCmd::Ls { workspace, all } => {
+            let ws = match &workspace {
+                Some(w) => Some(resolve_workspace(c, w).await?.workspace_id),
+                None => None,
+            };
+            let list: Vec<Note> = c.call(m::NOTE_LIST, json!({"workspace_id": ws})).await?;
+            let list: Vec<Note> = list.into_iter().filter(|n| all || n.done_at.is_none()).collect();
+            if json_out {
+                print_json(&serde_json::to_value(&list)?);
+                return Ok(());
+            }
+            if list.is_empty() {
+                println!("No notes. Add one with `agenthost note add \"…\" -w <workspace>`.");
+            }
+            let names: Vec<Workspace> = c.call(m::WORKSPACE_LIST, json!({})).await?;
+            let mut last = None;
+            for n in &list {
+                if last != Some(&n.workspace_id) {
+                    let name = names.iter().find(|w| w.workspace_id == n.workspace_id).map(|w| w.name.as_str()).unwrap_or(&n.workspace_id);
+                    println!("{name}");
+                    last = Some(&n.workspace_id);
+                }
+                print_note(n);
+            }
+        }
+        NoteCmd::Add { text, workspace } => {
+            let ws = resolve_workspace(c, &workspace).await?;
+            show(&c.call(m::NOTE_CREATE, json!({"workspace_id": ws.workspace_id, "text": text})).await?)?
+        }
+        NoteCmd::Edit { id, text } => show(&c.call(m::NOTE_UPDATE, json!({"note_id": id, "text": text})).await?)?,
+        NoteCmd::Done { id } => show(&c.call(m::NOTE_UPDATE, json!({"note_id": id, "done": true})).await?)?,
+        NoteCmd::Reopen { id } => show(&c.call(m::NOTE_UPDATE, json!({"note_id": id, "done": false})).await?)?,
+        NoteCmd::Rm { id } => {
+            let _: Value = c.call(m::NOTE_DELETE, json!({"note_id": id})).await?;
+            if !json_out {
+                println!("Deleted {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// "  [ ] Title  (note_…, 2 sessions)" and the body's first line under it.
+fn print_note(n: &Note) {
+    let mark = if n.done_at.is_some() { "[x]" } else { "[ ]" };
+    let sessions = match n.session_ids.len() {
+        0 => String::new(),
+        1 => ", 1 session".into(),
+        k => format!(", {k} sessions"),
+    };
+    println!("  {mark} {}  ({}{sessions})", n.title(), n.note_id);
+    if let Some(line) = n.body().lines().map(str::trim).find(|l| !l.is_empty()) {
+        println!("      {line}");
+    }
 }
 
 /// "in 3h 20m", "5m ago".
@@ -980,6 +1076,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Screen(cmd) => screen_cmd(&c, cmd, remote_state.as_deref(), json_out).await?,
         Cmd::Push(cmd) => push_cmd(&c, cmd, json_out).await?,
         Cmd::Automation(cmd) => automation_cmd(&c, cmd, json_out).await?,
+        Cmd::Note(cmd) => note_cmd(&c, cmd, json_out).await?,
         Cmd::Status => {
             let info: HostInfo = c.call(m::HOST_INFO, json!({})).await?;
             if json_out {

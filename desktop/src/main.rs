@@ -9,6 +9,7 @@ mod demo;
 mod icons;
 mod look;
 mod model;
+mod notes;
 mod prefs;
 mod session;
 mod settings;

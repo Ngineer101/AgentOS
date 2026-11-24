@@ -8,12 +8,14 @@ pub mod automation;
 pub mod hookseal;
 pub mod jsonrpc;
 pub mod methods;
+pub mod note;
 pub mod screen;
 pub mod tunnel;
 pub mod types;
 
 pub use jsonrpc::{Message, Notification, Request, Response, RpcError};
 pub use automation::*;
+pub use note::*;
 pub use types::*;
 
 /// Version of the client protocol. `hello` refuses clients on an older version.
@@ -27,7 +29,8 @@ pub use types::*;
 /// host needs no APNs key.
 /// 7: images sent with prompts can be read back (`attachment.read`).
 /// 8: pinned sessions (`session.pin`, `Session.pinned_at`).
-pub const PROTOCOL_VERSION: u32 = 8;
+/// 9: notes (`note.*`, `session.create` `note_id`).
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

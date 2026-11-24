@@ -70,6 +70,7 @@ icon!(SPARKLE, "ah-sparkle", 14.0, r#"<path d="M7 1.2C7.5 4.4 9.1 6.2 12.8 7 9.1
 icon!(STEPS, "ah-steps", 14.0, r#"<path d="M2.2 3.6l1.1 1.1 2-2.1M2.2 9.6l1.1 1.1 2-2.1M7.5 3.7h4.8M7.5 9.7h4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
 // Automations: a clock (scheduled, and the sidebar entry), a webhook's three linked nodes,
 // and a play triangle (by hand, Run Now).
+icon!(NOTE, "ah-note", 14.0, r#"<rect x="2" y="1.3" width="10" height="11.4" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M4.6 4.6h4.8M4.6 7h4.8M4.6 9.4h2.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#);
 icon!(CLOCK, "ah-clock", 14.0, r#"<circle cx="7" cy="7" r="5.8" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M7 3.8V7l2.2 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
 icon!(HOOK, "ah-hook", 14.0, r#"<circle cx="7" cy="3.2" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="3" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="11" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M6.1 4.8L3.9 9M7.9 4.8l2.2 4.2M4.8 10.6h4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#);
 icon!(PLAY, "ah-play", 14.0, r#"<path d="M4 2.6v8.8a.6.6 0 0 0 .9.5l7-4.4a.6.6 0 0 0 0-1L4.9 2.1a.6.6 0 0 0-.9.5z" fill="currentColor"/>"#);

@@ -152,6 +152,10 @@ final class AppModel: ObservableObject {
     /// Automations is shown (nil until then) and kept current by
     /// `automation.changed`. Not cached. See AppModel+Automations.swift.
     @Published var automations: [AutomationModel]?
+    /// The host's notes (protocol 9), loaded when Notes is shown (nil until
+    /// then) and kept current by `note.changed`. Not cached. See
+    /// AppModel+Notes.swift.
+    @Published var notes: [NoteModel]?
     /// Streaming side answers (`session.delta` with a `side_id`), by side id;
     /// replaced by the coalesced `side.message` event.
     @Published private(set) var sideStreaming: [String: String] = [:]
@@ -574,6 +578,7 @@ final class AppModel: ObservableObject {
         sessions = []
         archivedSessions = nil
         automations = nil
+        notes = nil
         approvals = []
         deviceName = nil
         transcripts = [:]
@@ -801,6 +806,9 @@ final class AppModel: ObservableObject {
         if automations != nil {
             await refreshAutomations()
         }
+        if notes != nil {
+            await refreshNotes()
+        }
         if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
             connectors = list
             iconCache = [:]
@@ -909,8 +917,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Start a session as one login of the agent (`profileId` from host info;
-    /// nil on hosts before agent profiles).
-    func createSession(workspaceId: String, agent: String, profileId: String?) async throws -> SessionInfo {
+    /// nil on hosts before agent profiles). From a note (`note`, in the same
+    /// workspace): the note lists the session, and its text waits in the
+    /// session's composer to edit and send.
+    func createSession(workspaceId: String, agent: String, profileId: String?, note: NoteModel? = nil) async throws -> SessionInfo {
+        let note = note.flatMap { $0.workspaceId == workspaceId ? $0 : nil }
         #if DEBUG
         if isDemo {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -919,6 +930,10 @@ final class AppModel: ObservableObject {
                                 createdAt: now, updatedAt: now, lastSeq: 0)
             upsert(s)
             transcripts[s.sessionId] = Transcript(sessionId: s.sessionId)
+            if let note {
+                drafts[s.sessionId] = note.text
+                noteStartedSession(note.noteId, sessionId: s.sessionId)
+            }
             if let i = workspaces.firstIndex(where: { $0.workspaceId == workspaceId }),
                workspaces[i].defaultAgent == nil {
                 workspaces[i].defaultAgent = agent
@@ -929,8 +944,13 @@ final class AppModel: ObservableObject {
         #endif
         var params: [String: Any] = ["workspace_id": workspaceId, "agent": agent]
         if let profileId { params["profile_id"] = profileId }
+        if let note { params["note_id"] = note.noteId }
         let s: SessionInfo = try await call(RPC.sessionCreate, params)
         upsert(s)
+        if let note {
+            drafts[s.sessionId] = note.text
+            noteStartedSession(note.noteId, sessionId: s.sessionId)
+        }
         open(s.sessionId)
         // The host may have set the workspace's default login.
         Task { await refreshWorkspaces() }
@@ -1056,6 +1076,7 @@ final class AppModel: ObservableObject {
             s.archivedAt = Int64(Date().timeIntervalSince1970 * 1000)
             s.state = SessionStateName.ended
             upsert(s)
+            notesDoneForArchived(sessionId)
             return
         }
         #endif
@@ -1168,6 +1189,8 @@ final class AppModel: ObservableObject {
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
         case RPC.nScreenChanged:
             screenStatus = try? JSONDecoder().decode(ScreenStatusModel.self, from: data)
+        case RPC.nNoteChanged:
+            applyNoteChanged(data)
         case RPC.nAutomationChanged:
             applyAutomationChanged(data)
         case RPC.nDeviceRevoked:
@@ -1377,7 +1400,8 @@ final class AppModel: ObservableObject {
         connectors = d.connectors
         screenStatus = d.screenStatus
         automations = d.automations
-        hostProtocolVersion = RPC.automationProtocolVersion
+        notes = d.notes
+        hostProtocolVersion = RPC.noteProtocolVersion
         notificationsEnabled = d.screen == .notifications || d.screen == .notificationsOwnKey
         pushPrefs = PushPrefsModel()
         pushStatus = d.pushStatus(for: d.screen)
