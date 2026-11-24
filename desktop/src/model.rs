@@ -1,6 +1,6 @@
 //! App state and how host messages change it.
 
-use crate::bridge::{Bridge, FromHost, Refresh, Tag};
+use crate::bridge::{remote_state_path, Bridge, FromHost, Refresh, Tag, ToHost};
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use rune::TextEdit;
@@ -497,6 +497,22 @@ pub struct Pairing {
     pub done: Option<String>,
 }
 
+/// Pairing this app with a remote host — the other direction of [`Pairing`]:
+/// paste what `agenthost device pair` shows on the host, compare the 6-digit
+/// code with the one there, and it accepts or refuses.
+#[derive(Clone)]
+pub struct PairRemote {
+    /// The `agenthost://pair?…` payload from the host's screen.
+    pub payload: TextEdit,
+    /// What the host's Devices list will show for this app.
+    pub name: TextEdit,
+    /// The code to compare with the host's, once the host side has it.
+    pub code: Option<String>,
+    pub error: Option<String>,
+    /// A pair request is under way; the fields stand still until it ends.
+    pub busy: bool,
+}
+
 pub struct App {
     pub bridge: Option<Bridge>,
     pub conn: Conn,
@@ -573,6 +589,16 @@ pub struct App {
     /// Folders the phone may create projects in (`project.browse`).
     pub project_roots: Vec<String>,
     pub pairing: Option<Pairing>,
+    /// Pairing this app with a remote host.
+    pub pair_remote: Option<PairRemote>,
+    /// A paired remote host exists to connect to (its name).
+    pub remote_host: Option<String>,
+    /// The current connection goes through the relay, as a paired device
+    /// rather than over the local socket.
+    pub link_remote: bool,
+    /// The current connection may manage the host (the local socket always
+    /// can; a paired device never gets policy, by design).
+    pub admin: bool,
     pub error: Option<String>,
     pub notice: Option<String>,
     /// Files waiting to go with the next message, by session.
@@ -714,6 +740,10 @@ pub fn init() -> App {
         profile_dir: TextEdit::new(""),
         project_roots: vec![],
         pairing: None,
+        pair_remote: None,
+        remote_host: None,
+        link_remote: false,
+        admin: true,
         error: None,
         notice: None,
         files: HashMap::new(),
@@ -1055,6 +1085,112 @@ impl App {
         let Some(p) = &self.pairing else { return };
         let what = if accept { "Confirm pairing" } else { "Refuse pairing" };
         self.act(what, m::DEVICE_PAIR_CONFIRM, json!({"pairing_id": p.pairing_id, "accept": accept}), Refresh::Devices);
+    }
+
+    /// Open the form that pairs this app with a remote host: paste the pairing
+    /// code that host's `agenthost device pair` shows.
+    pub fn start_remote_pair(&mut self) {
+        let name = if self.hostname.is_empty() {
+            "Desktop".to_string()
+        } else {
+            format!("Desktop on {}", self.hostname)
+        };
+        self.pair_remote = Some(PairRemote {
+            payload: TextEdit::new(""),
+            name: TextEdit::new(name),
+            code: None,
+            error: None,
+            busy: false,
+        });
+        if let Some(p) = self.pair_remote.as_mut() {
+            p.payload.focused = true;
+        }
+    }
+
+    /// Send the pairing request now in the form.
+    pub fn send_remote_pair(&mut self) {
+        let Some(p) = &self.pair_remote else { return };
+        if p.busy {
+            return;
+        }
+        let payload = p.payload.text.trim().to_string();
+        if payload.is_empty() {
+            return;
+        }
+        let name = {
+            let n = p.name.text.trim().to_string();
+            if n.is_empty() { "agenthost desktop".to_string() } else { n }
+        };
+        if let Some(p) = self.pair_remote.as_mut() {
+            p.busy = true;
+            p.error = None;
+            p.code = None;
+        }
+        if let Some(b) = &self.bridge {
+            b.send(ToHost::PairRemote { payload, name });
+        }
+    }
+
+    /// Pairing finished: keep the keys, and go to the host unless this app is
+    /// happily using a local one.
+    fn paired_remotely(&mut self, r: Result<agenthost_cli::remote::DeviceState, String>) {
+        match r {
+            Ok(st) => {
+                let name = st.host_name.clone();
+                if let Err(e) = st.save(&remote_state_path()) {
+                    if let Some(p) = self.pair_remote.as_mut() {
+                        p.error = Some(format!("Paired, but the keys could not be kept: {e:#}"));
+                        p.busy = false;
+                    }
+                    return;
+                }
+                self.remote_host = Some(name.clone());
+                self.pair_remote = None;
+                let was_local = self.conn == Conn::Connected && !self.link_remote;
+                if was_local {
+                    // This computer has its own host in use; switching is a choice.
+                    self.notice = Some(format!("Paired with {name}. Switch to it in Settings \u{2192} General."));
+                } else {
+                    // Nothing local to keep working with: go there now, and next
+                    // launch too.
+                    let mut prefs = crate::bridge::load_prefs();
+                    prefs.prefer_remote = true;
+                    crate::bridge::save_prefs(&prefs);
+                    self.conn = Conn::Connecting;
+                    if let Some(b) = &self.bridge {
+                        b.send(ToHost::UseRemote(remote_state_path()));
+                    }
+                    self.notice = Some(format!("Paired with {name}."));
+                }
+            }
+            Err(e) => {
+                if let Some(p) = self.pair_remote.as_mut() {
+                    p.error = Some(e);
+                    p.busy = false;
+                    p.code = None;
+                }
+            }
+        }
+    }
+
+    /// Connect to the paired remote host: now, and at every launch after.
+    pub fn connect_remote(&mut self) {
+        let Some(b) = &self.bridge else { return };
+        self.conn = Conn::Connecting;
+        b.send(ToHost::UseRemote(remote_state_path()));
+        let mut prefs = crate::bridge::load_prefs();
+        prefs.prefer_remote = true;
+        crate::bridge::save_prefs(&prefs);
+    }
+
+    /// Back to this computer's own host, by choice (not a fallback).
+    pub fn use_local_host(&mut self) {
+        let Some(b) = &self.bridge else { return };
+        self.conn = Conn::Connecting;
+        b.send(ToHost::UseLocal);
+        let mut prefs = crate::bridge::load_prefs();
+        prefs.prefer_remote = false;
+        crate::bridge::save_prefs(&prefs);
     }
 
     /// Add a folder as a workspace; from the New session sheet it's then selected.
@@ -1568,8 +1704,25 @@ impl App {
     pub fn apply(&mut self, msg: FromHost) {
         match msg {
             FromHost::StartedHost => self.conn = Conn::StartingHost,
-            FromHost::Connected { .. } => {
+            FromHost::RemotePaired(name) => {
+                // Only ever narrows to Some: a missing file is not news.
+                if name.is_some() {
+                    self.remote_host = name;
+                }
+            }
+            FromHost::PairCode(code) => {
+                if let Some(p) = &mut self.pair_remote {
+                    p.code = Some(code);
+                }
+            }
+            FromHost::PairResult(r) => self.paired_remotely(r),
+            FromHost::Connected { admin, remote } => {
                 self.conn = Conn::Connected;
+                self.admin = admin;
+                self.link_remote = remote.is_some();
+                if let Some(name) = remote {
+                    self.remote_host = Some(name);
+                }
                 self.subscribed.clear();
                 self.sub_ids.clear();
                 self.behind.clear();

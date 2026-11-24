@@ -52,14 +52,23 @@ impl DeviceState {
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Why the relay or host closed us.
-#[derive(Debug)]
+/// Why the relay or host closed us. `code` 0 means the close was ours or the
+/// transport's, not a WebSocket close code; `reason` then says what happened.
+#[derive(Debug, Clone)]
 pub struct Closed {
     pub code: u16,
     pub reason: String,
 }
+impl Closed {
+    pub fn other(reason: impl Into<String>) -> Closed {
+        Closed { code: 0, reason: reason.into() }
+    }
+}
 impl std::fmt::Display for Closed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.code == 0 {
+            return write!(f, "{}", self.reason);
+        }
         let what = match self.code {
             4401 => "This device was removed",
             4403 => "not allowed (unknown device or used/expired pairing code)",
@@ -201,7 +210,8 @@ pub async fn pair(qr_text: &str, name: &str, on_code: impl FnOnce(&str)) -> Resu
 }
 
 /// Connect to the host through the relay and speak the client protocol.
-/// The returned receiver ends when the tunnel closes; `closed` then says why.
+/// The returned receiver ends when the tunnel closes; `closed` then says why
+/// (a [`Closed`] with the WebSocket close code, or code 0 for our own reasons).
 /// How often a device pings the relay, and how long a silent link may last.
 /// Tests shorten both with `AGENTHOST_KEEPALIVE_MS=<ping>,<silence>`.
 fn keepalive() -> (Duration, Duration) {
@@ -244,13 +254,13 @@ pub async fn connect(
 ) -> Result<(
     Client,
     mpsc::Receiver<Notification>,
-    tokio::sync::watch::Receiver<Option<String>>,
+    tokio::sync::watch::Receiver<Option<Closed>>,
 )> {
     let (ws, mut transport) = open_tunnel(state).await?;
 
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let (in_tx, in_rx) = mpsc::channel::<String>(4096);
-    let (closed_tx, closed_rx) = tokio::sync::watch::channel::<Option<String>>(None);
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel::<Option<Closed>>(None);
     let (mut sink, mut stream) = ws.split();
     tokio::spawn(async move {
         // Keepalive: the relay answers `ping` itself. A link that stays
@@ -264,7 +274,7 @@ pub async fn connect(
         let reason = loop {
             tokio::select! {
                 line = out_rx.recv() => {
-                    let Some(line) = line else { break "client closed".to_string() };
+                    let Some(line) = line else { break Closed::other("client closed") };
                     match transport.seal(line.as_bytes()) {
                         Ok(frames) => {
                             let mut failed = None;
@@ -274,17 +284,17 @@ pub async fn connect(
                                     break;
                                 }
                             }
-                            if let Some(e) = failed { break format!("connection lost: {e}"); }
+                            if let Some(e) = failed { break Closed::other(format!("connection lost: {e}")); }
                         }
-                        Err(e) => break format!("tunnel error: {e}"),
+                        Err(e) => break Closed::other(format!("tunnel error: {e}")),
                     }
                 }
                 _ = ping.tick() => {
                     if heard.elapsed() > silence {
-                        break "connection lost: the relay stopped answering".to_string();
+                        break Closed::other("connection lost: the relay stopped answering");
                     }
                     if let Err(e) = sink.send(WsMsg::Text(r#"{"type":"ping"}"#.into())).await {
-                        break format!("connection lost: {e}");
+                        break Closed::other(format!("connection lost: {e}"));
                     }
                 }
                 msg = stream.next() => {
@@ -292,22 +302,22 @@ pub async fn connect(
                     match msg {
                         Some(Ok(WsMsg::Binary(b))) => match transport.open(&b) {
                             Ok(Some(m)) => {
-                                let Ok(line) = String::from_utf8(m) else { break "bad message".into() };
-                                if in_tx.send(line).await.is_err() { break "client closed".into(); }
+                                let Ok(line) = String::from_utf8(m) else { break Closed::other("bad message") };
+                                if in_tx.send(line).await.is_err() { break Closed::other("client closed"); }
                             }
                             Ok(None) => {}
                             Err(e) => {
                                 let _ = sink.send(WsMsg::Close(None)).await;
-                                break format!("tunnel integrity failure: {e}");
+                                break Closed::other(format!("tunnel integrity failure: {e}"));
                             }
                         },
                         Some(Ok(WsMsg::Close(f))) => {
                             let (code, reason) = f.map(|f| (u16::from(f.code), f.reason.to_string())).unwrap_or((1000, String::new()));
-                            break Closed { code, reason }.to_string();
+                            break Closed { code, reason };
                         }
                         Some(Ok(_)) => {}
-                        Some(Err(e)) => break e.to_string(),
-                        None => break "relay closed".into(),
+                        Some(Err(e)) => break Closed::other(e.to_string()),
+                        None => break Closed::other("relay closed"),
                     }
                 }
             }

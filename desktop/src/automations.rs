@@ -582,12 +582,22 @@ fn editor_body(s: &App, t: &Theme) -> El {
     );
     let mut body = col().w_full().gap(if mac { 14.0 } else { 20.0 }).child(block(t, "Automation", about));
 
-    // What starts it.
-    let kinds: Vec<(TriggerKind, &str)> = TriggerKind::ALL.iter().map(|k| (*k, k.title())).collect();
+    // What starts it. Webhook triggers widen what a run may do (their URLs and
+    // secrets), so the host lets only its own desktop set them.
+    let mut kinds: Vec<(TriggerKind, &str)> = TriggerKind::ALL.iter().map(|k| (*k, k.title())).collect();
+    if !s.admin {
+        kinds.retain(|(k, _)| *k != TriggerKind::Webhook);
+    }
     let mut starts = col().w_full().gap(if mac { 8.0 } else { 10.0 }).child(segmented(t, "auto-trigger", &kinds, d.trigger, |s, k| s.draft_set_trigger(k)));
     match d.trigger {
         TriggerKind::Schedule => starts = starts.child(schedule_box(s, t)),
-        TriggerKind::Webhook => starts = starts.child(webhook_editor(s, t)),
+        TriggerKind::Webhook => {
+            starts = starts.child(if s.admin {
+                webhook_editor(s, t)
+            } else {
+                footnote(t, "Webhook automations are set up on the host's own computer.")
+            })
+        }
         TriggerKind::Manual => starts = starts.child(footnote(t, "It runs only when you click Run Now.")),
     }
     body = body.child(block(t, "Starts", starts));
@@ -599,7 +609,8 @@ fn editor_body(s: &App, t: &Theme) -> El {
     };
     body = body.child(block(t, "Prompt", col().w_full().gap(6.0).child(area(t, &d.prompt, "auto-prompt", "What should each run do?", |s| &mut s.draft.prompt, 5, 14)).child(footnote(t, note))));
 
-    // What it may do without asking.
+    // What it may do without asking: pre-approving tools widens policy, so a
+    // paired connection may not set it.
     let approve_rows = AUTO_APPROVABLE
         .iter()
         .map(|tool| {
@@ -610,13 +621,23 @@ fn editor_body(s: &App, t: &Theme) -> El {
                 _ => None,
             };
             let title = auto_approve_title(tool);
-            form_row(t, title, detail, t.switch(on, title, move |s: &mut App| s.draft_toggle_approve(tool)).key(format!("approve-{tool}")))
+            let control = if s.admin {
+                t.switch(on, title, move |s: &mut App| s.draft_toggle_approve(tool)).key(format!("approve-{tool}"))
+            } else {
+                t.switch_dimmed(on, title)
+            };
+            form_row(t, title, detail, control)
         })
         .collect();
+    let approve_note = if s.admin {
+        "Everything else asks, as in any session: the request waits in the run's session and on your phone."
+    } else {
+        "What runs without asking is set on the host's own computer."
+    };
     body = body.child(block(
         t,
         "Runs without asking",
-        col().w_full().gap(6.0).child(t.group(approve_rows, inset)).child(footnote(t, "Everything else asks, as in any session: the request waits in the run's session and on your phone.")),
+        col().w_full().gap(6.0).child(t.group(approve_rows, inset)).child(footnote(t, approve_note)),
     ));
     let max = row().gap(8.0).center_y().child(row().w(64.0).child(field(t, &d.max_minutes, "auto-max", "60", |s| &mut s.draft.max_minutes, false, false))).child(t.small("minutes"));
     body = body.child(t.group(vec![form_row(t, "Stop a run after", Some("1 to 720 minutes".into()), max)], inset));

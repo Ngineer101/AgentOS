@@ -2,7 +2,7 @@
 //! (`agenthost-desktop --snap out.png --scene session`). Each renders in the look
 //! `AGENTHOST_DESKTOP_LOOK` picks (macos or gnome).
 
-use crate::model::{App, Conn, Menu, Pairing, Screen, Tab};
+use crate::model::{App, Conn, Menu, PairRemote, Pairing, Screen, Tab};
 use agenthost_proto::*;
 use serde_json::{json, Value};
 
@@ -871,6 +871,44 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     }),
     ("pairing", |s| pairing(s, false)),
     ("pairing-confirm", |s| pairing(s, true)),
+    // This app pairing with a remote host: the form, then the code to compare.
+    ("pair-remote", |s| {
+        base(s);
+        s.settings = Some(Tab::General);
+        s.pair_remote = Some(PairRemote {
+            payload: rune::TextEdit::new("agenthost://pair?v=1&r=wss%3A%2F%2Frelay.example.com&id=relay_7a3f&hk=%E2%80%A6&s=%E2%80%A6&n=workstation"),
+            name: rune::TextEdit::new("Desktop on laptop"),
+            code: None,
+            error: None,
+            busy: false,
+        });
+    }),
+    ("pair-remote-code", |s| {
+        base(s);
+        s.settings = Some(Tab::General);
+        s.pair_remote = Some(PairRemote {
+            payload: rune::TextEdit::new("agenthost://pair?v=1&r=wss%3A%2F%2Frelay.example.com&id=relay_7a3f&hk=%E2%80%A6&s=%E2%80%A6&n=workstation"),
+            name: rune::TextEdit::new("Desktop on laptop"),
+            code: Some("314 159".into()),
+            error: None,
+            busy: true,
+        });
+    }),
+    // Connected as a paired device: the host's settings are read-only here.
+    ("settings-general-remote", |s| {
+        base(s);
+        s.settings = Some(Tab::General);
+        s.link_remote = true;
+        s.admin = false;
+        s.remote_host = Some("workstation".into());
+    }),
+    ("settings-devices-remote", |s| {
+        base(s);
+        s.settings = Some(Tab::Devices);
+        s.link_remote = true;
+        s.admin = false;
+        s.remote_host = Some("workstation".into());
+    }),
     ("shortcuts", |s| {
         session(s);
         s.shortcuts_open = true;
@@ -1162,5 +1200,19 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         base(s);
         s.screen = Screen::Home;
         s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
+    }),
+    // A laptop that has paired before: the offline screen offers its host.
+    ("offline-remote-home", |s| {
+        base(s);
+        s.screen = Screen::Home;
+        s.conn = Conn::Down("connect to host at /run/user/1000/agenthost/host.sock: No such file or directory".into());
+        s.remote_host = Some("workstation".into());
+    }),
+    // Paired but the host is asleep: the remote side of the same screen.
+    ("offline-remote", |s| {
+        session(s);
+        s.conn = Conn::Down("the host is offline (code 4404)".into());
+        s.link_remote = true;
+        s.remote_host = Some("workstation".into());
     }),
 ];

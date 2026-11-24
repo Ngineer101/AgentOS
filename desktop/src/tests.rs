@@ -3,7 +3,9 @@
 use crate::bridge;
 use crate::commands::{self, Cmd};
 use crate::model::{self, Conn, Screen};
+use agenthost_proto::methods as m;
 use agenthost_proto::*;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1758,4 +1760,257 @@ fn each_session_keeps_its_unsent_message() {
     app.open_session("ses_1");
     app.open_session("ses_2");
     assert_eq!(app.prompt.text, "");
+}
+
+// ---------------------------------------------------------------------------
+// Remote access: the app as a paired device
+// ---------------------------------------------------------------------------
+
+/// Set env vars for one test and take them away at its end, whatever happens.
+struct EnvGuard(Vec<&'static str>);
+impl EnvGuard {
+    fn new(vars: Vec<(&'static str, String)>) -> Self {
+        for (k, v) in &vars {
+            std::env::set_var(k, v);
+        }
+        EnvGuard(vars.into_iter().map(|(k, _)| k).collect())
+    }
+}
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for k in &self.0 {
+            std::env::remove_var(k);
+        }
+    }
+}
+
+/// The pairing payload a host's `agenthost device pair` shows, once its relay
+/// is up (fetched the way the host's own CLI does).
+fn pair_payload(rt: &tokio::runtime::Runtime, socket: &std::path::Path) -> String {
+    rt.block_on(async {
+        loop {
+            let (c, _) = agenthost_cli::Client::connect(socket).await.unwrap();
+            let info: HostInfo = c.call(m::HOST_INFO, json!({})).await.unwrap();
+            if !info.relay.connected {
+                drop(c);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            let r: PairStartResult = c.call(m::DEVICE_PAIR_START, json!({})).await.unwrap();
+            return r.qr_payload;
+        }
+    })
+}
+
+/// Accepts a pairing on the host side, as someone at its keyboard would.
+fn accept_pairing(rt: &tokio::runtime::Runtime, socket: std::path::PathBuf) {
+    rt.spawn(async move {
+        let (c, mut notes) = agenthost_cli::Client::connect(&socket).await.unwrap();
+        while let Some(n) = notes.recv().await {
+            if n.method == m::N_PAIRING_PENDING {
+                let pid = n.params["pairing_id"].as_str().unwrap().to_string();
+                c.request(m::DEVICE_PAIR_CONFIRM, json!({"pairing_id": pid, "accept": true})).await.unwrap();
+                break;
+            }
+        }
+    });
+}
+
+/// A paired host's keys, as the pairing handshake hands them over.
+fn sample_state() -> agenthost_cli::remote::DeviceState {
+    agenthost_cli::remote::DeviceState {
+        relay_url: "wss://relay.example.com".into(),
+        relay_id: "relay_x".into(),
+        host_key: "aG9zdA==".into(),
+        host_name: "workstation".into(),
+        device_id: "dev_1".into(),
+        host_id: "host_1".into(),
+        noise_private: "AAAA".into(),
+        relay_private: "AAAA".into(),
+    }
+}
+
+/// The pairing form's round trip, with no host needed: the code to compare
+/// shows while the host decides, the keys are kept on accept, and a laptop
+/// with nothing local of its own switches at once — and remembers it.
+#[test]
+fn remote_pairing_result_switches_a_laptop_with_no_local_host() {
+    let dir = tempfile::Builder::new().prefix("ahmp").tempdir_in("/tmp").unwrap();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let _env = EnvGuard::new(vec![
+        ("AGENTHOST_DESKTOP_DIR", cfg.to_string_lossy().into_owned()),
+        ("AGENTHOST_REMOTE", dir.path().join("remote.json").to_string_lossy().into_owned()),
+    ]);
+    let mut app = model::init();
+    app.conn = Conn::Down("no host here".into());
+
+    // A stray code with no form open is dropped.
+    app.apply(bridge::FromHost::PairCode("314 159".into()));
+    assert!(app.pair_remote.is_none());
+
+    app.start_remote_pair();
+    assert!(app.pair_remote.as_ref().is_some_and(|p| p.payload.focused), "the form asks for the payload first");
+    app.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
+    app.send_remote_pair();
+    assert!(app.pair_remote.as_ref().is_some_and(|p| p.busy));
+    app.apply(bridge::FromHost::PairCode("314 159".into()));
+    assert!(app.pair_remote.as_ref().is_some_and(|p| p.code.as_deref() == Some("314 159")));
+
+    // The host accepts.
+    app.apply(bridge::FromHost::PairResult(Ok(sample_state())));
+    assert!(app.pair_remote.is_none(), "the form closes on success");
+    assert_eq!(app.remote_host.as_deref(), Some("workstation"));
+    let saved = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
+    assert_eq!((saved.host_name.as_str(), saved.device_id.as_str()), ("workstation", "dev_1"));
+    assert!(app.conn == Conn::Connecting, "a laptop with no host of its own goes there at once");
+    assert!(bridge::load_prefs().prefer_remote, "and comes back there next launch");
+    assert!(app.notice.as_deref().is_some_and(|n| n.contains("Paired with workstation")));
+}
+
+/// The same result on a computer whose own host is in use: nothing switches,
+/// and the next launch is still this computer's.
+#[test]
+fn remote_pairing_result_leaves_a_live_local_host_alone() {
+    let dir = tempfile::Builder::new().prefix("ahmq").tempdir_in("/tmp").unwrap();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let _env = EnvGuard::new(vec![
+        ("AGENTHOST_DESKTOP_DIR", cfg.to_string_lossy().into_owned()),
+        ("AGENTHOST_REMOTE", dir.path().join("remote.json").to_string_lossy().into_owned()),
+    ]);
+    let mut app = model::init();
+    app.conn = Conn::Connected;
+
+    app.start_remote_pair();
+    app.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
+    app.send_remote_pair();
+    app.apply(bridge::FromHost::PairResult(Ok(sample_state())));
+
+    // Still on the local host; the keys are kept but nothing is hijacked.
+    assert!(app.conn == Conn::Connected);
+    assert!(!bridge::load_prefs().prefer_remote, "the next launch is not taken over");
+    assert!(agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).is_ok());
+    assert!(app.notice.as_deref().is_some_and(|n| n.contains("Settings")), "the notice points at the switch");
+
+    // A refusal instead: the form stays open, says why, and can try again.
+    let mut app2 = model::init();
+    app2.conn = Conn::Down("no host here".into());
+    app2.start_remote_pair();
+    app2.pair_remote.as_mut().unwrap().payload.replace_text("agenthost://pair?…");
+    app2.send_remote_pair();
+    app2.apply(bridge::FromHost::PairResult(Err("pairing refused: not today".into())));
+    assert!(app2.pair_remote.as_ref().is_some_and(|p| !p.busy && p.error.as_deref() == Some("pairing refused: not today")));
+    assert!(app2.remote_host.is_none(), "no keys were kept for a refused pairing");
+}
+
+/// A laptop with no local host pairs with a remote one through the dev relay
+/// (paste the code, compare the 6 digits, the host accepts), connects by
+/// itself, runs a session over the tunnel, and cannot manage the host: a
+/// paired device gets sessions and approvals, never policy. Revoking it there
+/// ends the connection for good.
+#[test]
+fn remote_pairing_connects_runs_and_stays_read_only() {    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahr").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let relay = rt.block_on(agenthost_host::relay_dev::DevRelay::start("127.0.0.1:0")).unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), Some(relay.url()));
+
+    // The app's own files (the paired keys, its preferences) stay in the test
+    // dir, and there is no local host: a socket file nothing answers, so the
+    // app doesn't start a daemon of its own.
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let _env = EnvGuard::new(vec![("AGENTHOST_DESKTOP_DIR", cfg.to_string_lossy().into_owned())]);
+    let dead = dir.path().join("dead.sock");
+    std::fs::write(&dead, b"").unwrap();
+    std::env::set_var("AGENTHOST_SOCKET", &dead);
+    let mut app = model::init();
+    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    pump(&mut app, |a| matches!(a.conn, Conn::Down(_)));
+
+    let qr = pair_payload(&rt, &socket);
+    accept_pairing(&rt, socket.clone());
+    app.start_remote_pair();
+    assert!(app.pair_remote.as_ref().is_some_and(|p| p.name.text.starts_with("Desktop")), "the form names this app");
+    app.pair_remote.as_mut().unwrap().payload.replace_text(&qr);
+    app.send_remote_pair();
+    pump(&mut app, |a| {
+        // The code to compare shows while the host waits; then the keys arrive.
+        a.pair_remote.is_none() && a.remote_host.is_some()
+    });
+
+    // Nothing local was in use, so the app went there by itself — and will
+    // next launch too.
+    pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin);
+    assert!(bridge::load_prefs().prefer_remote, "a laptop with no host of its own comes back to the paired one");
+    let state = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
+    assert_eq!(state.host_name, app.remote_host.clone().unwrap());
+
+    // A session runs over the tunnel like over the socket.
+    let mut tx = rune::Tx::default();
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    app.prompt.replace_text("hello from the laptop");
+    app.send_prompt();
+    pump(&mut app, |a| {
+        a.transcripts.get(&sid).is_some_and(|t| t.events.iter().any(|e| e.kind == EventType::AgentMessage && e.payload["text"] == "echo: hello from the laptop"))
+    });
+
+    // Managing the host is refused — by the host, whatever the UI allows.
+    app.error = None;
+    app.act("Add workspace", m::WORKSPACE_ADD, json!({"path": dir.path().join("nope")}), bridge::Refresh::None);
+    pump(&mut app, |a| a.error.as_deref().is_some_and(|e| e.contains("may not call workspace.add")));
+
+    // Revoked on the host: the tunnel says why, and no retry brings it back.
+    let device_id = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap().device_id;
+    rt.block_on(async {
+        let (c, _) = agenthost_cli::Client::connect(&socket).await.unwrap();
+        c.request(m::DEVICE_REVOKE, json!({"device_id": device_id})).await.unwrap();
+    });
+    pump(&mut app, |a| matches!(&a.conn, Conn::Down(e) if e.contains("removed")));
+    std::thread::sleep(Duration::from_millis(700));
+    app.drain();
+    assert!(matches!(app.conn, Conn::Down(_)), "a removed device is not retried");
+}
+
+/// Paired from a computer whose own host is in use: nothing switches by
+/// itself; "Connect to <host>" is the choice, remembered for next launch, and
+/// "Use this computer" is the way back.
+#[test]
+fn pairing_with_a_local_host_leaves_the_switch_to_you() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahpr").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let relay = rt.block_on(agenthost_host::relay_dev::DevRelay::start("127.0.0.1:0")).unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), Some(relay.url()));
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let _env = EnvGuard::new(vec![("AGENTHOST_DESKTOP_DIR", cfg.to_string_lossy().into_owned())]);
+    let mut app = connect(&socket);
+
+    let qr = pair_payload(&rt, &socket);
+    accept_pairing(&rt, socket.clone());
+    app.start_remote_pair();
+    app.pair_remote.as_mut().unwrap().payload.replace_text(&qr);
+    app.send_remote_pair();
+    pump(&mut app, |a| a.pair_remote.is_none() && a.remote_host.is_some());
+
+    // Still on the local host, which keeps its rights: the switch is a choice.
+    assert!(app.conn == Conn::Connected && !app.link_remote && app.admin);
+    assert!(!bridge::load_prefs().prefer_remote, "nothing hijacks the next launch");
+    assert!(app.notice.as_deref().is_some_and(|n| n.contains("Settings")), "the notice points at the switch");
+
+    // The choice, once made, is remembered.
+    app.connect_remote();
+    pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin);
+    assert!(bridge::load_prefs().prefer_remote);
+
+    // And back again, by choice too.
+    app.use_local_host();
+    pump(&mut app, |a| a.conn == Conn::Connected && !a.link_remote && a.admin);
+    assert!(!bridge::load_prefs().prefer_remote);
 }

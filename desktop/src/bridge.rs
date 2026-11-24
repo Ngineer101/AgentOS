@@ -2,11 +2,13 @@
 //! tokio runtime owns the protocol client. The UI sends [`ToHost`] commands;
 //! replies and notifications come back as [`FromHost`] and wake the window.
 
+use agenthost_cli::remote::{self, Closed, DeviceState};
 use agenthost_cli::Client;
 use agenthost_proto::jsonrpc::{Notification, RpcError};
-use agenthost_proto::methods as m;
+use agenthost_proto::methods::{self as m, Capability};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,6 +103,15 @@ pub enum ToHost {
     Transcribe { wav: Vec<u8> },
     /// Live dictation, sent in order; answered by [`FromHost::LiveText`].
     Live(Live),
+    /// Pair with a remote host using the QR payload from `agenthost device
+    /// pair` on it; answered by [`FromHost::PairCode`] then
+    /// [`FromHost::PairResult`].
+    PairRemote { payload: String, name: String },
+    /// Connect to the paired remote host in this state file (created by
+    /// pairing) instead of the local socket.
+    UseRemote(PathBuf),
+    /// Connect back to the local host's socket.
+    UseLocal,
 }
 
 /// One live dictation (`gen`) as it happens: audio is mono 16-bit PCM bytes.
@@ -119,10 +130,25 @@ impl Live {
 }
 
 pub enum FromHost {
-    Connected { host_id: String },
+    Connected {
+        /// Whether this connection may manage the host (the local socket can,
+        /// a paired device cannot: it gets sessions and approvals, not policy).
+        admin: bool,
+        /// The paired host's name when connected through the relay.
+        remote: Option<String>,
+    },
     Disconnected(String),
     /// The host was not running and the app started it.
     StartedHost,
+    /// A paired remote host exists to connect to (its name), or none does.
+    /// Sent once when the bridge starts.
+    RemotePaired(Option<String>),
+    /// The 6-digit code to compare with the one shown on the host, while
+    /// pairing with it.
+    PairCode(String),
+    /// Pairing finished: the new device's keys (not saved anywhere yet), or
+    /// why it failed.
+    PairResult(Result<DeviceState, String>),
     Reply { tag: Tag, result: Result<Value, RpcError> },
     Note(Notification),
     Uploaded { local_id: u64, result: Result<agenthost_proto::Attachment, String> },
@@ -165,6 +191,83 @@ pub fn socket_path() -> PathBuf {
         .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).and_then(|l| l.split_whitespace().nth(1).map(str::to_string)))
         .unwrap_or_else(|| "0".into());
     PathBuf::from(format!("/tmp/agenthost-{uid}/host.sock"))
+}
+
+// ---------------------------------------------------------------------------
+// Remote access: the paired-host state and this app's own preferences
+// ---------------------------------------------------------------------------
+
+/// How the app reaches the host: this computer's socket, or a paired remote
+/// host through the relay.
+enum Mode {
+    Local,
+    Remote(PathBuf),
+}
+
+/// The app's own small preferences, kept beside the paired-host state. The
+/// host stores nothing of this; it is this app's to choose at every launch.
+#[derive(Default, Debug, Serialize, Deserialize)]
+pub struct Prefs {
+    /// Start against the paired remote host (`remote.json`) rather than the
+    /// local one. Set by pairing while no local host answers, or by choosing
+    /// "Connect" on the offline screen.
+    pub prefer_remote: bool,
+}
+
+/// Where the desktop app keeps its own files (the paired-host keys and these
+/// preferences): the same folder the host uses for its data.
+pub fn config_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("AGENTHOST_DESKTOP_DIR") {
+        return PathBuf::from(d);
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        return PathBuf::from(home).join("Library/Application Support/agenthost");
+    }
+    if let Ok(x) = std::env::var("XDG_DATA_HOME") {
+        return PathBuf::from(x).join("agenthost");
+    }
+    PathBuf::from(home).join(".local/share/agenthost")
+}
+
+/// The paired remote host's keys: `$AGENTHOST_REMOTE`, or `remote.json` in the
+/// config folder. The same file `agenthost remote pair --state` writes, so the
+/// CLI and this app can share one paired host.
+pub fn remote_state_path() -> PathBuf {
+    if let Some(p) = std::env::var_os("AGENTHOST_REMOTE") {
+        return PathBuf::from(p);
+    }
+    config_dir().join("remote.json")
+}
+
+pub fn load_prefs() -> Prefs {
+    read_json(&config_dir().join("desktop.json")).unwrap_or_default()
+}
+
+pub fn save_prefs(p: &Prefs) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = write_json(&config_dir().join("desktop.json"), p);
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(p: &Path) -> Option<T> {
+    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+}
+
+fn write_json<T: Serialize>(p: &Path, v: &T) -> Option<()> {
+    std::fs::write(p, serde_json::to_string_pretty(v).ok()?).ok()
+}
+
+/// The tunnel task reports why it closed on a watch channel; a local
+/// connection has none. Waits for the report; `None` when there is no tunnel
+/// (local) or its sender is gone (the notifications stream ends too).
+async fn next_closed(closed: Option<&mut tokio::sync::watch::Receiver<Option<Closed>>>) -> Option<Closed> {
+    match closed {
+        Some(c) => match c.changed().await {
+            Ok(()) => c.borrow().clone(),
+            Err(_) => None,
+        },
+        None => std::future::pending().await,
+    }
 }
 
 /// `agenthostd` next to this executable, else on PATH.
@@ -278,28 +381,77 @@ pub fn start(waker: rune::Waker) -> Bridge {
                     let _ = out_tx.send(m);
                     waker();
                 };
+                // Where to connect: the state file $AGENTHOST_REMOTE names, the
+                // host paired earlier and made the default, or this computer's
+                // own host.
+                let mut mode = if let Some(p) = std::env::var_os("AGENTHOST_REMOTE") {
+                    Mode::Remote(PathBuf::from(p))
+                } else if load_prefs().prefer_remote && remote_state_path().is_file() {
+                    Mode::Remote(remote_state_path())
+                } else {
+                    Mode::Local
+                };
+                // Whether a paired host exists at all, whatever we connect to first.
+                send(FromHost::RemotePaired(
+                    DeviceState::load(&remote_state_path()).ok().map(|s| s.host_name),
+                ));
                 let socket = socket_path();
                 let mut started = false; // started a host, or saw one running
                 loop {
-                    let (client, mut notes) = match Client::connect(&socket).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            // First launch with no host running: start it.
-                            if !started && !socket.exists() && start_daemon() {
+                    // One link, local or through the relay, until it ends or a
+                    // mode switch arrives.
+                    let (client, mut notes, mut closed, remote_name) = match &mode {
+                        Mode::Local => match Client::connect(&socket).await {
+                            Ok((c, n)) => {
+                                // A host is running (the service, or one we started): after a
+                                // disconnect only reconnect, so a restart doesn't race a second host.
                                 started = true;
-                                send(FromHost::StartedHost);
-                            } else {
-                                send(FromHost::Disconnected(format!("{e:#}")));
+                                (c, n, None, None)
                             }
-                            tokio::time::sleep(Duration::from_millis(700)).await;
-                            continue;
+                            Err(e) => {
+                                // First launch with no host running: start it.
+                                if !started && !socket.exists() && start_daemon() {
+                                    started = true;
+                                    send(FromHost::StartedHost);
+                                } else {
+                                    send(FromHost::Disconnected(format!("{e:#}")));
+                                }
+                                tokio::time::sleep(Duration::from_millis(700)).await;
+                                continue;
+                            }
+                        },
+                        Mode::Remote(path) => {
+                            let st = match DeviceState::load(path) {
+                                Ok(st) => st,
+                                Err(e) => {
+                                    send(FromHost::Disconnected(format!(
+                                        "no paired host in {}: {e}",
+                                        path.display()
+                                    )));
+                                    tokio::time::sleep(Duration::from_millis(700)).await;
+                                    continue;
+                                }
+                            };
+                            let name = st.host_name.clone();
+                            match remote::connect(&st).await {
+                                Ok((c, n, closed)) => (c, n, Some(closed), Some(name)),
+                                Err(e) => {
+                                    // A removed or unknown device stays that way; anything
+                                    // else (the relay unreachable, the host asleep) may come
+                                    // back, so keep trying — slowly for those two.
+                                    let terminal = e
+                                        .downcast_ref::<Closed>()
+                                        .is_some_and(|c| c.code == 4401 || c.code == 4403);
+                                    send(FromHost::Disconnected(format!("{e:#}")));
+                                    tokio::time::sleep(Duration::from_secs(if terminal { 30 } else { 2 })).await;
+                                    continue;
+                                }
+                            }
                         }
                     };
-                    // A host is running (the service, or one we started): after a
-                    // disconnect only reconnect, so a restart doesn't race a second host.
-                    started = true;
                     let client = Arc::new(client);
-                    send(FromHost::Connected { host_id: client.hello.host_id.clone() });
+                    let admin = client.hello.capabilities.contains(&Capability::Admin);
+                    send(FromHost::Connected { admin, remote: remote_name.clone() });
                     // Watch the session list for changes.
                     let c2 = client.clone();
                     let s2 = out_tx.clone();
@@ -310,6 +462,8 @@ pub fn start(waker: rune::Waker) -> Bridge {
                         w2();
                     });
                     let live_tx = live_dictation(client.clone(), out_tx.clone(), waker.clone());
+                    let mut next_mode: Option<Mode> = None;
+                    let mut why: Option<(String, bool)> = None; // (reason, will not fix itself)
                     loop {
                         tokio::select! {
                             cmd = cmd_rx.recv() => {
@@ -317,6 +471,34 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                 let cmd = match cmd {
                                     ToHost::Live(l) => {
                                         let _ = live_tx.send(l);
+                                        continue;
+                                    }
+                                    ToHost::UseRemote(path) => {
+                                        next_mode = Some(Mode::Remote(path));
+                                        break;
+                                    }
+                                    ToHost::UseLocal => {
+                                        next_mode = Some(Mode::Local);
+                                        started = false; // switching back may start one
+                                        break;
+                                    }
+                                    ToHost::PairRemote { payload, name } => {
+                                        // Pairing runs beside the connection: the host
+                                        // being paired is another machine, reached through
+                                        // its relay, not this link.
+                                        let s2 = out_tx.clone();
+                                        let w2 = waker.clone();
+                                        let s3 = out_tx.clone();
+                                        let w3 = waker.clone();
+                                        tokio::spawn(async move {
+                                            let r = remote::pair(&payload, &name, move |code| {
+                                                let _ = s2.send(FromHost::PairCode(code.to_string()));
+                                                w2();
+                                            })
+                                            .await;
+                                            let _ = s3.send(FromHost::PairResult(r.map_err(|e| format!("{e:#}"))));
+                                            w3();
+                                        });
                                         continue;
                                     }
                                     cmd => cmd,
@@ -334,7 +516,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                             FromHost::AttachmentRead { attachment_id, result }
                                         }
                                         ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
-                                        ToHost::Live(_) => unreachable!(),
+                                        ToHost::Live(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } => unreachable!(),
                                     };
                                     let _ = s.send(msg);
                                     w();
@@ -343,13 +525,45 @@ pub fn start(waker: rune::Waker) -> Bridge {
                             n = notes.recv() => {
                                 match n {
                                     Some(n) => send(FromHost::Note(n)),
+                                    // The tunnel records why just before the stream
+                                    // ends; the watch arm or the code below has it.
                                     None => break,
+                                }
+                            }
+                            c = next_closed(closed.as_mut()) => {
+                                if let Some(c) = c {
+                                    why = Some((c.to_string(), c.code == 4401 || c.code == 4403));
+                                    break;
                                 }
                             }
                         }
                     }
-                    send(FromHost::Disconnected("the host closed the connection".into()));
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    match (next_mode, why) {
+                        // A deliberate switch: reconnect at once, no "disconnected".
+                        (Some(m), _) => mode = m,
+                        (None, Some((reason, terminal))) => {
+                            send(FromHost::Disconnected(reason));
+                            let pause = if terminal {
+                                Duration::from_secs(30)
+                            } else if remote_name.is_some() {
+                                Duration::from_secs(1)
+                            } else {
+                                Duration::from_millis(500)
+                            };
+                            tokio::time::sleep(pause).await;
+                        }
+                        (None, None) => {
+                            // The notifications ended; prefer the tunnel's reason if
+                            // it recorded one after all.
+                            let from_tunnel = closed.as_ref().and_then(|c| c.borrow().clone());
+                            let (reason, terminal) = match from_tunnel {
+                                Some(c) => (c.to_string(), c.code == 4401 || c.code == 4403),
+                                None => ("the host closed the connection".into(), false),
+                            };
+                            send(FromHost::Disconnected(reason));
+                            tokio::time::sleep(Duration::from_secs(if terminal { 30 } else if remote_name.is_some() { 1 } else { 0 })).await;
+                        }
+                    }
                 }
             });
         })

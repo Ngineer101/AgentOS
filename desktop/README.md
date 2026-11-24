@@ -3,6 +3,8 @@
 The full control surface, built with [Rune](https://github.com/anomalyco/rune)
 (pinned to rev `e7f3ad9`). It runs on the same machine as the host and talks
 to it over the Unix socket; if no host is running it starts `agenthostd run`.
+It can also pair with a host on another machine and reach it through the
+relay (see [Remote access](#remote-access) below).
 
 Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
 patterns, Linux gets GNOME / libadwaita. The look follows the OS;
@@ -39,15 +41,34 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   may take. Sessions that are runs show a small clock in the sidebar.
 - **Archive** (⌃⌘A / Ctrl+Alt+A, the Session and "…" menus, row context
   menus): hides a session; a live one asks first, since archiving ends it.
-- **Settings** (⌘, / Ctrl+,): General (host, sandbox, voice, relay, Re-run
-  checks), Agents (logins and profiles), Workspaces (network rules, extra
-  hosts, connectors, project folders), Connectors (add with URL and token,
-  sign in, defaults and per-tool policy), Devices (pair with QR and code,
-  rename, revoke), Archived (search, Open read-only, Unarchive; archived
-  sessions can't be deleted). Workspaces also sets the default login. Drawn over the main window rather than in a window of its
-  own: Rune's windows each own their state.
+- **Settings** (⌘, / Ctrl+,): General (connection, host, sandbox, voice,
+  relay, Re-run checks), Agents (logins and profiles), Workspaces (network
+  rules, extra hosts, connectors, project folders), Connectors (add with URL
+  and token, sign in, defaults and per-tool policy), Devices (pair with QR and
+  code, rename, revoke), Archived (search, Open read-only, Unarchive;
+  archived sessions can't be deleted). Workspaces also sets the default login.
+  Drawn over the main window rather than in a window of its own: Rune's
+  windows each own their state.
 - **Keys**: the macOS menu bar (File, Session, View, Settings…) lists every
   shortcut; on GNOME, Ctrl+? opens the shortcuts window and F10 the main menu.
+
+## Remote access
+
+The app pairs with a host on another machine the way the CLI and the iPhone
+do: there, `agenthost device pair` shows a payload and a 6-digit code; here,
+Settings → General → Connection → "Pair with a Remote Host…" (or the button
+on the offline screen) pastes the payload and shows the same code to compare.
+The keys land in `remote.json` in the config folder (`$AGENTHOST_REMOTE` picks
+the file, the same one `agenthost remote pair --state` writes), and a laptop
+with no host of its own connects there at every launch — a tiny `desktop.json`
+in the same folder remembers that choice, and "Use this computer" in the same
+place undoes it.
+
+A paired connection gets sessions and approvals, never policy: workspaces,
+connectors, devices, webhook automations and built-in tool policies render
+dimmed with a note saying where to change them, and the host would refuse
+them anyway. The offline screen says "the host may be asleep or the relay
+unreachable" instead of asking after agenthostd, and offers pairing again.
 
 ```sh
 cd desktop
@@ -59,6 +80,8 @@ AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.p
 #           settings-archived archived-open settings-general settings-agents settings-agents-add
 #           settings-workspaces settings-connectors settings-connectors-add settings-devices
 #           pairing pairing-confirm shortcuts offline offline-home
+#           pair-remote pair-remote-code settings-general-remote settings-devices-remote
+#           offline-remote offline-remote-home
 #           automations automations-webhook automations-empty automation-new automation-new-cron-error
 #           automation-new-webhook automation-edit automation-edit-webhook automation-picker
 #           automation-confirm-delete automation-confirm-rotate
