@@ -651,7 +651,23 @@ pub struct App {
     pub confirm_delete_auto: Option<String>,
     /// An automation waiting for "New URL" to be confirmed (the old one stops working).
     pub confirm_rotate: Option<String>,
+    /// The sidebar's search field is open (⌘F / Ctrl+F or the search button).
+    pub search_open: bool,
+    /// Workspaces whose sidebar group is collapsed; saved between launches.
+    pub collapsed: HashSet<String>,
+    /// Workspaces whose group shows every session, not just the newest few, until quit.
+    pub show_all: HashSet<String>,
+    /// The sidebar row under the pointer: it shows Pin and Archive.
+    pub hover_row: Option<String>,
+    /// The jump keys' modifier is held (⌘ on macOS, Alt on GNOME): the sidebar shows
+    /// ⌘1…9 / Alt+1…9 in place of the ages.
+    pub jump_held: bool,
+    /// Save `collapsed` to the prefs file (off in tests and offline snapshots).
+    pub save_prefs: bool,
 }
+
+/// A sidebar group shows this many sessions until "Show N more".
+pub const GROUP_SHOWN: usize = 8;
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
 pub fn login_key(a: &AgentStatus) -> String {
@@ -758,6 +774,12 @@ pub fn init() -> App {
         draft: AutoDraft::blank(),
         confirm_delete_auto: None,
         confirm_rotate: None,
+        search_open: false,
+        collapsed: HashSet::new(),
+        show_all: HashSet::new(),
+        hover_row: None,
+        jump_held: false,
+        save_prefs: false,
     }
 }
 
@@ -882,6 +904,12 @@ impl App {
         self.new_open = true;
     }
 
+    /// A workspace's "+" in the sidebar: the New session sheet with that workspace picked.
+    pub fn open_new_session_in(&mut self, ws: &str) {
+        self.new_ws = Some(ws.to_string());
+        self.open_new_session(false);
+    }
+
     pub fn open_settings(&mut self, tab: Tab) {
         self.close_overlays();
         self.settings = Some(tab);
@@ -921,10 +949,31 @@ impl App {
         agents.iter().find(|a| login_key(a) == key).map(|a| a.label()).unwrap_or_else(|| s.agent.display_name().to_string())
     }
 
-    /// Sessions as the sidebar lists them: workspaces in order with Quick tasks first,
-    /// newest first inside each, filtered by the search field.
+    /// Whether a session matches the sidebar's search (its title, login or workspace).
+    fn matches_search(&self, x: &Session, q: &str) -> bool {
+        q.is_empty()
+            || x.title.as_deref().unwrap_or("").to_lowercase().contains(q)
+            || self.login_label(x).to_lowercase().contains(q)
+            || self.workspace(&x.workspace_id).is_some_and(|w| w.name.to_lowercase().contains(q))
+    }
+
+    fn search_query(&self) -> String {
+        self.search.text.trim().to_lowercase()
+    }
+
+    /// The sidebar's Pinned section, in the order they were pinned, filtered by the search.
+    pub fn pinned_sessions(&self) -> Vec<&Session> {
+        let q = self.search_query();
+        let mut l: Vec<&Session> = self.sessions.iter().filter(|x| x.pinned_at.is_some() && self.matches_search(x, &q)).collect();
+        l.sort_by_key(|x| (x.pinned_at, x.created_at));
+        l
+    }
+
+    /// Sessions as the sidebar lists them under Workspaces: workspaces in order with Quick
+    /// tasks first, newest first inside each, filtered by the search field. Pinned sessions
+    /// are in the Pinned section instead.
     pub fn sidebar_groups(&self) -> Vec<(&Workspace, Vec<&Session>)> {
-        let q = self.search.text.trim().to_lowercase();
+        let q = self.search_query();
         let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
         ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
         let mut out = vec![];
@@ -932,13 +981,7 @@ impl App {
             let mut list: Vec<&Session> = self
                 .sessions
                 .iter()
-                .filter(|x| x.workspace_id == w.workspace_id)
-                .filter(|x| {
-                    q.is_empty()
-                        || x.title.as_deref().unwrap_or("").to_lowercase().contains(&q)
-                        || self.login_label(x).to_lowercase().contains(&q)
-                        || w.name.to_lowercase().contains(&q)
-                })
+                .filter(|x| x.workspace_id == w.workspace_id && x.pinned_at.is_none() && self.matches_search(x, &q))
                 .collect();
             if list.is_empty() {
                 continue;
@@ -949,16 +992,85 @@ impl App {
         out
     }
 
-    /// Session ids in sidebar order; ⌘1…⌘9 number the live ones in this order.
+    /// Whether a workspace's group is collapsed; a search shows every match regardless.
+    pub fn group_collapsed(&self, ws: &str) -> bool {
+        self.search_query().is_empty() && self.collapsed.contains(ws)
+    }
+
+    /// The rows a group shows, and how many "Show N more" hides: the newest
+    /// [`GROUP_SHOWN`], and past them any session that needs you or is working.
+    pub fn group_rows<'a>(&self, ws: &str, list: &[&'a Session]) -> (Vec<&'a Session>, usize) {
+        if self.group_collapsed(ws) {
+            return (vec![], 0);
+        }
+        if !self.search_query().is_empty() || self.show_all.contains(ws) || list.len() <= GROUP_SHOWN {
+            return (list.to_vec(), 0);
+        }
+        let shown: Vec<&Session> = list
+            .iter()
+            .enumerate()
+            .filter(|(i, x)| *i < GROUP_SHOWN || matches!(Status::of(x.state), Status::NeedsYou | Status::Working))
+            .map(|(_, x)| *x)
+            .collect();
+        let hidden = list.len() - shown.len();
+        (shown, hidden)
+    }
+
+    /// Collapse a workspace's group, or expand it again; remembered between launches.
+    pub fn toggle_group(&mut self, ws: &str) {
+        if !self.collapsed.remove(ws) {
+            self.collapsed.insert(ws.to_string());
+        }
+        if self.save_prefs {
+            crate::prefs::save(&crate::prefs::Prefs { collapsed: self.collapsed.clone() });
+        }
+    }
+
+    /// Session ids in sidebar order, as the rows show: Pinned, then each group's visible
+    /// rows. ⌥⌘↑/↓ walk it and ⌘1…⌘9 number the live ones in this order.
     pub fn sidebar_order(&self) -> Vec<String> {
-        self.sidebar_groups().into_iter().flat_map(|(_, l)| l.into_iter().map(|s| s.session_id.clone())).collect()
+        let mut out: Vec<String> = self.pinned_sessions().into_iter().map(|x| x.session_id.clone()).collect();
+        for (w, l) in self.sidebar_groups() {
+            out.extend(self.group_rows(&w.workspace_id, &l).0.into_iter().map(|x| x.session_id.clone()));
+        }
+        out
     }
     pub fn numbered(&self) -> Vec<String> {
-        self.sidebar_groups()
-            .into_iter()
-            .flat_map(|(_, l)| l.into_iter().filter(|s| !s.state.is_terminal()).map(|s| s.session_id.clone()))
-            .take(9)
-            .collect()
+        self.sidebar_order().into_iter().filter(|id| self.session(id).is_some_and(|x| !x.state.is_terminal())).take(9).collect()
+    }
+
+    /// The host can pin sessions (protocol 8).
+    pub fn has_pins(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.protocol_version >= 8)
+    }
+
+    /// Pin a session to the top of the sidebar, or unpin it. The row moves at once; the
+    /// host's reply (and its `session.changed`) confirm it.
+    pub fn set_pinned(&mut self, id: &str, pinned: bool) {
+        let Some(x) = self.sessions.iter_mut().find(|x| x.session_id == id) else { return };
+        if pinned == x.pinned_at.is_some() {
+            return;
+        }
+        x.pinned_at = pinned.then(crate::view::now_ms);
+        self.hover_row = None;
+        self.act(if pinned { "Pin session" } else { "Unpin session" }, m::SESSION_PIN, json!({"session_id": id, "pinned": pinned}), Refresh::None);
+    }
+
+    /// Open the sidebar's search field (⌘F / Ctrl+F, the search button).
+    pub fn open_search(&mut self) {
+        self.sidebar_open = true;
+        self.search_open = true;
+        self.search.focused = true;
+    }
+
+    /// Escape in the search field: clear it, then close it.
+    pub fn close_search(&mut self) {
+        if !self.search.text.is_empty() {
+            self.search.replace_text("");
+        } else {
+            self.search_open = false;
+            self.search.focused = false;
+        }
     }
 
     /// One of the host's own tools, by name ("create_pull_request").

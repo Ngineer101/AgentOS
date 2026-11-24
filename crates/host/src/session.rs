@@ -239,6 +239,7 @@ impl SessionManager {
             config_options: vec![],
             side_questions: false,
             pull_request: None,
+            pinned_at: None,
             automation_id: None,
             state: SessionState::Created,
             state_reason: None,
@@ -331,6 +332,25 @@ impl SessionManager {
             .store
             .session_set_title(session_id, title)
             .map_err(|e| RpcError::internal(e.to_string()))?;
+        let s = self.get(session_id)?;
+        self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
+        Ok(s)
+    }
+
+    /// Pin or unpin a session. Pinning a pinned one keeps its place.
+    pub fn set_pinned(&self, session_id: &str, pinned: bool) -> Result<Session, RpcError> {
+        let s = self.get(session_id)?;
+        let at = match (pinned, s.pinned_at) {
+            (true, Some(at)) => Some(at),
+            (true, None) => Some(now_ms()),
+            (false, _) => None,
+        };
+        if at != s.pinned_at {
+            self.ctx
+                .store
+                .session_set_pinned(session_id, at)
+                .map_err(|e| RpcError::internal(e.to_string()))?;
+        }
         let s = self.get(session_id)?;
         self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
         Ok(s)

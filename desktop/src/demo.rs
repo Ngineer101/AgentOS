@@ -88,6 +88,7 @@ fn base(s: &mut App) {
         config_options: vec![],
         side_questions: false,
         pull_request: None,
+        pinned_at: None,
         automation_id: None,
     };
     s.sessions = vec![
@@ -348,6 +349,7 @@ fn automations_screen(s: &mut App, id: &str) {
         side_questions: false,
         automation_id: Some(auto.into()),
         pull_request: None,
+        pinned_at: None,
     };
     s.sessions.push(run_session("ses_r3", "auto_deps", "Upgrade dependencies", 21 * H));
     s.sessions.push(run_session("ses_r4", "auto_sentry", "Investigate Sentry alerts", 2 * H));
@@ -616,6 +618,7 @@ fn subagents(s: &mut App) {
             config_options: config_options(),
             side_questions: true,
             pull_request: None,
+            pinned_at: None,
             automation_id: None,
         },
     );
@@ -676,7 +679,62 @@ fn subagents(s: &mut App) {
     s.screen = Screen::Session(sid.into());
 }
 
+/// The compact sidebar with everything it shows: a pinned session, a pull request, an
+/// automation's run, a long workspace ("Show 6 more") and a host that pins (protocol 8).
+fn sidebar(s: &mut App) {
+    session(s);
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 8;
+    }
+    let t = now();
+    let more = [
+        ("ses_s1", "Rate-limit the pairing endpoint", SessionState::Running, 540_000),
+        ("ses_s2", "Nightly dependency audit", SessionState::Idle, 21_600_000),
+        ("ses_s4", "Resume after host restart", SessionState::Failed, 86_400_000),
+        ("ses_s5", "Bump rune to e7f3ad9", SessionState::Idle, 90_000_000),
+        ("ses_s6", "Collapsible workspace sections", SessionState::Ended, 3 * 86_400_000),
+        ("ses_s7", "Host name in the sessions bar", SessionState::Ended, 15 * 86_400_000),
+        ("ses_s8", "Device auth tokens", SessionState::Ended, 40 * 86_400_000),
+        ("ses_s9", "Relay worker rate limits", SessionState::Ended, 41 * 86_400_000),
+        ("ses_s10", "Transcript paging", SessionState::Ended, 50 * 86_400_000),
+        ("ses_s11", "Pairing QR contrast", SessionState::Ended, 60 * 86_400_000),
+    ];
+    let proto = s.sessions.iter().find(|x| x.session_id == "ses_2").cloned().unwrap();
+    for (id, title, state, ago) in more {
+        s.sessions.push(Session { session_id: id.into(), title: Some(title.into()), state, created_at: t - ago, updated_at: t - ago, worktree: None, ..proto.clone() });
+    }
+    for x in s.sessions.iter_mut() {
+        match x.session_id.as_str() {
+            "ses_3" => x.pinned_at = Some(t - 86_400_000),
+            "ses_s2" => x.automation_id = Some("auto_deps".into()),
+            "ses_s4" => x.state_reason = Some("agent exited (code 1)".into()),
+            "ses_s5" | "ses_s6" => x.pull_request = Some(SessionPullRequest { number: 25, url: "https://github.com/nico/relay/pull/25".into() }),
+            _ => {}
+        }
+    }
+}
+
 pub const SCENES: &[(&str, fn(&mut App))] = &[
+    ("sidebar", sidebar),
+    ("sidebar-search", |s| {
+        sidebar(s);
+        s.search_open = true;
+        s.search.replace_text("auth");
+        s.search.focused = true;
+    }),
+    ("sidebar-collapsed", |s| {
+        sidebar(s);
+        s.collapsed.insert("ws_notes".into());
+        s.collapsed.insert(QUICK_WORKSPACE_ID.into());
+    }),
+    ("sidebar-hover", |s| {
+        sidebar(s);
+        s.hover_row = Some("ses_2".into());
+    }),
+    ("sidebar-jump", |s| {
+        sidebar(s);
+        s.jump_held = true;
+    }),
     ("session", |s| {
         session(s);
         chip(s);

@@ -153,3 +153,37 @@ async fn sessions_can_be_renamed_and_the_title_cleared() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn sessions_can_be_pinned_and_keep_their_place() {
+    let th = TestHost::start().await;
+    let (c, _n) = th.client().await;
+    let ws = th.workspace_id(&c).await;
+    let s = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    wait_state(&c, &s.session_id, SessionState::Idle, T).await;
+    assert_eq!(s.pinned_at, None);
+
+    let p: Session = c
+        .call(m::SESSION_PIN, json!({"session_id": s.session_id, "pinned": true}))
+        .await
+        .unwrap();
+    let at = p.pinned_at.expect("pinned");
+    // Pinning again keeps the time it was first pinned, so its place in the list.
+    let again: Session = c
+        .call(m::SESSION_PIN, json!({"session_id": s.session_id, "pinned": true}))
+        .await
+        .unwrap();
+    assert_eq!(again.pinned_at, Some(at));
+    let listed = list(&c, false).await;
+    assert_eq!(listed.iter().find(|x| x.session_id == s.session_id).unwrap().pinned_at, Some(at));
+
+    let u: Session = c
+        .call(m::SESSION_PIN, json!({"session_id": s.session_id, "pinned": false}))
+        .await
+        .unwrap();
+    assert_eq!(u.pinned_at, None);
+    assert!(c
+        .request(m::SESSION_PIN, json!({"session_id": "ses_missing", "pinned": true}))
+        .await
+        .is_err());
+}

@@ -419,6 +419,10 @@ pub struct Session {
     /// The automation this session is a run of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_id: Option<String>,
+    /// When the user pinned it (`session.pin`, protocol 8): clients list
+    /// pinned sessions first, in the order they were pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_at: Option<i64>,
 }
 
 /// A pull request a session opened.
@@ -485,6 +489,13 @@ pub struct SessionRenameParams {
     /// The new title; empty or omitted clears it (the host's title shows again).
     #[serde(default)]
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionPinParams {
+    pub session_id: String,
+    /// Pin it (`true`) or unpin it (`false`).
+    pub pinned: bool,
 }
 
 /// Longest session title, in characters.

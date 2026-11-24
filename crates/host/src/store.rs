@@ -281,11 +281,12 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
             (Some(n), Some(url)) => Some(SessionPullRequest { number: n as u64, url }),
             _ => None,
         },
+        pinned_at: r.get(19)?,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
 /// [`SESSION_COLS`] to read: the title shown is the user's, else the host's.
-const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url";
+const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -323,6 +324,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // relay gave the phone (`token` is then empty).
     ("push_devices", "gateway_url", "TEXT"),
     ("push_devices", "gateway_handle", "TEXT"),
+    // When the user pinned the session (`session.pin`).
+    ("sessions", "pinned_at", "INTEGER"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -643,7 +646,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -663,7 +666,8 @@ impl Store {
                 s.side_questions as i64,
                 s.automation_id,
                 s.pull_request.as_ref().map(|p| p.number as i64),
-                s.pull_request.as_ref().map(|p| p.url.clone())
+                s.pull_request.as_ref().map(|p| p.url.clone()),
+                s.pinned_at
             ],
         )?;
         Ok(())
@@ -678,6 +682,14 @@ impl Store {
                 row_session,
             )
             .optional()?)
+    }
+
+    /// Pin a session (at `at`, ms) or with `None` unpin it. Returns whether it exists.
+    pub fn session_set_pinned(&self, id: &str, at: Option<i64>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET pinned_at = ?2 WHERE session_id = ?1",
+            params![id, at],
+        )? > 0)
     }
 
     pub fn session_set_title(&self, id: &str, title: Option<&str>) -> Result<bool> {
@@ -1622,6 +1634,7 @@ mod tests {
             config_options: vec![],
             side_questions: false,
             pull_request: None,
+            pinned_at: None,
             automation_id: None,
             state: SessionState::Created,
             state_reason: None,
@@ -1664,6 +1677,18 @@ mod tests {
         assert!(st.session_set_pull_request(&sid, &pr).unwrap());
         assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, Some(pr));
         assert!(!st.session_set_pull_request("ses_none", &SessionPullRequest { number: 1, url: "u".into() }).unwrap());
+    }
+
+    #[test]
+    fn a_session_can_be_pinned_and_unpinned() {
+        let (st, sid) = setup();
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, None);
+        assert!(st.session_set_pinned(&sid, Some(1234)).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, Some(1234));
+        assert_eq!(st.session_list(None).unwrap()[0].pinned_at, Some(1234), "the list carries it too");
+        assert!(st.session_set_pinned(&sid, None).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, None);
+        assert!(!st.session_set_pinned("ses_none", Some(1)).unwrap());
     }
 
     #[test]

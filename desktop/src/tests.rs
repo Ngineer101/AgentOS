@@ -1020,6 +1020,33 @@ fn session_rename_round_trips_through_the_host() {
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 
+/// `session.pin` against a real host: the row moves to Pinned at once, the host keeps it,
+/// and unpinning sends it back to its workspace.
+#[test]
+fn pins_round_trip_through_the_host() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahp").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+    assert!(app.has_pins(), "the host is on protocol 8");
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    app.set_pinned(&sid, true);
+    assert_eq!(app.pinned_sessions().len(), 1, "it moves at once");
+    // The host's own copy says so too (a fresh list, not ours).
+    app.call(bridge::Tag::Sessions, agenthost_proto::methods::SESSION_LIST, serde_json::json!({}));
+    pump(&mut app, |a| a.session(&sid).is_some_and(|s| s.pinned_at.is_some()) && a.error.is_none());
+    app.set_pinned(&sid, false);
+    pump(&mut app, |a| a.session(&sid).is_some_and(|s| s.pinned_at.is_none()));
+    assert!(app.sidebar_groups().iter().any(|(_, l)| l.iter().any(|x| x.session_id == sid)));
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
 #[test]
 fn subagents_group_children_under_their_calls() {
     let app = demo("subagents");
@@ -1758,4 +1785,129 @@ fn each_session_keeps_its_unsent_message() {
     app.open_session("ses_1");
     app.open_session("ses_2");
     assert_eq!(app.prompt.text, "");
+}
+
+/// The compact sidebar's model: Pinned first (in the order pinned), groups of the newest few
+/// with "Show N more", collapsed groups out of the walking order, and search showing all.
+#[test]
+fn compact_sidebar_pins_collapses_and_shows_more() {
+    let mut app = model::init();
+    let scene = crate::demo::SCENES.iter().find(|(n, _)| *n == "sidebar").unwrap().1;
+    scene(&mut app);
+    let ids = |l: Vec<&agenthost_proto::Session>| l.into_iter().map(|x| x.session_id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(app.pinned_sessions()), ["ses_3"]);
+    let relay = || app.sidebar_groups().into_iter().find(|(w, _)| w.workspace_id == "ws_relay").map(|(_, l)| l.len()).unwrap();
+    assert_eq!(relay(), 12, "the pinned one leaves its group");
+    let group = |a: &model::App| {
+        let groups = a.sidebar_groups();
+        let (_, l) = groups.iter().find(|(w, _)| w.workspace_id == "ws_relay").unwrap();
+        let (rows, hidden) = a.group_rows("ws_relay", l);
+        (rows.len(), hidden)
+    };
+    assert_eq!(group(&app), (model::GROUP_SHOWN, 4));
+    // Pinned sessions come first in the order and the numbers.
+    assert_eq!(app.sidebar_order()[0], "ses_3");
+    assert_eq!(app.numbered()[0], "ses_3");
+    // A session that's working always shows, however old.
+    app.sessions.iter_mut().find(|x| x.session_id == "ses_s11").unwrap().state = SessionState::Running;
+    assert_eq!(group(&app), (model::GROUP_SHOWN + 1, 3));
+    app.show_all.insert("ws_relay".into());
+    assert_eq!(group(&app), (12, 0));
+    // Collapsed: no rows, nothing to walk or number; a search shows the matches anyway.
+    app.toggle_group("ws_relay");
+    assert_eq!(group(&app), (0, 0));
+    assert!(!app.sidebar_order().contains(&"ses_1".to_string()));
+    app.search.replace_text("oauth");
+    assert_eq!(app.sidebar_order(), ["ses_2"]);
+    app.search.replace_text("");
+    app.toggle_group("ws_relay");
+    assert!(app.sidebar_order().contains(&"ses_1".to_string()));
+    // Pinning another puts it after the first; unpinning sends it home.
+    app.set_pinned("ses_1", true);
+    assert_eq!(ids(app.pinned_sessions()), ["ses_3", "ses_1"]);
+    app.set_pinned("ses_3", false);
+    assert_eq!(ids(app.pinned_sessions()), ["ses_1"]);
+    assert!(app.sidebar_groups().iter().any(|(_, l)| l.iter().any(|x| x.session_id == "ses_3")));
+    // Escape in the search field clears it, then closes it.
+    app.open_search();
+    app.search.replace_text("x");
+    app.close_search();
+    assert!(app.search_open && app.search.text.is_empty());
+    app.close_search();
+    assert!(!app.search_open);
+    // A host before protocol 8 can't pin.
+    assert!(app.has_pins());
+    app.info.as_mut().unwrap().protocol_version = 7;
+    assert!(!app.has_pins());
+}
+
+/// The compact sidebar lays out in both looks and its buttons do what they say: search,
+/// collapse, "Show N more", a workspace's "+", and a hovered row's Pin and Archive.
+#[test]
+fn compact_sidebar_lays_out_and_clicks_through() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1000.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let state = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = open("sidebar", look);
+        for k in ["toggle-sidebar", "sidebar-search", "nav-new", "nav-automations", "add-folder", "group-ws_relay", "group-new-ws_relay", "more-ws_relay", "ses_3", "ses_s4"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        assert!(ui.find("search-field").is_none(), "{look:?}: search is behind its button");
+        assert!(ui.find("pin-ses_2").is_none(), "{look:?}: Pin shows on hover only");
+        // The search button opens the field in the nav's place.
+        click(&mut ui, "sidebar-search");
+        assert!(state(&mut ui, &|s| s.search_open));
+        assert!(ui.find("search-field").is_some() && ui.find("nav-new").is_none(), "{look:?}");
+        click(&mut ui, "sidebar-search");
+        assert!(state(&mut ui, &|s| !s.search_open));
+        // Show more, then collapse.
+        assert!(ui.find("ses_s11").is_none(), "{look:?}: past the newest few");
+        click(&mut ui, "more-ws_relay");
+        assert!(ui.find("ses_s11").is_some(), "{look:?}: Show more shows the rest");
+        click(&mut ui, "group-ws_relay");
+        assert!(state(&mut ui, &|s| s.collapsed.contains("ws_relay")));
+        assert!(ui.find("ses_1").is_none() && ui.find("ses_3").is_some(), "{look:?}: the pinned one stays");
+        // A workspace's "+" opens the sheet on it.
+        click(&mut ui, "group-new-ws_notes");
+        assert!(state(&mut ui, &|s| s.new_open && s.new_ws.as_deref() == Some("ws_notes")));
+
+        // Hovered: Pin and Archive in place of the age; pressing one doesn't open the row.
+        let mut ui = open("sidebar-hover", look);
+        assert!(ui.find("pin-ses_2").is_some() && ui.find("archive-ses_2").is_some(), "{look:?}");
+        click(&mut ui, "archive-ses_2");
+        assert!(state(&mut ui, &|s| s.confirm_archive.as_deref() == Some("ses_2")), "{look:?}: a live one asks first");
+        assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_1".into())), "{look:?}: the row didn't open");
+        let mut ui = open("sidebar-hover", look);
+        click(&mut ui, "pin-ses_2");
+        assert!(state(&mut ui, &|s| s.session("ses_2").is_some_and(|x| x.pinned_at.is_some()) && s.pinned_sessions().len() == 2), "{look:?}");
+        assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_1".into())), "{look:?}: the row didn't open");
+    }
 }

@@ -377,6 +377,10 @@ impl Conn {
                 let r: agenthost_proto::SessionRenameParams = params(p)?;
                 to_value(h.sessions.rename(&r.session_id, r.title.as_deref())?)
             }
+            m::SESSION_PIN => {
+                let r: agenthost_proto::SessionPinParams = params(p)?;
+                to_value(h.sessions.set_pinned(&r.session_id, r.pinned)?)
+            }
             m::SESSION_UNARCHIVE => {
                 let r: SessionRef = params(p)?;
                 to_value(h.sessions.set_archived(&r.session_id, false).await?)
