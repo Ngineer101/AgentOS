@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="112 43 800 800" width="1024" height="1024">
+<!-- Generated from app-icon.svg: the mark without its background (the gap around the square is cut out). -->
+<defs>
+<mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><rect width="1024" height="1024" fill="#fff"/><rect x="422" y="422" width="180" height="180" rx="40" fill="#000"/></mask>
+</defs>
+<g mask="url(#gap)"><g fill="none" stroke="#F2F4F8" stroke-linecap="round" stroke-linejoin="round" stroke-width="48"><path d="M512 512 V236"/><path d="M512 512 L273 650"/><path d="M512 512 L751 650"/></g><circle cx="512" cy="236" r="70" fill="#F2F4F8"/><circle cx="273" cy="650" r="70" fill="#F2F4F8"/><circle cx="751" cy="650" r="70" fill="#F2F4F8"/></g>
+<rect x="438" y="438" width="148" height="148" rx="30" fill="#3DDC97"/>
+</svg>

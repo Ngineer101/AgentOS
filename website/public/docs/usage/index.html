@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Using AgentOS · AgentOS</title>
+<meta name="description" content="Workspaces, quick tasks, several logins per agent, automations and webhooks in AgentOS.">
+<meta name="theme-color" content="#0b0d10">
+<meta property="og:title" content="Using AgentOS · AgentOS">
+<meta property="og:description" content="Workspaces, quick tasks, several logins per agent, automations and webhooks in AgentOS.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/logo.svg" alt="" width="26" height="26">AgentOS</a>
+    <nav class="site-nav" aria-label="Main">
+      <a class="hide-s" href="/#how">How it works</a>
+      <a href="/#setup">Setup</a>
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a class="btn small" href="https://github.com/Ngineer101/relay">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap docs">
+  <aside class="docs-nav">
+    <nav aria-label="Docs">
+      <h2>Docs</h2>
+      <ul><li><a href="/docs/">Getting started</a></li><li><a href="/docs/usage/" aria-current="page">Using AgentOS</a></li><li><a href="/docs/remote/">Remote access and iOS</a></li><li><a href="/docs/security/">Security model</a></li></ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="https://github.com/Ngineer101/relay/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
+        <li><a href="https://github.com/Ngineer101/relay/blob/main/docs/status.md">What has been verified</a></li>
+        <li><a href="https://github.com/Ngineer101/relay/blob/main/CONTRIBUTING.md">Contributing</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="prose">
+    <h1>Using AgentOS</h1>
+    <p class="lede">Everything here works from the desktop app too. The CLI is shown because it is shorter to write down.</p>
+
+<h2 id="workspaces">Workspaces and sessions</h2>
+<pre><code><span class="p">$ </span>agenthost status<span class="c">    # sandbox health, agents, login state</span>
+<span class="p">$ </span>agenthost workspace add ~/code/myproject --profile packages
+<span class="p">$ </span>agenthost run ~/code/myproject claude "Summarise this repo"
+<span class="p">$ </span>agenthost chat ~/code/myproject codex<span class="c">    # interactive</span>
+<span class="p">$ </span>agenthost run ~/code/myproject claude "What's wrong here?" --attach crash.log
+<span class="p">$ </span>agenthost voice download<span class="c">    # local speech model for voice input (once)</span></code></pre>
+<p>A workspace's <code>--profile</code> decides what its sessions may reach on the network besides the agent's own provider:</p>
+<table>
+  <tr><th>Profile</th><th>Allows</th></tr>
+  <tr><td><code>agent-only</code></td><td>Nothing besides the agent's provider</td></tr>
+  <tr><td><code>packages</code></td><td>Package registries</td></tr>
+  <tr><td><code>github</code></td><td>GitHub</td></tr>
+  <tr><td><code>web</code></td><td>Any public site (local and private addresses stay refused)</td></tr>
+</table>
+<p>Combine them with commas, for example <code>--profile packages,github</code>. When a session is refused a host, the CLI prints the command that allows it.</p>
+
+<h2 id="quick">Quick tasks</h2>
+<p>The built-in <strong>Quick tasks</strong> workspace needs no project: each session gets a fresh, empty folder of its own, with open web so the agent can look things up.</p>
+<pre><code><span class="p">$ </span>agenthost run quick claude "What changed in the latest Rust release?"</code></pre>
+<p>Switch open web off on the desktop's Workspaces screen, or with <code>agenthost workspace set quick --profile agent-only</code>.</p>
+
+<h2 id="projects">New projects from the phone</h2>
+<p>The phone can turn a folder inside your project folders (by default <code>~/Code</code>) into a workspace, or create a new one there. Only the computer chooses which folders those are:</p>
+<pre><code><span class="p">$ </span>agenthost project roots --set ~/Code,~/Work
+<span class="p">$ </span>agenthost project ls</code></pre>
+
+<h2 id="logins">Several logins for one agent</h2>
+<p>Have a work and a personal subscription for the same agent? Give each its own config folder and add it as a profile. New sessions can then pick it, on the desktop and the phone from the agent list, or here as <code>agent:name</code>:</p>
+<pre><code><span class="p">$ </span>agenthost agent add claude work --config-dir ~/.claude-work
+<span class="p">$ </span>agenthost agent list<span class="c">    # shows the login command if needed</span>
+<span class="p">$ </span>agenthost run ~/code/myproject claude:work "Summarise this repo"</code></pre>
+<p>A profile's folder is writable only to sessions that use it and hidden from every other session. Profiles work for Claude Code, Codex and OpenCode, and for Cursor on Linux; not yet for Antigravity.</p>
+
+<h2 id="automations">Automations</h2>
+<p>An automation is a saved session that starts by itself: on a schedule, when a webhook arrives, or when you press Run Now. Each run is an ordinary session, so its transcript is the run's output.</p>
+<pre><code><span class="p">$ </span>agenthost automation add "Upgrade dependencies" -w ~/code/myproject -a claude \
+    --cron "0 3 * * 1" --auto-approve create_pull_request,git_push \
+    --prompt "Upgrade dependencies, run the tests, open a pull request."
+<span class="p">$ </span>agenthost automation ls<span class="c">    # next run, last result</span>
+<span class="p">$ </span>agenthost automation run &lt;id&gt; --wait<span class="c">    # now, and print the summary</span>
+<span class="p">$ </span>agenthost automation runs &lt;id&gt;<span class="c">    # history; each run names its session</span></code></pre>
+<ul>
+  <li>Schedules are cron in the computer's own time, at most every 5 minutes.</li>
+  <li>The host only runs while the computer is awake. A time missed by up to 12 hours runs once when it is back; an older one is recorded as skipped.</li>
+  <li>A run still going after its time limit (60 minutes by default) is stopped.</li>
+  <li>An automation may let its runs open pull requests and push their own branch without asking. Anything else asks as usual, and your phone gets 12 hours to answer.</li>
+</ul>
+
+<h3 id="webhooks">Webhooks</h3>
+<p>Webhook automations are set up on the desktop and need a <a href="/docs/remote/">relay</a>. Each gets a URL on your relay; the relay seals each request to the host as it arrives, and the host checks the sender's signature before starting a run.</p>
+<p>For Sentry:</p>
+<ol>
+  <li>Connect the Sentry MCP connector (Settings → Connectors) and switch it on for the workspace, so runs can read the issue.</li>
+  <li>Create the automation and copy its webhook URL:
+<pre><code><span class="p">$ </span>agenthost automation add "Investigate Sentry alerts" -w ~/code/myproject -a claude --webhook sentry --secret &lt;client secret&gt;</code></pre></li>
+  <li>In Sentry, create an internal integration (Settings → Developer Settings → Custom Integrations), paste the URL as its Webhook URL, turn on <strong>Alert Rule Action</strong>, and copy its Client Secret into the automation.</li>
+  <li>In the alert rules you want investigated, add the action "Send a notification via" your integration.</li>
+</ol>
+<p>GitHub webhooks (<code>--webhook github</code>) and any other sender (<code>--webhook generic</code>) work the same way. The payload is attached to the run as <code>webhook.json</code>, and fields can go in the prompt as <code>{{payload.some.field}}</code>. Alert text is passed to the agent as untrusted data, never as instructions.</p>
+
+<h2 id="debugging">Debugging</h2>
+<pre><code><span class="p">$ </span>AGENTHOST_ACP_TRACE=1 agenthostd run<span class="c">    # log raw ACP traffic per session</span></code></pre>
+<p>The installed host logs to <code>&lt;data folder&gt;/logs/host.log</code>. The full reference is in <a href="https://github.com/Ngineer101/relay/blob/main/docs/usage.md">docs/usage.md</a>.</p>
+
+    <div class="pager"><a class="btn" href="/docs/">← Getting started</a><a class="btn" href="/docs/remote/">Remote access and iOS →</a></div>
+  </main>
+</div>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>AgentOS is an independent open-source project, licensed MIT or Apache-2.0. It is not affiliated with or endorsed by Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names belong to their owners.</p>
+    <nav aria-label="Footer">
+      <a href="/docs/">Docs</a>
+      <a href="/docs/security/">Security</a>
+      <a href="https://github.com/Ngineer101/relay">GitHub</a>
+      <a href="https://github.com/Ngineer101/relay/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+<script src="/site.js" defer></script>
+</body>
+</html>

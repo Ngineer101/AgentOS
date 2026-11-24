@@ -143,6 +143,7 @@ optional push-notification setup (needs a paid Apple Developer account).
 | `desktop/` | The desktop app ([Rune](https://github.com/anomalyco/rune)), its own Cargo workspace |
 | `ios/` | The SwiftUI iOS app |
 | `relay/` | The relay: a Cloudflare Worker with one Durable Object per host |
+| `website/` | The landing page and basic docs: static files served by a Cloudflare Worker |
 | `scripts/` | Install and development scripts |
 
 ## Development
