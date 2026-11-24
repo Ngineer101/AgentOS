@@ -6,6 +6,7 @@ import SwiftUI
 // Designs: "iOS — Notes", "iOS — Note", "iOS — New note (sheet)".
 
 /// The workspaces in the list's order: Quick tasks last, the rest by name.
+@MainActor
 private func noteWorkspaces(_ model: AppModel) -> [WorkspaceInfo] {
     model.workspaces.sorted {
         if $0.isQuickTasks != $1.isQuickTasks { return !$0.isQuickTasks }
@@ -13,6 +14,7 @@ private func noteWorkspaces(_ model: AppModel) -> [WorkspaceInfo] {
     }
 }
 
+@MainActor
 private func workspaceTitle(_ model: AppModel, _ id: String) -> String {
     guard let w = model.workspace(id) else { return "Removed workspace" }
     return w.isQuickTasks ? "Quick tasks" : w.name
