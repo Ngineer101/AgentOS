@@ -4,7 +4,7 @@
 
    Corners come from three sizes only: --r-panel (glass panels, screenshots),
    --r-inner (anything inside a panel, code blocks, notes) and --r-pill
-   (buttons, chips, the header). Icon tiles are 27% like the app's badges. */
+   (buttons, the header). Icon tiles are 27% like the app's badges. */
 :root {
   --ground: #07090b;
   --text: rgba(242, 244, 248, 0.9);
@@ -58,7 +58,7 @@ p { margin: 0; }
 .wrap { max-width: var(--page); margin: 0 auto; padding: 0 24px; }
 
 /* Glass: a translucent fill, a lit top edge and a blur of what is behind. */
-.glass, .site-header .bar, .steps > li, pre, .note, .btn, .chip, .docs-nav a[aria-current="page"] {
+.glass, .site-header .bar, .steps > li, pre, .note, .btn, .docs-nav a[aria-current="page"] {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.04));
   border: 1px solid var(--sep);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13);
@@ -82,7 +82,7 @@ p { margin: 0; }
 .site-nav a { color: var(--text-2); font-size: 14.5px; font-weight: 500; }
 .site-nav a:hover, .site-nav a[aria-current="page"] { color: var(--text-strong); text-decoration: none; }
 
-/* Buttons and chips */
+/* Buttons */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 48px; padding: 0 24px; border-radius: var(--r-pill);
@@ -94,9 +94,17 @@ p { margin: 0; }
 .btn.small { height: 38px; padding: 0 16px; font-size: 14.5px; }
 .site-nav .btn { color: var(--text-strong); }
 
-.tile { flex: none; display: grid; place-items: center; border-radius: 27%; color: #fff; }
+/* Icon tiles: near-black glass, one colour of glyph. */
+.tile {
+  flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 27%; color: var(--text-strong);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)), rgba(6, 8, 10, 0.72);
+  border: 1px solid var(--sep);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+}
 .tile svg { width: 58%; height: 58%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.tile img { width: 62%; height: 62%; }
+.tile img { width: 52%; height: 52%; filter: invert(1); opacity: 0.94; }
 
 /* Hero */
 .hero { padding: 76px 0 56px; }
@@ -104,11 +112,7 @@ p { margin: 0; }
 .hero h1 { font-size: clamp(40px, 5.6vw, 66px); font-weight: 700; letter-spacing: -0.04em; line-height: 1.04; }
 .hero .lede { margin-top: 24px; font-size: 19px; line-height: 1.55; color: var(--text-2); max-width: 33em; }
 .hero .actions { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 12px; }
-.chips { margin-top: 44px; display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 9px; height: 38px; padding: 0 15px 0 8px; border-radius: var(--r-pill); color: var(--text); font-size: 14.5px; font-weight: 500; }
-.chip .tile { width: 24px; height: 24px; }
-.chip .tile.dark img { filter: none; }
-.chip .tile img { filter: invert(1); }
+.agents { margin-top: 44px; display: flex; flex-wrap: nowrap; gap: 10px; }
 
 .phone {
   justify-self: center; width: min(310px, 78vw);
@@ -146,12 +150,8 @@ section { padding: 84px 0; }
 .groups .group > li { align-content: center; }
 .group > li, .group > a { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 16px; padding: 18px 24px; position: relative; }
 .group > li + li::before, .group > a + a::before { content: ""; position: absolute; top: 0; left: 84px; right: 0; height: 1px; background: var(--sep); }
-.group .tile { width: 44px; height: 44px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3); }
 .group h3 { font-size: 17.5px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
 .group p { margin-top: 4px; color: var(--text-2); font-size: 15.5px; line-height: 1.5; }
-.t-green { background: #30d158; } .t-blue { background: #0a84ff; } .t-orange { background: #ff9f0a; }
-.t-purple { background: #bf5af2; } .t-mint { background: #2cc586; } .t-indigo { background: #5e5ce6; }
-
 .group.links > a { grid-template-columns: minmax(0, 1fr) auto; align-items: center; color: inherit; }
 .group.links > a + a::before { left: 24px; }
 .group.links > a:hover { text-decoration: none; background: rgba(255, 255, 255, 0.04); }
