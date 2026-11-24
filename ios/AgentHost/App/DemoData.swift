@@ -11,7 +11,8 @@ import UIKit
 ///                                         quick | plain | btw | subagents |
 ///                                         notifications | pair-notifications |
 ///                                         pair-apns-key | automations | automation |
-///                                         automation-webhook | automation-new
+///                                         automation-webhook | automation-new |
+///                                         notes | note | note-new
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 ///     -AgentHostDemoTitleMenu             the session opens with its title menu open
@@ -59,6 +60,12 @@ struct DemoData {
         case automationWebhook = "automation-webhook"
         /// The New Automation sheet.
         case automationNew = "automation-new"
+        /// Notes: three open in two workspaces (one with a session), one done.
+        case notes
+        /// One note, with the session started from it.
+        case note
+        /// The New Note sheet over Notes.
+        case noteNew = "note-new"
     }
 
     /// `push.status` for a screen: this iPhone registered through the relay
@@ -85,6 +92,7 @@ struct DemoData {
     var transcripts: [String: Transcript]
     var connectors: [ConnectorInfo] = []
     var automations: [AutomationModel] = []
+    var notes: [NoteModel] = []
     var screenStatus = ScreenStatusModel(
         policy: ScreenPolicyModel(enabled: true, allowControl: true),
         installed: true,
@@ -108,6 +116,7 @@ struct DemoData {
     static let upgradeAutomation = "auto-upgrade"
     static let sentryAutomation = "auto-sentry"
     static let maintenanceAutomation = "auto-maintenance"
+    static let rateLimitNote = "note-rate"
 
     /// The screen asked for on the command line (nil without `-AgentHostDemo`).
     static var requestedScreen: Screen? {
@@ -264,6 +273,7 @@ struct DemoData {
             upgradeRun,
         ]
         automations = Self.demoAutomations(now: now)
+        notes = Self.demoNotes(now: now)
         archived = [
             session(Self.archivedSession, "ws-relay", "codex", "codex", SessionStateName.ended,
                     "Spike: QUIC transport", ago: 4 * 24 * 60, lastSeq: 3, archivedAgo: 3 * 24 * 60),
@@ -496,6 +506,22 @@ struct DemoData {
 
         transcripts = [Self.subagentSession: audit, Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
                        Self.plainSession: tidy]
+    }
+
+    /// Ideas kept for later in relay and notes: one became a session (the
+    /// flaky test, still open), one is done.
+    private static func demoNotes(now: Int64) -> [NoteModel] {
+        let hour: Int64 = 3_600_000
+        func note(_ id: String, _ ws: String, _ text: String, ago: Int64, doneAgo: Int64? = nil, sessions: [String] = []) -> NoteModel {
+            NoteModel(noteId: id, workspaceId: ws, text: text, doneAt: doneAgo.map { now - $0 * hour },
+                      sessionIds: sessions.isEmpty ? nil : sessions, createdAt: now - ago * hour, updatedAt: now - ago * hour)
+        }
+        return NoteModel.sorted([
+            note(rateLimitNote, "ws-relay", "Rate-limit pairing attempts\nA phone that keeps failing the handshake should back off, not hammer the relay.\nMaybe 5 tries a minute per device key, then a cool-down the desktop can clear.", ago: 2, sessions: [flakySession]),
+            note("note-oauth", "ws-relay", "Refresh OAuth tokens before they expire\nNot only on a 401: check expires_at when a session starts.", ago: 26),
+            note("note-reading", "ws-notes", "Sort the reading list by topic\nRust, relays, design.", ago: 50),
+            note("note-quic", "ws-relay", "Try QUIC for the tunnel", ago: 120, doneAgo: 72, sessions: [archivedSession]),
+        ])
     }
 
     /// Three automations: a weekly schedule, a Sentry webhook (running) and

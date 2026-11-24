@@ -63,7 +63,7 @@ async fn an_image_alone_is_sent_and_kept() {
     let (host, ws) = open(dir.path());
     let s = host
         .sessions
-        .create(SessionCreateParams { workspace_id: ws, agent: AgentKind::Fake, profile_id: None, title: None }, None)
+        .create(SessionCreateParams { workspace_id: ws, agent: AgentKind::Fake, profile_id: None, title: None, note_id: None }, None)
         .await
         .unwrap();
     let sid = s.session_id.clone();

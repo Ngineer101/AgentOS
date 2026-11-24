@@ -186,6 +186,9 @@ impl SessionManager {
             .workspace_get(&p.workspace_id)
             .map_err(|e| RpcError::internal(e.to_string()))?
             .ok_or_else(|| RpcError::not_found(format!("no workspace {}", p.workspace_id)))?;
+        if let Some(note_id) = &p.note_id {
+            crate::notes::check_start(&self.ctx, note_id, &ws.workspace_id)?;
+        }
         if p.agent == AgentKind::Fake && !self.ctx.cfg.enable_fake_agent {
             return Err(RpcError::new(
                 jsonrpc::codes::UNAVAILABLE,
@@ -279,6 +282,11 @@ impl SessionManager {
                 profile_id.as_deref(),
             );
         }
+        if let Some(note_id) = &p.note_id {
+            if let Err(e) = crate::notes::link_session(&self.ctx, note_id, &s.session_id) {
+                tracing::warn!(session = %s.session_id, note = %note_id, "could not link the note: {}", e.message);
+            }
+        }
         self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
         self.spawn_actor(s.clone(), ws, false);
         Ok(s)
@@ -315,6 +323,9 @@ impl SessionManager {
             .map_err(|e| RpcError::internal(e.to_string()))?;
         let s = self.get(session_id)?;
         self.ctx.bus.publish(BusMsg::SessionChanged(s.clone()));
+        if archived {
+            crate::notes::session_archived(&self.ctx, session_id);
+        }
         Ok(s)
     }
 

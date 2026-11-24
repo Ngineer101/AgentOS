@@ -9,6 +9,9 @@ enum Route: Hashable {
     /// Settings → Automations, and one automation (protocol 5 hosts).
     case automations
     case automation(String)
+    /// Notes, and one note (protocol 9 hosts).
+    case notes
+    case note(String)
 }
 
 /// Sessions grouped by workspace (Quick tasks first). The host's name and
@@ -26,6 +29,8 @@ struct SessionsView: View {
     @State private var search = ""
     /// Asking before archiving a live session.
     @State private var archiving: SessionInfo?
+    /// The New Note sheet, from a workspace's menu.
+    @State private var newNoteIn: NewNoteTarget?
     /// Workspaces collapsed on this phone: their ids, one per line.
     @AppStorage("collapsedWorkspaces") private var collapsedIds = ""
 
@@ -85,6 +90,15 @@ struct SessionsView: View {
                             toggle: search.isEmpty ? { toggleCollapsed(group.workspaceId) } : nil
                         )
                         .listRowSeparator(.hidden)
+                        .contextMenu {
+                            if model.hostSupportsNotes {
+                                Button {
+                                    newNoteIn = NewNoteTarget(workspaceId: group.workspaceId)
+                                } label: {
+                                    Label("New Note", systemImage: "square.and.pencil")
+                                }
+                            }
+                        }
                         if !isCollapsed {
                             ForEach(group.sessions) { s in
                                 NavigationLink(value: Route.session(s.sessionId)) {
@@ -153,6 +167,16 @@ struct SessionsView: View {
                         .disabled(!model.link.isOnline)
                     }
                 }
+                if model.hostSupportsNotes {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            path.append(.notes)
+                        } label: {
+                            ToolbarIcon(systemName: "note.text")
+                        }
+                        .accessibilityLabel("Notes")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         path.append(.settings)
@@ -177,9 +201,19 @@ struct SessionsView: View {
                     AutomationsView()
                 case let .automation(id):
                     AutomationDetailView(automationId: id)
+                case .notes:
+                    NotesView()
+                case let .note(id):
+                    NoteView(noteId: id)
                 }
             }
             .archiveFlow($archiving)
+            .sheet(item: $newNoteIn) { target in
+                NewNoteView(workspaceId: target.workspaceId)
+                    .environmentObject(model)
+                    // Saved from here: the list is loaded so it shows.
+                    .task { if model.notes == nil { await model.refreshNotes() } }
+            }
             .sheet(isPresented: $showNew) {
                 NewSessionView { created in
                     showNew = false
@@ -254,6 +288,8 @@ struct SessionsView: View {
         case .automations, .automationNew: path = [.settings, .automations]
         case .automation: path = [.settings, .automations, .automation(DemoData.upgradeAutomation)]
         case .automationWebhook: path = [.settings, .automations, .automation(DemoData.sentryAutomation)]
+        case .notes, .noteNew: path = [.notes]
+        case .note: path = [.notes, .note(DemoData.rateLimitNote)]
         case .sessions, .pair, .pairNotifications, .pairAPNsKey: break
         }
     }

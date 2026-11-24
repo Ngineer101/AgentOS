@@ -3,10 +3,13 @@ import SwiftUI
 /// Start a session: Quick Task first, then the workspaces and "New
 /// Project…", and an agent login (a default login or a profile). Choosing a
 /// workspace picks its default login; picking another can make that the
-/// default. A sheet with a prominent Start.
+/// default. A sheet with a prominent Start. From a note (`note`): its
+/// workspace is chosen, and the new session opens with the note's text in
+/// the composer (unless another workspace is picked).
 struct NewSessionView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    var note: NoteModel? = nil
     var onCreated: (SessionInfo) -> Void
 
     @State private var workspaceId: String?
@@ -81,6 +84,22 @@ struct NewSessionView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let note, workspaceId == note.workspaceId {
+                    Section {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(note.title).lineLimit(2)
+                                Text("Its text opens in the message box, ready to edit and send.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "note.text")
+                        }
+                    } header: {
+                        GroupHeader("From note")
+                    }
+                }
                 Section(caps: "Workspace") {
                     if model.workspaces.isEmpty {
                         Text("No workspaces yet. Add a project below, or on the computer.")
@@ -147,6 +166,9 @@ struct NewSessionView: View {
             .task {
                 // Fresh agent availability and workspaces.
                 await model.refreshAll()
+                if workspaceId == nil, let note, model.workspace(note.workspaceId) != nil {
+                    workspaceId = note.workspaceId
+                }
                 if workspaceId == nil {
                     workspaceId = workspaces.first(where: \.isQuickTasks)?.workspaceId
                         ?? (model.workspaces.count == 1 ? model.workspaces.first?.workspaceId : nil)
@@ -179,7 +201,7 @@ struct NewSessionView: View {
         Task {
             do {
                 let s = try await model.createSession(
-                    workspaceId: wid, agent: login.agent, profileId: login.profileId)
+                    workspaceId: wid, agent: login.agent, profileId: login.profileId, note: note)
                 if setDefault {
                     // The session is running either way; a failure here only
                     // means the default stays as it was.

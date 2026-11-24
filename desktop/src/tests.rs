@@ -1911,3 +1911,168 @@ fn compact_sidebar_lays_out_and_clicks_through() {
         assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_1".into())), "{look:?}: the row didn't open");
     }
 }
+
+// ---- notes -------------------------------------------------------------------------------
+
+fn note_changed(ch: NoteChanged) -> bridge::FromHost {
+    bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: agenthost_proto::methods::N_NOTE_CHANGED.into(), params: serde_json::to_value(ch).unwrap() })
+}
+
+#[test]
+fn notes_follow_the_host_but_keep_unsaved_edits() {
+    let mut app = demo("notes");
+    assert_eq!(app.notes.iter().map(|n| n.note_id.as_str()).collect::<Vec<_>>(), ["note_rate", "note_oauth", "note_icons", "note_flaky"], "open newest first, then done");
+    assert_eq!(crate::notes::summary(&app), "3 open notes");
+    assert!(!app.note_dirty());
+    // Changed on the phone while shown here, unedited: the editor shows the new text.
+    let mut n = app.note("note_rate").unwrap().clone();
+    n.text = "Rate-limit pairing attempts\nPer device key.".into();
+    app.apply(note_changed(NoteChanged { note_id: n.note_id.clone(), note: Some(n.clone()), removed: false }));
+    assert_eq!(app.note_edit.text, "Rate-limit pairing attempts\nPer device key.");
+    assert!(!app.note_dirty());
+    // Edited here first: the edit stays, still unsaved.
+    app.note_edit.replace_text("Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    n.text = "Something else".into();
+    app.apply(note_changed(NoteChanged { note_id: n.note_id.clone(), note: Some(n.clone()), removed: false }));
+    assert_eq!(app.note_edit.text, "Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    assert!(app.note_dirty());
+    // Picking another note saves it (shown at once) and shows the other.
+    app.select_note("note_icons");
+    assert_eq!(app.note("note_rate").unwrap().text, "Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    assert_eq!(app.note_edit.text, "Try a darker app icon\nGlass rim, no green.");
+    // Trailing space and blank lines alone aren't a change; a blank note isn't saved.
+    app.note_edit.replace_text("Try a darker app icon\nGlass rim, no green.\n\n  ");
+    assert!(!app.note_dirty());
+    app.note_edit.replace_text("   \n");
+    assert!(!app.note_dirty());
+    // Done moves it after the open ones; deleted elsewhere, it leaves the editor.
+    app.set_note_done("note_rate", true);
+    assert_eq!(app.notes.iter().map(|n| n.note_id.as_str()).collect::<Vec<_>>(), ["note_oauth", "note_icons", "note_rate", "note_flaky"], "done ones last, the latest done first");
+    app.apply(note_changed(NoteChanged { note_id: "note_icons".into(), note: None, removed: true }));
+    assert!(app.note("note_icons").is_none() && app.sel_note.is_none() && app.note_edit.text.is_empty());
+    // Delete asks first.
+    app.delete_note("note_oauth");
+    assert!(app.note("note_oauth").is_some() && app.confirm_delete_note.as_deref() == Some("note_oauth"));
+    app.delete_note("note_oauth");
+    assert!(app.note("note_oauth").is_none() && app.confirm_delete_note.is_none());
+}
+
+#[test]
+fn a_new_note_is_adopted_once_saved() {
+    let mut app = demo("notes-new");
+    assert_eq!(app.new_note_ws.as_deref(), Some("ws_demo"));
+    assert!(app.note_dirty());
+    app.save_note();
+    assert!(app.note_saving);
+    // A second Save before the answer sends nothing more.
+    app.save_note();
+    let saved = Note { note_id: "note_new".into(), workspace_id: "ws_demo".into(), text: "Show the relay's latency in Settings\nNext to Connected.".into(), done_at: None, session_ids: vec![], created_at: crate::view::now_ms(), updated_at: crate::view::now_ms() };
+    let gen = app.note_gen;
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::NoteSaved { new_gen: Some(gen) }, result: Ok(serde_json::to_value(&saved).unwrap()) });
+    assert!(!app.note_saving && app.new_note_ws.is_none());
+    assert_eq!(app.sel_note.as_deref(), Some("note_new"));
+    assert!(!app.note_dirty());
+    // An answer for a new note begun before this one only adds it to the list.
+    app.new_note(Some("ws_relay"));
+    let old = Note { note_id: "note_late".into(), text: "Late".into(), ..saved };
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::NoteSaved { new_gen: Some(gen) }, result: Ok(serde_json::to_value(&old).unwrap()) });
+    assert!(app.note("note_late").is_some());
+    assert_eq!(app.new_note_ws.as_deref(), Some("ws_relay"), "still writing the new one");
+}
+
+#[test]
+fn start_session_from_a_note_fills_the_composer() {
+    let mut app = demo("notes-start");
+    assert!(app.new_open);
+    assert_eq!(app.new_ws.as_deref(), Some("ws_relay"));
+    assert_eq!(app.start_note.as_ref().map(|(id, ws, _)| (id.as_str(), ws.as_str())), Some(("note_rate", "ws_relay")));
+    let text = app.start_note.as_ref().unwrap().2.clone();
+    assert!(text.starts_with("Rate-limit pairing attempts\n"));
+    // Another New Session forgets the note.
+    let mut other = demo("notes-start");
+    other.open_new_session(false);
+    assert!(other.start_note.is_none());
+    // The host's answer opens the session with the note waiting in the composer.
+    let mut s = app.session("ses_3").unwrap().clone();
+    s.session_id = "ses_from_note".into();
+    s.title = None;
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::SessionFromNote(text.clone()), result: Ok(serde_json::to_value(&s).unwrap()) });
+    assert_eq!(app.screen, Screen::Session("ses_from_note".into()));
+    assert_eq!(app.prompt.text, text);
+}
+
+/// The Notes screens lay out in both looks, and clicking through them does what it says.
+#[test]
+fn note_screens_lay_out_and_click_through() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1200.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str], &[&str]); 6] = [
+        ("notes", &["nav-notes", "note-list", "note-group-ws_relay", "note-new-ws_relay", "note-note_rate", "note-done-note_rate", "note-text", "note-save", "note-start", "note-toggle-done", "delete-note", "note-sessions", "show-done"], &["note-note_flaky"]),
+        ("notes-session", &["note-session-ses_2", "note-note_flaky"], &[]),
+        ("notes-new", &["note-row-new", "note-ws", "note-save", "note-group-ws_demo"], &["note-start"]),
+        ("notes-start", &["new-session", "start-session"], &[]),
+        ("notes-confirm-delete", &["delete-note-alert", "confirm-delete-note"], &[]),
+        ("notes-old-host", &[], &["nav-notes", "note-list"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, there, absent) in scenes {
+            let ui = open(scene, look);
+            for k in there {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+            for k in absent {
+                assert!(ui.find(k).is_none(), "{look:?} {scene}: {k} should not be on screen");
+            }
+        }
+    }
+    let state = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let mut ui = open("notes", Look::Gnome);
+    // Another note shows in the editor; its session opens; the sidebar brings Notes back.
+    click(&mut ui, "note-note_oauth");
+    assert!(state(&mut ui, &|s| s.sel_note.as_deref() == Some("note_oauth") && s.note_edit.text.starts_with("Refresh OAuth")));
+    click(&mut ui, "note-session-ses_2");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_2".into())));
+    click(&mut ui, "nav-notes");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Notes && s.sel_note.as_deref() == Some("note_oauth")));
+    // Its checkbox marks it done: it leaves the list until done ones are shown.
+    click(&mut ui, "note-done-note_oauth");
+    assert!(state(&mut ui, &|s| s.note("note_oauth").is_some_and(|n| n.done_at.is_some())));
+    assert!(ui.find("note-note_oauth").is_none());
+    click(&mut ui, "show-done-box");
+    assert!(ui.find("note-note_oauth").is_some() && ui.find("note-note_flaky").is_some());
+    // A workspace's "+" starts a new note there; Start Session opens the sheet on the note's workspace.
+    click(&mut ui, "note-new-ws_relay");
+    assert!(state(&mut ui, &|s| s.new_note_ws.as_deref() == Some("ws_relay") && s.note_edit.text.is_empty()));
+    assert!(ui.find("note-row-new").is_some());
+    click(&mut ui, "note-note_rate");
+    click(&mut ui, "note-start");
+    assert!(state(&mut ui, &|s| s.new_open && s.start_note.as_ref().is_some_and(|(id, _, _)| id == "note_rate")));
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}

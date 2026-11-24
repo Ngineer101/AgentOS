@@ -72,6 +72,15 @@ pub enum Tag {
     AutomationRan(String),
     /// `automation.check_schedule` of this cron expression.
     ScheduleCheck(String),
+    /// `note.list`.
+    Notes,
+    /// `note.create` (of the new note begun `new_gen`-th) or a text `note.update` from the
+    /// Notes editor: answered with the note.
+    NoteSaved { new_gen: Option<u64> },
+    /// A quick `note.update` (Done, Reopen) or `note.delete`: errors show; the list reloads.
+    NoteAction { what: String },
+    /// `session.create` from a note: the new session's composer gets the note's text.
+    SessionFromNote(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -87,6 +96,7 @@ pub enum Refresh {
     ProjectRoots,
     Archived,
     Automations,
+    Notes,
 }
 
 pub enum ToHost {

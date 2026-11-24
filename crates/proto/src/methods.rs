@@ -140,6 +140,14 @@ pub const AUTOMATION_RUNS: &str = "automation.runs";
 /// Check a cron expression: in words, and its next times.
 pub const AUTOMATION_CHECK_SCHEDULE: &str = "automation.check_schedule";
 
+/// Notes (protocol 9): plain-text ideas and todos kept with a workspace for
+/// later. Phones may manage them: a note only becomes a prompt when the user
+/// starts a session from it.
+pub const NOTE_LIST: &str = "note.list";
+pub const NOTE_CREATE: &str = "note.create";
+pub const NOTE_UPDATE: &str = "note.update";
+pub const NOTE_DELETE: &str = "note.delete";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -165,6 +173,9 @@ pub const N_SCREEN_CHANGED: &str = "screen.changed";
 /// An automation changed or a run of it started or finished. Params are an
 /// [`crate::AutomationChanged`]. Sent to every connection.
 pub const N_AUTOMATION_CHANGED: &str = "automation.changed";
+/// A note was created, changed or deleted. Params are a
+/// [`crate::NoteChanged`]. Sent to every connection.
+pub const N_NOTE_CHANGED: &str = "note.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -207,7 +218,7 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         HELLO | HOST_INFO | WORKSPACE_LIST | CONNECTOR_LIST | DEVICE_LIST | SESSION_LIST
         | SESSION_GET | APPROVAL_LIST | VOICE_STATUS | AGENT_PROFILE_LIST | BUILTIN_LIST
         | SCREEN_STATUS | PUSH_STATUS | AUTOMATION_LIST | AUTOMATION_GET | AUTOMATION_RUNS
-        | AUTOMATION_CHECK_SCHEDULE => Read,
+        | AUTOMATION_CHECK_SCHEDULE | NOTE_LIST => Read,
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_PIN | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | ATTACHMENT_READ | VOICE_DOWNLOAD
@@ -220,7 +231,8 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | PUSH_SET_KEY | PUSH_REGISTER | PUSH_UNREGISTER | PUSH_SET_PREFS | PUSH_TEST
         // A deferred session.create + session.prompt. Webhook triggers and
         // pre-approved tools widen policy: the host requires admin for those.
-        | AUTOMATION_CREATE | AUTOMATION_UPDATE | AUTOMATION_DELETE | AUTOMATION_RUN_NOW => Sessions,
+        | AUTOMATION_CREATE | AUTOMATION_UPDATE | AUTOMATION_DELETE | AUTOMATION_RUN_NOW
+        | NOTE_CREATE | NOTE_UPDATE | NOTE_DELETE => Sessions,
         APPROVAL_RESPOND => Approvals,
         HOST_CHECK | WORKSPACE_ADD | WORKSPACE_UPDATE | WORKSPACE_REMOVE | CONNECTOR_ADD
         | CONNECTOR_UPDATE | CONNECTOR_REMOVE | CONNECTOR_SIGN_IN | CONNECTOR_REFRESH
@@ -304,6 +316,10 @@ mod tests {
             AUTOMATION_RUN_NOW,
             AUTOMATION_RUNS,
             AUTOMATION_CHECK_SCHEDULE,
+            NOTE_LIST,
+            NOTE_CREATE,
+            NOTE_UPDATE,
+            NOTE_DELETE,
         ] {
             assert!(phone.contains(&required_capability(m).unwrap()), "{m}");
         }

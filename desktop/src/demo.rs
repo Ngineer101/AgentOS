@@ -323,6 +323,37 @@ fn automations(s: &mut App) {
     s.runs.insert("auto_tidy".into(), vec![]);
 }
 
+/// A host with notes (protocol 9): ideas kept for later in relay and demo; one became a
+/// session, one is done.
+fn notes(s: &mut App) {
+    session(s);
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 9;
+    }
+    let t = now();
+    const H: i64 = 3_600_000;
+    let note = |id: &str, ws: &str, text: &str, ago: i64, done: Option<i64>, sessions: &[&str]| Note {
+        note_id: id.into(),
+        workspace_id: ws.into(),
+        text: text.into(),
+        done_at: done.map(|d| t - d),
+        session_ids: sessions.iter().map(|x| x.to_string()).collect(),
+        created_at: t - ago,
+        updated_at: t - ago,
+    };
+    s.notes = vec![
+        note("note_rate", "ws_relay", "Rate-limit pairing attempts\nA phone that keeps failing the handshake should back off, not hammer the relay.\nMaybe 5 tries a minute per device key, then a cool-down the desktop can clear.", 2 * H, None, &[]),
+        note("note_oauth", "ws_relay", "Refresh OAuth tokens before they expire\nNot only on a 401: check expires_at when a session starts.", 26 * H, None, &["ses_2"]),
+        note("note_icons", "ws_demo", "Try a darker app icon\nGlass rim, no green.", 50 * H, None, &[]),
+        note("note_flaky", "ws_relay", "Find why the resume test is flaky", 72 * H, Some(5 * H), &["ses_1"]),
+    ];
+    crate::model::sort_notes(&mut s.notes);
+    s.screen = Screen::Notes;
+    s.sel_note = Some("note_rate".into());
+    s.note_base = s.notes[0].text.clone();
+    s.note_edit = rune::TextEdit::new(s.note_base.clone());
+}
+
 /// The Automations screen on one automation. The newest runs' sessions are in the sidebar,
 /// open for follow-up questions.
 fn automations_screen(s: &mut App, id: &str) {
@@ -1170,6 +1201,33 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     // Automations: the nightly upgrade with its runs, the Sentry webhook with its last
     // delivery, and none yet.
     ("automations", |s| automations_screen(s, "auto_deps")),
+    // Notes: one open in the editor (with the sessions started from it), done ones shown,
+    // a new one being written, Start Session's sheet, Delete's question, an older host.
+    ("notes", notes),
+    ("notes-session", |s| {
+        notes(s);
+        s.select_note("note_oauth");
+        s.notes_show_done = true;
+    }),
+    ("notes-new", |s| {
+        notes(s);
+        s.new_note(Some("ws_demo"));
+        s.note_edit.replace_text("Show the relay's latency in Settings\nNext to Connected.");
+    }),
+    ("notes-start", |s| {
+        notes(s);
+        s.start_from_note("note_rate");
+    }),
+    ("notes-confirm-delete", |s| {
+        notes(s);
+        s.confirm_delete_note = Some("note_rate".into());
+    }),
+    ("notes-old-host", |s| {
+        notes(s);
+        if let Some(i) = s.info.as_mut() {
+            i.protocol_version = 8;
+        }
+    }),
     ("automations-webhook", |s| automations_screen(s, "auto_sentry")),
     ("automations-empty", |s| {
         base(s);

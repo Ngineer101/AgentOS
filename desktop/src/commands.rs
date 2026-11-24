@@ -156,6 +156,14 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             return true;
         }
     }
+    // ⌘↩ / Ctrl+Enter saves the note being written.
+    if s.screen == crate::model::Screen::Notes && !s.new_open && s.settings.is_none() && s.confirm_delete_note.is_none() {
+        let save = if look.mac() { "super+enter" } else { "ctrl+enter" };
+        if Chord::parse(save).is_ok_and(|c| c.matches_tx(ev, tx)) {
+            s.save_note();
+            return true;
+        }
+    }
     if s.menu.is_some() && ev.key == rune::Key::Escape {
         s.menu = None;
         return true;

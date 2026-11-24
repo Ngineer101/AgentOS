@@ -75,6 +75,12 @@
 <span class="p">$ </span>agenthost run ~/code/myproject claude:work "Summarise this repo"</code></pre>
 <p>A profile's folder is writable only to sessions that use it and hidden from every other session. Profiles work for Claude Code, Codex and OpenCode, and for Cursor on Linux; not yet for Antigravity.</p>
 
+<h2 id="notes">Notes</h2>
+<p>A note is an idea or a todo kept with a workspace until it's ready to start. Notes are plain text; the first line is the title. Add them from Notes in the desktop sidebar, from the note button in the phone's session list, or here:</p>
+<pre><code><span class="p">$ </span>agenthost note add "Rate-limit pairing attempts" -w ~/code/myproject
+<span class="p">$ </span>agenthost note ls<span class="c">    # open notes, by workspace</span></code></pre>
+<p>Start Session opens a new session in the note's workspace with the note's text in its message box, to edit before you send it. Archiving that session marks the note done; otherwise only you do.</p>
+
 <h2 id="automations">Automations</h2>
 <p>An automation is a saved session that starts by itself: on a schedule, when a webhook arrives, or when you press Run Now. Each run is an ordinary session, so its transcript is the run's output.</p>
 <pre><code><span class="p">$ </span>agenthost automation add "Upgrade dependencies" -w ~/code/myproject -a claude \

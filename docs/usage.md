@@ -97,6 +97,28 @@ What a notification says is encrypted to the phone; Apple (and the relay)
 only see "A session needs you". `agenthost push status` and `agenthost push
 test` show and check it.
 
+## Notes
+
+A note is an idea or a todo kept with a workspace until it's ready to start:
+something that needs more thought before an agent works on it. Notes are
+plain text, and the first line is the title. Add them on the desktop (Notes
+in the sidebar, or New Note Here on a workspace), on the phone (the note
+button at the top of the session list, or a long press on a workspace), or:
+
+```sh
+agenthost note add "Rate-limit pairing attempts
+Back off after 5 failed handshakes a minute." -w ~/code/myproject
+agenthost note ls                               # open notes, by workspace
+agenthost note done <id>                        # or reopen, edit, rm
+```
+
+When a note is ready, Start Session opens the New Session sheet in the note's
+workspace, and the new session opens with the note's text in its message
+box, to edit before you send it. The note lists the sessions started from it,
+and archiving one of them marks the note done. Otherwise only you mark a note
+done. Notes live on the host, so the desktop, the CLI and every paired phone
+see the same ones; a note never runs anything by itself.
+
 ## Automations
 
 An automation is a saved session that starts by itself: on a schedule

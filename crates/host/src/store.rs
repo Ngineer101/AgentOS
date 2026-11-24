@@ -153,6 +153,22 @@ CREATE TABLE IF NOT EXISTS hook_deliveries (
     delivery_id TEXT PRIMARY KEY,
     received_at INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS notes (
+    note_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    done_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS notes_by_workspace ON notes(workspace_id);
+CREATE TABLE IF NOT EXISTS note_sessions (
+    note_id TEXT NOT NULL REFERENCES notes(note_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    linked_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS note_sessions_by_session ON note_sessions(session_id);
 "#;
 
 /// A tool as fetched from the server, before policy is applied.
@@ -1420,6 +1436,20 @@ fn row_automation(r: &Row) -> rusqlite::Result<AutomationRow> {
     })
 }
 
+const NOTE_COLS: &str = "note_id, workspace_id, text, done_at, created_at, updated_at";
+
+fn row_note(r: &Row) -> rusqlite::Result<Note> {
+    Ok(Note {
+        note_id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        text: r.get(2)?,
+        done_at: r.get(3)?,
+        session_ids: vec![],
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+    })
+}
+
 const RUN_COLS: &str = "run_id, automation_id, session_id, trigger, scheduled_for, started_at, finished_at, outcome, summary, detail";
 
 fn row_run(r: &Row) -> rusqlite::Result<AutomationRun> {
@@ -1589,6 +1619,85 @@ impl Store {
             params![automation_id, key, since],
             |r| r.get(0),
         )?)
+    }
+
+    // ---- notes ----
+
+    fn note_sessions(db: &Connection, note_id: &str) -> Result<Vec<String>> {
+        let mut st = db.prepare("SELECT session_id FROM note_sessions WHERE note_id = ?1 ORDER BY linked_at, session_id")?;
+        let ids = st.query_map(params![note_id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
+    fn notes_where(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Note>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!("SELECT {NOTE_COLS} FROM notes {clause}"))?;
+        let mut notes = st.query_map(args, row_note)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for n in &mut notes {
+            n.session_ids = Self::note_sessions(&db, &n.note_id)?;
+        }
+        Ok(notes)
+    }
+
+    pub fn note_insert(&self, n: &Note) -> Result<()> {
+        self.db().execute(
+            &format!("INSERT INTO notes ({NOTE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
+            params![n.note_id, n.workspace_id, n.text, n.done_at, n.created_at, n.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn note_get(&self, id: &str) -> Result<Option<Note>> {
+        Ok(self.notes_where("WHERE note_id = ?1", &[&id])?.pop())
+    }
+
+    /// Notes of workspaces that weren't removed (of one, when given): open
+    /// ones first, newest first; then done ones, most recently done first.
+    pub fn note_list(&self, workspace_id: Option<&str>) -> Result<Vec<Note>> {
+        self.notes_where(
+            "WHERE (?1 IS NULL OR workspace_id = ?1)
+               AND workspace_id IN (SELECT workspace_id FROM workspaces WHERE removed_at IS NULL)
+             ORDER BY done_at IS NOT NULL, COALESCE(done_at, created_at) DESC, rowid DESC",
+            &[&workspace_id],
+        )
+    }
+
+    pub fn note_count(&self, workspace_id: &str) -> Result<usize> {
+        let n: i64 = self.db().query_row("SELECT COUNT(*) FROM notes WHERE workspace_id = ?1", params![workspace_id], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// Save a note's text and done time.
+    pub fn note_save(&self, n: &Note) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE notes SET text = ?2, done_at = ?3, updated_at = ?4 WHERE note_id = ?1",
+            params![n.note_id, n.text, n.done_at, n.updated_at],
+        )? > 0)
+    }
+
+    pub fn note_remove(&self, id: &str) -> Result<bool> {
+        Ok(self.db().execute("DELETE FROM notes WHERE note_id = ?1", params![id])? > 0)
+    }
+
+    pub fn note_link_session(&self, note_id: &str, session_id: &str) -> Result<()> {
+        self.db().execute(
+            "INSERT OR IGNORE INTO note_sessions (note_id, session_id, linked_at) VALUES (?1, ?2, ?3)",
+            params![note_id, session_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Mark the open notes a session was started from done; their ids.
+    pub fn notes_done_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let now = now_ms();
+        let mut st = db.prepare(
+            "UPDATE notes SET done_at = ?2, updated_at = ?2
+             WHERE done_at IS NULL AND note_id IN (SELECT note_id FROM note_sessions WHERE session_id = ?1)
+             RETURNING note_id",
+        )?;
+        let ids = st.query_map(params![session_id, now], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
     }
 
     /// Remember a webhook delivery id; false if it was seen already. Ids

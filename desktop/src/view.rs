@@ -47,6 +47,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(alert) = crate::automations::confirm(s, &t) {
         root = root.child(alert);
     }
+    if let Some(alert) = crate::notes::confirm(s, &t) {
+        root = root.child(alert);
+    }
     if let Some(v) = crate::session::image_viewer(s, &t) {
         root = root.child(v);
     }
@@ -253,7 +256,7 @@ fn sidebar(s: &App, t: &Theme) -> El {
         search_field(s, t)
     } else {
         let new = nav_row(t, "nav-new", &ic::COMPOSE, "New Session", false, Some(text(keys(s.look, Cmd::NewSession)).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(if mac { t.text3 } else { t.text2 })), |s, tx| run(s, Cmd::NewSession, tx));
-        col().key("sidebar-nav").w_full().px(if mac { 10.0 } else { 6.0 }).pb(2.0).gap(if mac { 1.0 } else { 2.0 }).child(new).child(automations_nav(s, t))
+        col().key("sidebar-nav").w_full().px(if mac { 10.0 } else { 6.0 }).pb(2.0).gap(if mac { 1.0 } else { 2.0 }).child(new).child(automations_nav(s, t)).children(notes_nav(s, t))
     };
 
     // Pinned, then the workspaces' groups.
@@ -541,9 +544,14 @@ fn more_row(t: &Theme, ws: &str, hidden: usize) -> El {
 fn section_menu(s: &mut App, ws: &str, p: rune::PointerPress, tx: &mut Tx) {
     if s.look.mac() && rune::popup_menu_supported() {
         let ws = ws.to_string();
-        let menu = rune::PopupMenu::new().item(rune::PopupItem::new("new", "New Session Here")).separator().item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions"));
+        let mut menu = rune::PopupMenu::new().item(rune::PopupItem::new("new", "New Session Here"));
+        if s.host_has_notes() {
+            menu = menu.item(rune::PopupItem::new("note", "New Note Here"));
+        }
+        let menu = menu.separator().item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions"));
         tx.popup_menu(menu, p, move |s: &mut App, picked, _| match picked {
             Some("new") => s.open_new_session_in(&ws),
+            Some("note") => s.new_note_in(&ws),
             Some("archive-ended") => s.archive_ended(&ws),
             _ => {}
         });
@@ -568,6 +576,20 @@ fn automations_nav(s: &App, t: &Theme) -> El {
     };
     let label = if running > 0 { format!("Automations, {running} running") } else { "Automations".to_string() };
     nav_row(t, "nav-automations", &ic::CLOCK, "Automations", selected, trailing, |s, _| s.open_automations()).label(label)
+}
+
+/// The sidebar's way to the Notes screen, with how many are open (hosts with notes only).
+fn notes_nav(s: &App, t: &Theme) -> Option<El> {
+    if !s.host_has_notes() {
+        return None;
+    }
+    let mac = t.mac();
+    let selected = s.screen == Screen::Notes;
+    let open = s.notes.iter().filter(|n| n.done_at.is_none()).count();
+    let faint = if selected && mac { Color::WHITE.alpha(0.75) } else if mac { t.text3 } else { t.text2 };
+    let trailing = (open > 0).then(|| text(open.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(faint));
+    let label = if open > 0 { format!("Notes, {open} open") } else { "Notes".to_string() };
+    Some(nav_row(t, "nav-notes", &ic::NOTE, "Notes", selected, trailing, |s, _| s.open_notes()).label(label))
 }
 
 /// A session's exception line: only when it needs you, failed, or has agents running.
@@ -731,6 +753,7 @@ fn main_pane(s: &App, t: &Theme, k: &rune_kit::Kit, cx: &mut Cx<App>) -> El {
     let content = match &s.screen {
         Screen::Session(id) if s.session(id).is_some() => crate::session::screen(s, id, t, k),
         Screen::Automations => crate::automations::screen(s, t),
+        Screen::Notes => crate::notes::screen(s, t),
         _ => home(s, t),
     };
     let mut c = col().key("main").grow(1.0).min_w(0.0).h_full().min_h(0.0).fill(t.content).child(toolbar(s, t));
@@ -748,6 +771,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         // on which branch: the same live or ended.
         Some(x) => (s.session_title(x), s.session_context(x)),
         None if s.screen == Screen::Automations => ("Automations".to_string(), crate::automations::summary(s)),
+        None if s.screen == Screen::Notes => ("Notes".to_string(), crate::notes::summary(s)),
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
             ("AgentOS".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
@@ -1142,6 +1166,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("New Session", keys(look, Cmd::NewSession), |s, tx| run(s, Cmd::NewSession, tx))),
                 Some(Item::new("New Quick Task", keys(look, Cmd::QuickTask), |s, tx| run(s, Cmd::QuickTask, tx))),
                 Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
+                Some(Item::new("Notes", String::new(), |s, _| s.open_notes()).enabled(s.host_has_notes())),
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),
@@ -1175,8 +1200,12 @@ fn menu_layer(s: &App, t: &Theme) -> El {
             }
         }
         Some(Menu::Section(ws, x, y)) => {
-            let (ws, here) = (ws.clone(), ws.clone());
-            let items = vec![Some(Item::new("New Session Here", String::new(), move |s, _| s.open_new_session_in(&here))), None, Some(Item::new("Archive Ended Sessions", String::new(), move |s, _| s.archive_ended(&ws)))];
+            let (ws, here, note) = (ws.clone(), ws.clone(), ws.clone());
+            let mut items = vec![Some(Item::new("New Session Here", String::new(), move |s, _| s.open_new_session_in(&here)))];
+            if s.host_has_notes() {
+                items.push(Some(Item::new("New Note Here", String::new(), move |s, _| s.new_note_in(&note))));
+            }
+            items.extend([None, Some(Item::new("Archive Ended Sessions", String::new(), move |s, _| s.archive_ended(&ws)))]);
             layer = layer.child(menu_box(t, items, 240.0).pin(Some(*x), Some(*y), None, None));
         }
         _ => {}

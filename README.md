@@ -123,7 +123,7 @@ optional push-notification setup (needs a paid Apple Developer account).
 
 | | |
 | --- | --- |
-| [docs/usage.md](docs/usage.md) | Quick tasks, projects, several logins per agent, notifications, automations and webhooks |
+| [docs/usage.md](docs/usage.md) | Quick tasks, projects, several logins per agent, notifications, notes, automations and webhooks |
 | [docs/security.md](docs/security.md) | The security model in full |
 | [docs/relay-protocol.md](docs/relay-protocol.md) | The relay wire protocol, pairing and tunnels |
 | [docs/status.md](docs/status.md) | What has been verified, how, and the known limits |

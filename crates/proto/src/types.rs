@@ -922,6 +922,11 @@ pub struct SessionCreateParams {
     pub profile_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
+    /// Start it from this [`crate::Note`] (protocol 9), in the note's
+    /// workspace: the note lists the session, opens again if it was done, and
+    /// is marked done when the session is archived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
