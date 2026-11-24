@@ -1,0 +1,89 @@
+README.md
+  s_9d19c9da4bdc63::t_fc3f1f727e4763 126
+crates/cli/src/main.rs
+  s_9d19c9da4bdc63::t_74cfc9eecdf01c 102-104,327-419,1079
+crates/host/src/api.rs
+  s_9d19c9da4bdc63::t_7d582761814f13 188-190,550-558
+crates/host/src/automations.rs
+  s_9d19c9da4bdc63::t_d395187ce48059 570
+crates/host/src/bus.rs
+  s_9d19c9da4bdc63::t_892ace6f160aa3 7,31-32
+crates/host/src/lib.rs
+  s_9d19c9da4bdc63::t_f051dc7056b30b 20
+crates/host/src/notes.rs
+  s_9d19c9da4bdc63::t_95ea675586b34f 1-137
+crates/host/src/session.rs
+  s_9d19c9da4bdc63::t_116c3afe877e05 189-191,285-289,326-328
+crates/host/src/store.rs
+  s_9d19c9da4bdc63::t_84b68adb7e2473 156-171,1439-1452,1624-1702
+crates/host/tests/attachments_core.rs
+  s_9d19c9da4bdc63::t_02291728a6be58 66
+crates/host/tests/notes_core.rs
+  s_9d19c9da4bdc63::t_655e974a52b237 1-164
+crates/proto/src/lib.rs
+  s_9d19c9da4bdc63::t_e77dd3d1d3c146 11,18,32-33
+crates/proto/src/methods.rs
+  s_9d19c9da4bdc63::t_2bfdd6a3692687 143-150,176-178,221,234-235,319-322
+crates/proto/src/note.rs
+  s_9d19c9da4bdc63::t_b0813bdaa81d73 1-107
+crates/proto/src/types.rs
+  s_9d19c9da4bdc63::t_436c34991540e7 925-929
+desktop/src/automations.rs
+  s_9d19c9da4bdc63::t_a0ddf98877f4b5 403-407,410,425
+desktop/src/bridge.rs
+  s_9d19c9da4bdc63::t_3e809c3a1c6110 75-83,99
+desktop/src/commands.rs
+  s_9d19c9da4bdc63::t_b411e15209fe3b 159-166
+desktop/src/demo.rs
+  s_9d19c9da4bdc63::t_1490f1d2415fa0 326-356,1204-1230
+desktop/src/icons.rs
+  s_9d19c9da4bdc63::t_24bcdb32234ff0 73
+desktop/src/main.rs
+  s_9d19c9da4bdc63::t_e8770a039c22ca 12
+desktop/src/model.rs
+  s_9d19c9da4bdc63::t_f096019415117f 17-18,656-676,800-809,840-845,857,932,976,983,1263,1268,1276-1278,1897-1942,2598,2724-2728,3217-3219,3489-3721
+desktop/src/notes.rs
+  s_9d19c9da4bdc63::t_411759fb9dedb8 1-379
+desktop/src/sheet.rs
+  s_9d19c9da4bdc63::t_4df4c94cfd7450 208-214,249,327
+desktop/src/tests.rs
+  s_9d19c9da4bdc63::t_2da5362c5bc4c0 1914-2078
+desktop/src/view.rs
+  s_9d19c9da4bdc63::t_f025d803e45caa 50-52,259,547-551,554,581-594,756,774,1169,1203-1208
+docs/status.md
+  s_9d19c9da4bdc63::t_45c95d186ba8e8 50
+docs/usage.md
+  s_9d19c9da4bdc63::t_484d50c61d15a9 100-121
+ios/AgentHost/App/AppModel+Notes.swift
+  s_9d19c9da4bdc63::t_544d426223679f 1-155
+ios/AgentHost/App/AppModel.swift
+  s_9d19c9da4bdc63::t_762dbaa88ab46c 155-158,581,809-811,920-924,933-936,947,950-953,1079,1192-1193,1403-1404
+ios/AgentHost/App/DemoData.swift
+  s_9d19c9da4bdc63::t_2118e36d39d523 14-15,63-68,95,119,276,511-526
+ios/AgentHost/Core/NoteModels.swift
+  s_9d19c9da4bdc63::t_423767bda3afe1 1-97
+ios/AgentHost/Views/NewSessionView.swift
+  s_9d19c9da4bdc63::t_0a96467a05b242 6-8,12,87-102,169-171,204
+ios/AgentHost/Views/NotesView.swift
+  s_9d19c9da4bdc63::t_f3663b66a2279a 1-630
+ios/AgentHost/Views/SessionsView.swift
+  s_9d19c9da4bdc63::t_76cd1c4cdb4054 12-14,32-33,93-101,170-179,204-207,211-216,291-292
+website/public/docs/usage/index.html
+  s_9d19c9da4bdc63::t_4aee494a03467e 78-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b36d8b9a06dbda4f21737e8d4fabbacccdcd595",
+  "prompts": {},
+  "sessions": {
+    "s_9d19c9da4bdc63": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_9d19c9da4bdc63",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
