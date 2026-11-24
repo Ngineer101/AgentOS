@@ -2631,7 +2631,7 @@ public func pair(qr: String, deviceName: String, listener: PairingListener)async
         )
 }
 /**
- * Check that a scanned string is an agenthost pairing code without using it.
+ * Check that a scanned string is an AgentOS pairing code without using it.
  */
 public func parsePairingQr(qr: String)throws  -> PairingQrInfo  {
     return try  FfiConverterTypePairingQrInfo_lift(try rustCallWithError(FfiConverterTypeAgentHostError_lift) {

@@ -11,7 +11,7 @@
 #
 # Installs:
 #   ~/.local/bin/agenthostd, ~/.local/bin/agenthost
-#   macOS: ~/Applications/AgentHost.app, launch agent ~/Library/LaunchAgents/dev.agenthost.host.plist
+#   macOS: ~/Applications/AgentOS.app, launch agent ~/Library/LaunchAgents/dev.agenthost.host.plist
 #   Linux: ~/.local/bin/agenthost-desktop, ~/.local/share/applications/agenthost.desktop (+ icon),
 #          systemd user service ~/.config/systemd/user/agenthost.service
 # The host starts at login and restarts if it crashes. Log: <data dir>/logs/host.log
@@ -42,7 +42,9 @@ if [[ "$os" == Darwin ]]; then
   label=dev.agenthost.host
   plist="$HOME/Library/LaunchAgents/$label.plist"
   domain="gui/$(id -u)"
-  app="$HOME/Applications/AgentHost.app"
+  app="$HOME/Applications/AgentOS.app"
+  # The app's name before the rename to AgentOS; removed on install and uninstall.
+  old_app="$HOME/Applications/AgentHost.app"
 elif [[ "$os" == Linux ]]; then
   data="${XDG_DATA_HOME:-$HOME/.local/share}/agenthost"
   unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -123,7 +125,7 @@ if [[ "$mode" == uninstall ]]; then
   stop_service
   if [[ "$os" == Darwin ]]; then
     rm -f "$plist"
-    rm -rf "$app"
+    rm -rf "$app" "$old_app"
   else
     systemctl --user disable agenthost.service 2>/dev/null || true
     rm -f "$unit" "$desktop_file" "$icon_file" "$bin_dir/agenthost-desktop"
@@ -179,6 +181,7 @@ run_args=("$bin_dir/agenthostd" run)
 
 if [[ "$os" == Darwin ]]; then
   echo "==> installing $app"
+  rm -rf "$old_app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
   cp "$root/desktop/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
   put "$root/desktop/target/release/agenthost-desktop" "$app/Contents/MacOS/agenthost-desktop"
@@ -189,8 +192,8 @@ if [[ "$os" == Darwin ]]; then
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AgentHost</string>
-  <key>CFBundleDisplayName</key><string>AgentHost</string>
+  <key>CFBundleName</key><string>AgentOS</string>
+  <key>CFBundleDisplayName</key><string>AgentOS</string>
   <key>CFBundleIdentifier</key><string>dev.agenthost.desktop</string>
   <key>CFBundleExecutable</key><string>agenthost-desktop</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -199,7 +202,7 @@ if [[ "$os" == Darwin ]]; then
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>AgentHost records your voice to turn it into text.</string>
+  <key>NSMicrophoneUsageDescription</key><string>AgentOS records your voice to turn it into text.</string>
 </dict>
 </plist>
 EOF
@@ -244,7 +247,7 @@ else
   cat >"$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
-Name=AgentHost
+Name=AgentOS
 Comment=Run coding agents on this computer
 Exec=$bin_dir/agenthost-desktop
 Icon=agenthost
@@ -258,7 +261,7 @@ EOF
   for a in "${run_args[@]}"; do exec_line+="\"${a//\"/\\\"}\" "; done
   cat >"$unit" <<EOF
 [Unit]
-Description=agenthost host daemon
+Description=AgentOS host daemon
 
 [Service]
 ExecStart=$exec_line
@@ -282,14 +285,14 @@ else
   echo "==> no relay set: phone pairing is off (run again with --relay wss://your-relay.workers.dev)"
 fi
 if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
-  echo "note: $bin_dir is not on your PATH; add it to use the agenthost CLI"
+  echo "note: $bin_dir is not on your PATH; add it to use the AgentOS CLI (agenthost)"
 fi
 
 if (( was_running )); then
   echo "==> reopening the desktop app"
   if [[ "$os" == Darwin ]]; then open "$app"; else nohup "$bin_dir/agenthost-desktop" >/dev/null 2>&1 & fi
 elif [[ "$os" == Darwin ]]; then
-  echo "==> done. Open AgentHost from ~/Applications (or: open \"$app\")"
+  echo "==> done. Open AgentOS from ~/Applications (or: open \"$app\")"
 else
-  echo "==> done. Open AgentHost from your app launcher (or run agenthost-desktop)"
+  echo "==> done. Open AgentOS from your app launcher (or run agenthost-desktop)"
 fi

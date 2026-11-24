@@ -1,0 +1,25 @@
+name: Idea or feature request
+description: Suggest a change to this project.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you mainly want this for your own setup, the quickest route is to fork the repository and change your fork.
+        Ideas for this project are welcome; there's no promise they'll be built.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd suggest
+      description: How it could work, from the user's side. Mention any security implications (sandbox, network, approvals).
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds

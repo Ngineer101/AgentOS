@@ -1,6 +1,6 @@
 [package]
 name = "agenthost-proto"
-description = "Client protocol types, JSON-RPC framing and (later) the encrypted tunnel for agenthost"
+description = "Client protocol types, JSON-RPC framing and (later) the encrypted tunnel for AgentOS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

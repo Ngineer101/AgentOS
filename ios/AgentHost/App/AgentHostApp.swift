@@ -237,7 +237,7 @@ struct PrivacyCover: View {
                     .rotationEffect(.degrees(leaving && !reduceMotion ? 360 : 0))
                     .scaleEffect(leaving && !reduceMotion ? 0.01 : 1)
                     .opacity(leaving && reduceMotion ? 0 : 1)
-                Text("AgentHost")
+                Text("AgentOS")
                     .font(.headline)
                     .foregroundStyle(.secondary)
                     .opacity(leaving ? 0 : 1)
@@ -252,7 +252,7 @@ struct LockView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("AgentHost Is Locked", systemImage: "lock.fill")
+            Label("AgentOS Is Locked", systemImage: "lock.fill")
         } description: {
             Text(model.requireUnlock || model.lockError != nil
                  ? "Use \(AppModel.unlockMethodName) or your passcode to continue."

@@ -293,7 +293,7 @@ struct DemoData {
                 approvalId: "demo-approval",
                 sessionId: Self.flakySession,
                 connectorId: "agenthost",
-                connectorName: "AgentHost",
+                connectorName: "AgentOS",
                 tool: "install_tool",
                 arguments: .object([
                     "command": .string("npm install --global agent-desktop@1.3.1"),

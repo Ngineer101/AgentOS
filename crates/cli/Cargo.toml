@@ -1,6 +1,6 @@
 [package]
 name = "agenthost-cli"
-description = "Command-line client for the agenthost daemon"
+description = "Command-line client for the AgentOS daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

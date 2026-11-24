@@ -1,4 +1,4 @@
-# AgentHost for iOS
+# AgentOS for iOS
 
 > **Status: never compiled; untested.** This app was written on a Linux
 > machine without Xcode. Not one line of the Swift here has been through the
@@ -6,7 +6,7 @@
 > and behaviour bugs on first build. The Rust layer it sits on
 > (`crates/ffi`) *is* built and tested (see "What is verified").
 
-A native SwiftUI app (iOS 17+) for following and steering an agenthost from
+A native SwiftUI app (iOS 17+) for following and steering an AgentOS host from
 your phone: pair with one host by QR code, read sessions, send prompts
 (with photos and files attached, or dictated), start a session in an
 existing workspace, answer MCP approvals, and (optionally) get a push

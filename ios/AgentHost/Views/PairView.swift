@@ -39,7 +39,7 @@ final class PairFlow: ObservableObject {
         do {
             info = try parsePairingQr(qr: qr)
         } catch {
-            scanError = "That is not an AgentHost pairing code."
+            scanError = "That is not an AgentOS pairing code."
             return
         }
         scanError = nil
@@ -214,7 +214,7 @@ struct PairView: View {
                     .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 12) {
-                PairStep(number: 1, text: Text("On the computer, open AgentHost → Settings → Devices → \(Text("Pair iPhone").foregroundColor(.white))."))
+                PairStep(number: 1, text: Text("On the computer, open AgentOS → Settings → Devices → \(Text("Pair iPhone").foregroundColor(.white))."))
                 PairStep(number: 2, text: Text("Scan the code, then check both screens show the same six digits."))
             }
             if let err = flow.scanError {

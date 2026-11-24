@@ -346,7 +346,7 @@ fn general(s: &App, t: &Theme) -> El {
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(text("AgentHost").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+                    .child(text("AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
                     .help(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)),
             )
             .child(t.button("Re-run Checks", Btn::Default, None, |s| s.call(Tag::HostInfo, m::HOST_CHECK, json!({}))).key("rerun")),
@@ -1107,7 +1107,7 @@ fn builtin_tools(s: &App, t: &Theme) -> El {
         t,
         if mac { "Built-in tools" } else { "Built-in Tools" },
         None,
-        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentHost's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins. Shells, interpreters and build tools always ask.")),
+        col().w_full().gap(if mac { 6.0 } else { 8.0 }).child(t.group(rows, if mac { 12.0 } else { 0.0 })).child(footnote(t, "AgentOS's own tools run on this computer as you, outside the sandbox, with your git and GitHub CLI logins. Shells, interpreters and build tools always ask.")),
     )
     .key("builtin-tools")
 }
@@ -1683,7 +1683,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
             buttons = row().w_full().gap(8.0).child(el().grow(1.0)).child(t.button("Done", Btn::Primary, None, |s| s.pairing = None).default_button());
         }
         (pend, None) => {
-            c = c.child(title).child(center("In AgentHost on your iPhone, tap Pair and scan this code. It works once and expires in 2 minutes.")).child(qr(&p.qr, t));
+            c = c.child(title).child(center("In AgentOS on your iPhone, tap Pair and scan this code. It works once and expires in 2 minutes.")).child(qr(&p.qr, t));
             match pend {
                 Some(pend) => {
                     let mut code = col()

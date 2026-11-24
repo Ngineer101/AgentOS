@@ -1,4 +1,4 @@
-//! Shared protocol for agenthost.
+//! Shared protocol for AgentOS.
 //!
 //! Both the desktop (over the host's Unix socket) and the phone (over the
 //! encrypted relay tunnel) speak exactly this protocol. It is JSON-RPC 2.0

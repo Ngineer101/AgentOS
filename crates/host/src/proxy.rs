@@ -331,7 +331,7 @@ fn split_host_port(authority: &str, default_port: u16) -> (String, u16) {
 }
 
 async fn respond(stream: &mut TcpStream, status: &str, reason: &str) {
-    let body = format!("agenthost egress proxy: {reason}\n");
+    let body = format!("AgentOS egress proxy: {reason}\n");
     let msg = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nX-Proxy-Error: blocked-by-agenthost\r\nConnection: close\r\n\r\n{body}",
         body.len()

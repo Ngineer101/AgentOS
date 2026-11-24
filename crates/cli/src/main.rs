@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 #[command(
     name = "agenthost",
     version,
-    about = "Control a self-hosted agent host"
+    about = "Control AgentOS, a self-hosted agent host"
 )]
 struct Cli {
     /// Host socket (default: the per-user socket, or $AGENTHOST_SOCKET).
@@ -631,7 +631,7 @@ enum RemoteCmd {
         /// Where to keep this device's keys.
         #[arg(long)]
         state: PathBuf,
-        #[arg(long, default_value = "agenthost CLI")]
+        #[arg(long, default_value = "AgentOS CLI")]
         name: String,
     },
 }

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started · AgentOS</title>
+<meta name="description" content="Install the AgentOS host, CLI and desktop app, and run your first session.">
+<meta name="theme-color" content="#0b0d10">
+<meta property="og:title" content="Getting started · AgentOS">
+<meta property="og:description" content="Install the AgentOS host, CLI and desktop app, and run your first session.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/logo.svg" alt="" width="26" height="26">AgentOS</a>
+    <nav class="site-nav" aria-label="Main">
+      <a class="hide-s" href="/#how">How it works</a>
+      <a href="/#setup">Setup</a>
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a class="btn small" href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap docs">
+  <aside class="docs-nav">
+    <nav aria-label="Docs">
+      <h2>Docs</h2>
+      <ul><li><a href="/docs/" aria-current="page">Getting started</a></li><li><a href="/docs/usage/">Using AgentOS</a></li><li><a href="/docs/remote/">Remote access and iOS</a></li><li><a href="/docs/security/">Security model</a></li></ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/CONTRIBUTING.md">Contributing</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="prose">
+    <h1>Getting started</h1>
+    <p class="lede">Install the host, the CLI and the desktop app on a Linux or macOS computer, then run your first session.</p>
+
+<p class="note info">The commands and folders keep the project's earlier name: the CLI is <code>agenthost</code>, the host daemon is <code>agenthostd</code>, and settings start with <code>AGENTHOST_</code>.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+  <li><a href="https://rustup.rs">Rust</a> 1.85 or newer, and Node 22 or newer.</li>
+  <li>The agent CLIs you want to use (Claude Code, Codex, OpenCode, Cursor), installed and logged in. AgentOS uses your existing logins and subscriptions.</li>
+  <li>On Linux: <code>bubblewrap</code>, <code>socat</code> and <code>ripgrep</code>.</li>
+</ul>
+<p>On Ubuntu 24.04, unprivileged user namespaces must be allowed for bubblewrap:</p>
+<pre><code><span class="p">$ </span>sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0</code></pre>
+
+<h2 id="install">Install</h2>
+<pre><code><span class="p">$ </span>git clone https://github.com/Ngineer101/AgentOS.git &amp;&amp; cd AgentOS
+<span class="p">$ </span>scripts/install.sh<span class="c">    # build and install the host, the CLI and the desktop app</span>
+<span class="p">$ </span>agenthost status<span class="c">    # sandbox health, agents, login state</span></code></pre>
+<p><code>scripts/install.sh</code> does three things:</p>
+<ul>
+  <li>puts <code>agenthostd</code> and <code>agenthost</code> in <code>~/.local/bin</code>, and installs the desktop app (<code>~/Applications/AgentOS.app</code> on macOS, a launcher entry on Linux);</li>
+  <li>downloads the pinned agent adapters and the sandbox runtime;</li>
+  <li>starts the host at login, as a systemd user service on Linux or a launch agent on macOS.</li>
+</ul>
+<p>If <code>~/.local/bin</code> is not on your <code>PATH</code>, add it to use the CLI.</p>
+
+<h3 id="antigravity">Antigravity</h3>
+<p>Antigravity is a standalone binary, not one of the pinned tools. Install it yourself, then sign in once with the command <code>agenthost status</code> shows.</p>
+<pre><code><span class="p">$ </span>curl -fsSL https://antigravity.google/cli/install.sh | bash</code></pre>
+
+<h2 id="first-session">Your first session</h2>
+<p>A workspace is a folder agents may work in. Add one, then run an agent in it:</p>
+<pre><code><span class="p">$ </span>agenthost workspace add ~/code/myproject --profile packages
+<span class="p">$ </span>agenthost run ~/code/myproject claude "Summarise this repo"
+<span class="p">$ </span>agenthost chat ~/code/myproject codex<span class="c">    # interactive</span></code></pre>
+<p>Or open the desktop app and press ⌘N (Ctrl+N on Linux). Everything the CLI does, the desktop app does too.</p>
+<p>No project in mind? The built-in <strong>Quick tasks</strong> workspace gives each session a fresh, empty folder:</p>
+<pre><code><span class="p">$ </span>agenthost run quick claude "What changed in the latest Rust release?"</code></pre>
+
+<h2 id="update">Update, restart, uninstall</h2>
+<pre><code><span class="p">$ </span>git pull &amp;&amp; scripts/install.sh<span class="c">    # rebuild, replace the binaries, restart the host</span>
+<span class="p">$ </span>scripts/install.sh --restart<span class="c">    # restart the host service only</span>
+<span class="p">$ </span>scripts/install.sh --uninstall<span class="c">    # remove the service, binaries and app; keeps your data</span></code></pre>
+<p class="note">Restarting the host stops running agent sessions. They resume where they can.</p>
+
+<h2 id="try">Try it without installing</h2>
+<p><code>scripts/dev.sh</code> builds and runs the host and the desktop app together. Closing the window stops the host.</p>
+<pre><code><span class="p">$ </span>scripts/dev.sh<span class="c">    # your normal data: workspaces and logins carry over</span>
+<span class="p">$ </span>scripts/dev.sh --fresh<span class="c">    # a throwaway host with an empty database</span></code></pre>
+
+<h2 id="where">Where things live</h2>
+<table>
+  <tr><th>What</th><th>Linux</th><th>macOS</th></tr>
+  <tr><td>Data (sessions, workspaces, pairings, tools)</td><td><code>~/.local/share/agenthost</code></td><td><code>~/Library/Application Support/agenthost</code></td></tr>
+  <tr><td>Host log</td><td colspan="2"><code>&lt;data folder&gt;/logs/host.log</code></td></tr>
+  <tr><td>Service</td><td><code>agenthost.service</code> (systemd user)</td><td><code>dev.agenthost.host</code> (launch agent)</td></tr>
+</table>
+<p>Something not working? Start with <code>agenthost status</code>, then the host log. To log the raw traffic between the host and an agent:</p>
+<pre><code><span class="p">$ </span>AGENTHOST_ACP_TRACE=1 agenthostd run</code></pre>
+
+    <div class="pager"><span></span><a class="btn" href="/docs/usage/">Using AgentOS →</a></div>
+  </main>
+</div>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>AgentOS is an independent open-source project, licensed MIT or Apache-2.0. It is not affiliated with or endorsed by Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names belong to their owners.</p>
+    <nav aria-label="Footer">
+      <a href="/docs/">Docs</a>
+      <a href="/docs/security/">Security</a>
+      <a href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+      <a href="https://github.com/Ngineer101/AgentOS/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+<script src="/site.js" defer></script>
+</body>
+</html>
