@@ -92,7 +92,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
             .gap(10.0)
             .px(24.0)
             .child(icon(&ic::CLOCK, 40.0).color(t.text3))
-            .child(text("Update AgentHost").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("Update AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
             .child(t.small("This host has no automations. Update agenthostd to run sessions on a schedule or from a webhook.").wrap().align(rune::Align::Center).max_w(420.0));
     }
     if s.automations.is_empty() {

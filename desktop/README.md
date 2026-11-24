@@ -1,4 +1,4 @@
-# agenthost desktop
+# AgentOS desktop
 
 The full control surface, built with [Rune](https://github.com/anomalyco/rune)
 (pinned to rev `e7f3ad9`). It runs on the same machine as the host and talks

@@ -230,7 +230,7 @@ impl PairingQr {
     pub fn decode(s: &str) -> Result<PairingQr> {
         let u = url::Url::parse(s.trim()).map_err(|e| TunnelError::Invalid(e.to_string()))?;
         if u.scheme() != "agenthost" || u.host_str() != Some("pair") {
-            return Err(TunnelError::Invalid("not an agenthost pairing code".into()));
+            return Err(TunnelError::Invalid("not an AgentOS pairing code".into()));
         }
         let q: std::collections::HashMap<String, String> = u.query_pairs().into_owned().collect();
         let get = |k: &str| {

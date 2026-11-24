@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "agenthostd", version, about = "Self-hosted agent host daemon")]
+#[command(name = "agenthostd", version, about = "AgentOS host daemon: a self-hosted agent host")]
 struct Cli {
     /// Data directory (database, logs, installed tools).
     #[arg(long, global = true, env = "AGENTHOST_DATA_DIR")]

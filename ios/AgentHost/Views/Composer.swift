@@ -404,7 +404,7 @@ final class SpeechDictation: ObservableObject {
         case .restricted:
             return .unavailable("Speech recognition is restricted on this iPhone.")
         default:
-            return .denied("To use voice input, allow Speech Recognition for AgentHost in Settings → AgentHost.")
+            return .denied("To use voice input, allow Speech Recognition for AgentOS in Settings → AgentOS.")
         }
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
@@ -413,7 +413,7 @@ final class SpeechDictation: ObservableObject {
             if await AVAudioApplication.requestRecordPermission() { return .granted }
             fallthrough
         default:
-            return .denied("To use voice input, allow AgentHost to use the microphone in Settings → AgentHost.")
+            return .denied("To use voice input, allow AgentOS to use the microphone in Settings → AgentOS.")
         }
     }
 
@@ -527,7 +527,7 @@ final class SpeechDictation: ObservableObject {
     /// Terms dictated to a coding agent that general dictation tends to get
     /// wrong, offered with the caller's own words.
     nonisolated static let developerTerms = [
-        "Claude", "Codex", "Antigravity", "AgentHost", "repo", "PR", "pull request",
+        "Claude", "Codex", "Antigravity", "AgentOS", "repo", "PR", "pull request",
         "commit", "rebase", "merge conflict", "branch", "diff", "refactor", "lint",
         "README", "JSON", "YAML", "API", "CLI", "SDK", "npm", "cargo", "Rust",
         "Swift", "SwiftUI", "TypeScript", "Xcode", "GitHub", "localhost", "async",

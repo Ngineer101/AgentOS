@@ -200,7 +200,7 @@ struct SettingsView: View {
         } header: {
             GroupHeader("Security")
         } footer: {
-            Text("When on, AgentHost asks for \(AppModel.unlockMethodName) each time you open it. Your key to the host stays on this iPhone either way.")
+            Text("When on, AgentOS asks for \(AppModel.unlockMethodName) each time you open it. Your key to the host stays on this iPhone either way.")
         }
     }
 

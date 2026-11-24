@@ -547,7 +547,7 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
     let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
     let a = &mut s.approvals[0];
     a.connector_id = BUILTIN_CONNECTOR_ID.into();
-    a.connector_name = "AgentHost".into();
+    a.connector_name = "AgentOS".into();
     a.tool = tool.into();
     if tool == "run_command" {
         a.summary = Some("Run gh pr edit on this computer".into());
@@ -587,7 +587,7 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
         for e in t.events.iter_mut() {
             if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
                 e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
-                e.payload["connector_name"] = json!("AgentHost");
+                e.payload["connector_name"] = json!("AgentOS");
                 e.payload["tool"] = json!(tool);
                 e.payload["arguments"] = Value::Null;
             }
@@ -858,7 +858,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
         let a = &mut s.approvals[0];
         a.connector_id = BUILTIN_CONNECTOR_ID.into();
-        a.connector_name = "AgentHost".into();
+        a.connector_name = "AgentOS".into();
         a.tool = "install_tool".into();
         a.summary = Some("Install agent-desktop 1.3.1 with npm, on this computer".into());
         a.arguments = json!({"command": "npm install --global agent-desktop@1.3.1", "manager": "npm", "package": "agent-desktop", "version": "1.3.1", "reason": "You asked me to set up agent-desktop so you can drive desktop apps from the terminal."});
@@ -867,7 +867,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
             for e in t.events.iter_mut() {
                 if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
                     e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
-                    e.payload["connector_name"] = json!("AgentHost");
+                    e.payload["connector_name"] = json!("AgentOS");
                     e.payload["tool"] = json!("install_tool");
                 }
             }

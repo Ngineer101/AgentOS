@@ -241,7 +241,7 @@ impl Gateway {
 fn pr_tool_def() -> Value {
     json!({
         "name": PR_TOOL,
-        "description": "[AgentHost] Open a GitHub pull request with the user's own GitHub CLI login, which your sandbox can't read \
+        "description": "[AgentOS] Open a GitHub pull request with the user's own GitHub CLI login, which your sandbox can't read \
              (so `gh pr create` inside it fails). The user sees the title and description and approves or denies it. \
              Push the branch first (agenthost__git_push).",
         "inputSchema": {
@@ -264,7 +264,7 @@ fn pr_tool_def() -> Value {
 fn run_command_def() -> Value {
     json!({
         "name": RUN_COMMAND_TOOL,
-        "description": "[AgentHost] Run a command-line program on the user's computer as the user, outside your sandbox, in this session's folder, \
+        "description": "[AgentOS] Run a command-line program on the user's computer as the user, outside your sandbox, in this session's folder, \
              with the user's own logins (GitHub CLI, cloud and deploy CLIs, keyring), which your sandbox can't read. Use it when a command \
              fails in the sandbox for want of the user's credentials or network, e.g. `gh pr edit`, `gh pr comment`, `gh issue create`, `gh api`. \
              The user sees the exact command and approves or denies it; nothing runs until they approve (unless they let that command run \
@@ -289,7 +289,7 @@ fn git_tools() -> Vec<Value> {
     vec![
         json!({
             "name": GIT_PUSH_TOOL,
-            "description": "[AgentHost] Push a branch of this session's repository with the user's own git credentials, which your sandbox can't read \
+            "description": "[AgentOS] Push a branch of this session's repository with the user's own git credentials, which your sandbox can't read \
                  (so `git push` inside it fails). The user sees the exact command and approves or denies it; nothing runs until they approve. \
                  Commit first. Only remotes the repository already has; branch names only.",
             "inputSchema": {
@@ -308,7 +308,7 @@ fn git_tools() -> Vec<Value> {
         }),
         json!({
             "name": GIT_FETCH_TOOL,
-            "description": "[AgentHost] Fetch from a remote of this session's repository with the user's own git credentials (git fetch <remote>), \
+            "description": "[AgentOS] Fetch from a remote of this session's repository with the user's own git credentials (git fetch <remote>), \
                  which your sandbox can't read. Runs without asking; it changes nothing on the remote. Merge or rebase yourself afterwards.",
             "inputSchema": {
                 "type": "object",
@@ -670,7 +670,7 @@ impl Gateway {
         if self.rate_limited(session_id) {
             finish("failed", "rate limit reached");
             return text_result(
-                "agenthost: too many MCP calls this minute; try again shortly",
+                "AgentOS: too many MCP calls this minute; try again shortly",
                 true,
             );
         }
@@ -698,7 +698,7 @@ impl Gateway {
                 if size > RESULT_LIMIT {
                     let (t, _) = truncate(&text, RESULT_LIMIT - 1024);
                     result = text_result(
-                        &format!("{t}\n[agenthost: result truncated from {size} bytes]"),
+                        &format!("{t}\n[AgentOS: result truncated from {size} bytes]"),
                         is_error,
                     );
                 }
@@ -715,7 +715,7 @@ impl Gateway {
             Err(e) => {
                 finish("failed", &e.to_string());
                 text_result(
-                    &format!("agenthost: the connector {} failed: {e}", conn.name),
+                    &format!("AgentOS: the connector {} failed: {e}", conn.name),
                     true,
                 )
             }
@@ -807,7 +807,7 @@ impl Gateway {
         tools.push(json!({
             "name": INSTALL_TOOL,
             "description": format!(
-                "[AgentHost] Install a command-line tool on the user's computer, outside your sandbox, so the user (and later sessions) can run it. \
+                "[AgentOS] Install a command-line tool on the user's computer, outside your sandbox, so the user (and later sessions) can run it. \
                  The user sees the exact command and approves or denies it on their desktop or phone; nothing runs until they approve. \
                  Use it when the user asks for a tool to be installed for them. For a helper only you need while working, install it yourself \
                  instead (npm install -g, pipx install, uv tool install, cargo install, go install): inside the sandbox those go to a shared \
@@ -863,7 +863,7 @@ impl Gateway {
         let s = |k: &str| args[k].as_str().map(str::to_string);
         let base = json!({
             "tool_call_id": call_id, "name": tool, "exposed_name": PR_TOOL, "arguments": args,
-            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentOS",
             "tool_kind": ToolKind::Write, "policy": ToolPolicy::Ask
         });
         let _ = self.ctx.append(session_id, EventType::ToolCall, base);
@@ -877,15 +877,15 @@ impl Gateway {
         };
         if self.rate_limited(session_id) {
             finish("failed", "rate limit reached");
-            return text_result("agenthost: too many calls this minute; try again shortly", true);
+            return text_result("AgentOS: too many calls this minute; try again shortly", true);
         }
         let Some(program) = crate::installer::find("gh", self.ctx.cfg.install_bin_dir.as_deref()) else {
             finish("failed", "the GitHub CLI (gh) is not installed on this computer");
-            return text_result("agenthost: the GitHub CLI (gh) is not installed on the user's computer", true);
+            return text_result("AgentOS: the GitHub CLI (gh) is not installed on the user's computer", true);
         };
         let Some(dir) = self.session_git_dir(session_id) else {
             finish("failed", "no such session");
-            return text_result("agenthost: this session's folder is unknown", true);
+            return text_result("AgentOS: this session's folder is unknown", true);
         };
         let plan = crate::gitremote::plan_pr(
             &dir,
@@ -901,7 +901,7 @@ impl Gateway {
             Ok(p) => p,
             Err(e) => {
                 finish("failed", &e);
-                return text_result(&format!("agenthost: {e}"), true);
+                return text_result(&format!("AgentOS: {e}"), true);
             }
         };
         let (details, _) = truncate(&plan.body, 4000);
@@ -925,7 +925,7 @@ impl Gateway {
         let decision = if auto {
             ApprovalDecision::Approve
         } else {
-            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", tool, &shown, Some(plan.summary()))
                 .await
         };
         self.ctx.audit.log(
@@ -960,7 +960,7 @@ impl Gateway {
         let s = |k: &str| args[k].as_str().map(str::to_string);
         let base = json!({
             "tool_call_id": call_id, "name": tool, "exposed_name": exposed, "arguments": args,
-            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentOS",
             "tool_kind": if push { ToolKind::Write } else { ToolKind::Read },
             "policy": if push { ToolPolicy::Ask } else { ToolPolicy::Auto }
         });
@@ -975,11 +975,11 @@ impl Gateway {
         };
         if self.rate_limited(session_id) {
             finish("failed", "rate limit reached");
-            return text_result("agenthost: too many calls this minute; try again shortly", true);
+            return text_result("AgentOS: too many calls this minute; try again shortly", true);
         }
         let Some(dir) = self.session_git_dir(session_id) else {
             finish("failed", "no such session");
-            return text_result("agenthost: this session's folder is unknown", true);
+            return text_result("AgentOS: this session's folder is unknown", true);
         };
         let plan = if push {
             crate::gitremote::plan_push(
@@ -998,7 +998,7 @@ impl Gateway {
             Ok(p) => p,
             Err(e) => {
                 finish("failed", &e);
-                return text_result(&format!("agenthost: {e}"), true);
+                return text_result(&format!("AgentOS: {e}"), true);
             }
         };
         if push {
@@ -1033,7 +1033,7 @@ impl Gateway {
             let decision = if auto {
                 ApprovalDecision::Approve
             } else {
-                self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+                self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", tool, &shown, Some(plan.summary()))
                     .await
             };
             self.ctx.audit.log(
@@ -1086,7 +1086,7 @@ impl Gateway {
         let rule = rule.filter(|_| outside.is_none());
         let base = json!({
             "tool_call_id": call_id, "name": tool, "exposed_name": RUN_COMMAND_TOOL, "arguments": args,
-            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentOS",
             "tool_kind": ToolKind::Write, "policy": if rule.is_some() { ToolPolicy::Auto } else { ToolPolicy::Ask }
         });
         let _ = self.ctx.append(session_id, EventType::ToolCall, base);
@@ -1100,16 +1100,16 @@ impl Gateway {
         };
         if self.rate_limited(session_id) {
             finish("failed", "rate limit reached");
-            return text_result("agenthost: too many calls this minute; try again shortly", true);
+            return text_result("AgentOS: too many calls this minute; try again shortly", true);
         }
         let Some(argv) = argv else {
             let e = "give `command` as a list of strings: the program, then its arguments";
             finish("failed", e);
-            return text_result(&format!("agenthost: {e}"), true);
+            return text_result(&format!("AgentOS: {e}"), true);
         };
         let Some(dir) = dir else {
             finish("failed", "no such session");
-            return text_result("agenthost: this session's folder is unknown", true);
+            return text_result("AgentOS: this session's folder is unknown", true);
         };
         let plan = crate::hostcmd::plan(
             &dir,
@@ -1122,7 +1122,7 @@ impl Gateway {
             Ok(p) => p,
             Err(e) => {
                 finish("failed", &e);
-                return text_result(&format!("agenthost: {e}"), true);
+                return text_result(&format!("AgentOS: {e}"), true);
             }
         };
         let decision = if rule.is_some() {
@@ -1152,7 +1152,7 @@ impl Gateway {
                 "allow_rule": offer,
                 "allow_rule_text": offer.as_deref().map(crate::hostcmd::display),
             });
-            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", tool, &shown, Some(plan.summary()))
+            self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", tool, &shown, Some(plan.summary()))
                 .await
         };
         self.ctx.audit.log(
@@ -1189,7 +1189,7 @@ impl Gateway {
         let (manager, package, version, reason) = (s("manager"), s("package"), s("version"), s("reason"));
         let base = json!({
             "tool_call_id": call_id, "name": "install_tool", "exposed_name": INSTALL_TOOL, "arguments": args,
-            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentHost",
+            "source": "mcp", "connector_id": BUILTIN_CONNECTOR_ID, "connector_name": "AgentOS",
             "tool_kind": ToolKind::Write, "policy": ToolPolicy::Ask
         });
         let _ = self.ctx.append(session_id, EventType::ToolCall, base);
@@ -1203,21 +1203,21 @@ impl Gateway {
         };
         if self.rate_limited(session_id) {
             finish("failed", "rate limit reached");
-            return text_result("agenthost: too many calls this minute; try again shortly", true);
+            return text_result("AgentOS: too many calls this minute; try again shortly", true);
         }
         let version = Some(version.as_str()).filter(|v| !v.trim().is_empty());
         let plan = match crate::installer::plan(&manager, &package, version) {
             Ok(p) => p,
             Err(e) => {
                 finish("failed", &e);
-                return text_result(&format!("agenthost: {e}"), true);
+                return text_result(&format!("AgentOS: {e}"), true);
             }
         };
         let bin_dir = self.ctx.cfg.install_bin_dir.clone();
         if !crate::installer::available(bin_dir.as_deref()).contains(&plan.manager) {
             let e = format!("{} is not installed on this computer", plan.manager.name());
             finish("failed", &e);
-            return text_result(&format!("agenthost: {e}"), true);
+            return text_result(&format!("AgentOS: {e}"), true);
         }
         // What the user sees and approves: the exact command, and why.
         let shown = json!({
@@ -1232,7 +1232,7 @@ impl Gateway {
             "note": "The package manager may run the package's install scripts with your permissions. Install only what you expected.",
         });
         let decision = self
-            .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentHost", "install_tool", &shown, Some(plan.summary()))
+            .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", "install_tool", &shown, Some(plan.summary()))
             .await;
         self.ctx.audit.log(
             "install.decision",
@@ -1585,7 +1585,7 @@ impl Gateway {
             .http
             .post(reg_ep)
             .json(&json!({
-                "client_name": "agenthost",
+                "client_name": "AgentOS",
                 // A desktop app with a loopback redirect. Without this, some
                 // servers assume a web client and refuse http://127.0.0.1.
                 "application_type": "native",

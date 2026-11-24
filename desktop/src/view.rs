@@ -750,7 +750,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         None if s.screen == Screen::Automations => ("Automations".to_string(), crate::automations::summary(s)),
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
-            ("AgentHost".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
+            ("AgentOS".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
         }
     };
     let branch = sess.and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());

@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for your interest. agenthost is a personal project, shared in the open
+Thanks for your interest. AgentOS is a personal project, shared in the open
 so others can run it, learn from it and build on it. That shapes how
 contributions work.
 
 ## Fork it and make it yours
 
-If you want agenthost to work differently (another agent, another platform,
+If you want AgentOS to work differently (another agent, another platform,
 a different UI, your own relay setup), **fork the repository and make your
 changes in your fork**. The licence (MIT or Apache-2.0) lets you change and
 redistribute it freely. Forks don't need to stay in sync with this

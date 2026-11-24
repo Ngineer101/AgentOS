@@ -1,6 +1,6 @@
 # Security policy
 
-agenthost runs coding agents on your computer and gives them limited access
+AgentOS runs coding agents on your computer and gives them limited access
 to it, so security problems matter here: a way out of the sandbox, past the
 egress proxy, around an approval, or into the relay's traffic.
 

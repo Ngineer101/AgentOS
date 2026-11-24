@@ -38,7 +38,7 @@ struct NotificationsSettingsView: View {
                 .disabled(busy || (!model.notificationsEnabled && !model.link.isOnline))
                 if model.notificationsEnabled && !model.pushAllowedBySystem {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Notifications are turned off for AgentHost in iOS Settings.")
+                        Text("Notifications are turned off for AgentOS in iOS Settings.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Button("Open Settings") { openNotificationSettings(openURL) }
@@ -133,7 +133,7 @@ struct NotificationsSettingsView: View {
         } header: {
             GroupHeader("APNs key on \(model.hostName)")
         } footer: {
-            Text("This build of AgentHost has no relay that sends its notifications, so \(model.hostName) sends them through Apple itself, with the APNs key (.p8) of the Apple Developer account the app is signed with. It is stored on \(model.hostName) only.")
+            Text("This build of AgentOS has no relay that sends its notifications, so \(model.hostName) sends them through Apple itself, with the APNs key (.p8) of the Apple Developer account the app is signed with. It is stored on \(model.hostName) only.")
         }
     }
 
@@ -189,7 +189,7 @@ struct NotificationsSettingsView: View {
     }
 }
 
-/// iOS Settings → AgentHost → Notifications.
+/// iOS Settings → AgentOS → Notifications.
 @MainActor
 private func openNotificationSettings(_ openURL: OpenURLAction) {
     if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
@@ -322,7 +322,7 @@ struct PushOnboardingView: View {
         ContentUnavailableView {
             Label("Notifications Are Off", systemImage: "bell.slash")
         } description: {
-            Text("Allow notifications for AgentHost in iOS Settings. They start as soon as you do; change them later in Settings → Notifications.")
+            Text("Allow notifications for AgentOS in iOS Settings. They start as soon as you do; change them later in Settings → Notifications.")
         } actions: {
             Button("Open Settings") { openNotificationSettings(openURL) }
                 .buttonStyle(.borderedProminent)
@@ -345,7 +345,7 @@ struct PushOnboardingView: View {
                         .accessibilityHidden(true)
                     Text("Add Your APNs Key")
                         .font(.title2.weight(.bold))
-                    Text("\(model.hostName) sends notifications through Apple with the APNs key (.p8) from the Apple Developer account AgentHost is signed with. It is needed once per host.")
+                    Text("\(model.hostName) sends notifications through Apple with the APNs key (.p8) from the Apple Developer account AgentOS is signed with. It is needed once per host.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

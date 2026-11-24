@@ -1,16 +1,20 @@
-# agenthost
+# AgentOS
 
 A self-hosted agent host. A daemon on your own Linux or macOS machine runs
 **Claude Code**, **Codex**, **OpenCode**, **Cursor** and Google's
-**Antigravity CLI** (`agy`) on your existing subscriptions, each session inside an OS sandbox. You drive it
-from a desktop app, a command-line client or an iOS app; the phone reaches
-your machine through a relay you deploy yourself, which only ever carries
-ciphertext. Your code, transcripts and credentials stay on your machine.
+**Antigravity CLI** (`agy`) on your existing subscriptions, each session
+inside an OS sandbox. You drive it from a desktop app, a command-line client
+or an iOS app; the phone reaches your machine through a relay you deploy
+yourself, which only ever carries ciphertext. Your code, transcripts and
+credentials stay on your machine.
 
 > **Status:** early, and built for one person's own use. It's developed
 > mainly on Linux; macOS and the iOS app have had less testing.
 > [docs/status.md](docs/status.md) records what has been verified and how.
 > Expect rough edges.
+
+The commands (`agenthost`, `agenthostd`), settings (`AGENTHOST_*`) and folders
+keep the project's earlier name, agenthost.
 
 ## How it works
 
@@ -66,7 +70,7 @@ you want to use, installed and logged in. On Linux also `bubblewrap`,
 allowed for bubblewrap: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
 
 ```sh
-git clone https://github.com/Ngineer101/relay.git agenthost && cd agenthost
+git clone https://github.com/Ngineer101/relay.git agentos && cd agentos
 scripts/install.sh            # build and install the host, the CLI and the desktop app
 agenthost status              # sandbox health, agents, login state
 ```
@@ -87,7 +91,7 @@ agenthost run ~/code/myproject claude "Summarise this repo"
 agenthost chat ~/code/myproject codex         # interactive
 ```
 
-Or open the desktop app (`agenthost-desktop`, or AgentHost in your
+Or open the desktop app (`agenthost-desktop`, or AgentOS in your
 Applications on macOS) and press ⌘N / Ctrl+N.
 
 ### 3. Remote access (optional)
@@ -169,6 +173,6 @@ otherwise, any contribution intentionally submitted for inclusion in this
 work by you, as defined in the Apache-2.0 license, shall be dual licensed as
 above, without any additional terms or conditions.
 
-agenthost is an independent project, not affiliated with or endorsed by
+AgentOS is an independent project, not affiliated with or endorsed by
 Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names
 belong to their owners.

@@ -1,4 +1,4 @@
-//! Async client for the agenthost protocol over the host's Unix socket or,
+//! Async client for the AgentOS protocol over the host's Unix socket or,
 //! for a paired device, through the relay (see [`remote`]).
 
 pub mod remote;

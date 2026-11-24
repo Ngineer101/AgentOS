@@ -1,4 +1,4 @@
-//! agenthost desktop app: the full control surface, over the host's Unix socket.
+//! AgentOS desktop app: the full control surface, over the host's Unix socket.
 
 mod audio;
 mod automations;
@@ -110,7 +110,7 @@ pub(crate) fn app() -> rune::App<App> {
         scenes: demo::SCENES,
         min_size: Some((760.0, 520.0)),
         families,
-        ..AppSpec::new("AgentHost", (1280.0, 800.0), model::init, view::view)
+        ..AppSpec::new("AgentOS", (1280.0, 800.0), model::init, view::view)
     })
     .chrome(chrome)
     .on_modifiers(on_modifiers)

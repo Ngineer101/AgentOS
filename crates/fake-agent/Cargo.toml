@@ -1,6 +1,6 @@
 [package]
 name = "agenthost-fake-agent"
-description = "A scripted ACP agent used to test agenthost without real agent CLIs"
+description = "A scripted ACP agent used to test AgentOS without real agent CLIs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

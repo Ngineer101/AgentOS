@@ -1,4 +1,4 @@
-//! agenthost daemon library.
+//! AgentOS daemon library.
 //!
 //! One daemon owns agents, sandboxes, credentials and data. Clients (desktop,
 //! CLI, phone) speak one JSON-RPC protocol to it; see `agenthost-proto`.

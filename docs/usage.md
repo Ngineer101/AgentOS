@@ -1,4 +1,4 @@
-# Using agenthost
+# Using AgentOS
 
 The [README](../README.md) covers setup. This page covers the rest. Everything
 here works from the desktop app too; the CLI is shown because it's shorter to

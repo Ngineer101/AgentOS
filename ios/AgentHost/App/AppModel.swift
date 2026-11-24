@@ -169,7 +169,7 @@ final class AppModel: ObservableObject {
     @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: AppModel.notificationsEnabledKey)
     /// What this iPhone is notified about (sent with every `push.register`).
     @Published var pushPrefs = AppModel.storedPushPrefs
-    /// Whether iOS lets AgentHost show notifications.
+    /// Whether iOS lets AgentOS show notifications.
     @Published var pushAuthorization: UNAuthorizationStatus = .notDetermined
     /// The pairing flow's "Notifications" step, after the first connection.
     @Published var showPushOnboarding = false
@@ -405,13 +405,13 @@ final class AppModel: ObservableObject {
         context.localizedCancelTitle = "Cancel"
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            lockError = "Set a passcode on this iPhone to use AgentHost. (\(error?.localizedDescription ?? "unavailable"))"
+            lockError = "Set a passcode on this iPhone to use AgentOS. (\(error?.localizedDescription ?? "unavailable"))"
             return
         }
         do {
             let ok = try await context.evaluatePolicy(
                 .deviceOwnerAuthentication,
-                localizedReason: "Unlock AgentHost to see your sessions."
+                localizedReason: "Unlock AgentOS to see your sessions."
             )
             guard ok else { return }
         } catch {
@@ -460,7 +460,7 @@ final class AppModel: ObservableObject {
         let name = Self.unlockMethodName
         guard try await context.evaluatePolicy(
             .deviceOwnerAuthentication,
-            localizedReason: on ? "Turn on \(name) for AgentHost." : "Turn off \(name) for AgentHost."
+            localizedReason: on ? "Turn on \(name) for AgentOS." : "Turn off \(name) for AgentOS."
         ) else { return }
         if let creds = credentials {
             do {
