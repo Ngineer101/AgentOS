@@ -14,6 +14,8 @@ pub enum Screen {
     Session(String),
     /// The automations: the list, the selected one and its runs.
     Automations,
+    /// The notes: every workspace's, beside the chosen one's editor.
+    Notes,
 }
 
 /// A Settings tab (macOS) or Preferences page (GNOME).
@@ -677,7 +679,44 @@ pub struct App {
     pub confirm_delete_auto: Option<String>,
     /// An automation waiting for "New URL" to be confirmed (the old one stops working).
     pub confirm_rotate: Option<String>,
+    /// Notes (protocol 9), as the host lists them: open ones first, newest first.
+    pub notes: Vec<Note>,
+    /// The note the Notes screen shows (when not writing a new one).
+    pub sel_note: Option<String>,
+    /// Writing a new note in this workspace: the editor isn't a saved note yet.
+    pub new_note_ws: Option<String>,
+    /// The Notes editor's text: the shown note's, or the new one's.
+    pub note_edit: TextEdit,
+    /// The text the editor started from (the note as last loaded or saved): edits are
+    /// what differs from it.
+    pub note_base: String,
+    /// A save of the editor's text is on its way.
+    pub note_saving: bool,
+    /// Counts new notes begun, so a late `note.create` answer only adopts the one it saved.
+    pub note_gen: u64,
+    /// The Notes list shows done notes too.
+    pub notes_show_done: bool,
+    /// A note waiting for Delete to be confirmed.
+    pub confirm_delete_note: Option<String>,
+    /// The New Session sheet starts a session from this note: (note id, workspace, text).
+    pub start_note: Option<(String, String, String)>,
+    /// The sidebar's search field is open (⌘F / Ctrl+F or the search button).
+    pub search_open: bool,
+    /// Workspaces whose sidebar group is collapsed; saved between launches.
+    pub collapsed: HashSet<String>,
+    /// Workspaces whose group shows every session, not just the newest few, until quit.
+    pub show_all: HashSet<String>,
+    /// The sidebar row under the pointer: it shows Pin and Archive.
+    pub hover_row: Option<String>,
+    /// The jump keys' modifier is held (⌘ on macOS, Alt on GNOME): the sidebar shows
+    /// ⌘1…9 / Alt+1…9 in place of the ages.
+    pub jump_held: bool,
+    /// Save `collapsed` to the prefs file (off in tests and offline snapshots).
+    pub save_prefs: bool,
 }
+
+/// A sidebar group shows this many sessions until "Show N more".
+pub const GROUP_SHOWN: usize = 8;
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
 pub fn login_key(a: &AgentStatus) -> String {
@@ -788,6 +827,22 @@ pub fn init() -> App {
         draft: AutoDraft::blank(),
         confirm_delete_auto: None,
         confirm_rotate: None,
+        notes: vec![],
+        sel_note: None,
+        new_note_ws: None,
+        note_edit: TextEdit::new(""),
+        note_base: String::new(),
+        note_saving: false,
+        note_gen: 0,
+        notes_show_done: false,
+        confirm_delete_note: None,
+        start_note: None,
+        search_open: false,
+        collapsed: HashSet::new(),
+        show_all: HashSet::new(),
+        hover_row: None,
+        jump_held: false,
+        save_prefs: false,
     }
 }
 
@@ -812,6 +867,12 @@ impl App {
         if let Some(id) = &a.profile_id {
             params["profile_id"] = json!(id);
         }
+        // From a note, unless another workspace was picked: it opens with the note's text.
+        if let Some((note, _, text)) = self.start_note.as_ref().filter(|(_, w, _)| w == ws) {
+            params["note_id"] = json!(note);
+            self.call(Tag::SessionFromNote(text.clone()), m::SESSION_CREATE, params);
+            return;
+        }
         self.call(Tag::SessionCreated, m::SESSION_CREATE, params);
     }
 
@@ -823,6 +884,7 @@ impl App {
             return;
         };
         self.start_session();
+        self.start_note = None;
         if self.make_default && self.default_login(&ws).as_deref() != Some(key.as_str()) {
             self.set_default_login(&ws, Some(&key));
         }
@@ -897,6 +959,7 @@ impl App {
     /// (or the first one that's ready).
     pub fn open_new_session(&mut self, quick: bool) {
         self.close_overlays();
+        self.start_note = None;
         if quick || self.new_ws.as_ref().is_none_or(|w| self.workspace(w).is_none()) {
             let first_folder = self.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).map(|w| w.workspace_id.clone());
             let quick_ws = self.workspaces.iter().find(|w| w.kind == WorkspaceKind::Scratch).map(|w| w.workspace_id.clone());
@@ -910,6 +973,12 @@ impl App {
         }
         self.make_default = false;
         self.new_open = true;
+    }
+
+    /// A workspace's "+" in the sidebar: the New session sheet with that workspace picked.
+    pub fn open_new_session_in(&mut self, ws: &str) {
+        self.new_ws = Some(ws.to_string());
+        self.open_new_session(false);
     }
 
     pub fn open_settings(&mut self, tab: Tab) {
@@ -934,13 +1003,14 @@ impl App {
         self.auto_open = false;
         self.confirm_delete_auto = None;
         self.confirm_rotate = None;
+        self.confirm_delete_note = None;
     }
 
     /// The open session.
     pub fn current(&self) -> Option<&Session> {
         match &self.screen {
             Screen::Session(id) => self.session(id),
-            Screen::Home | Screen::Automations => None,
+            Screen::Home | Screen::Automations | Screen::Notes => None,
         }
     }
 
@@ -951,10 +1021,31 @@ impl App {
         agents.iter().find(|a| login_key(a) == key).map(|a| a.label()).unwrap_or_else(|| s.agent.display_name().to_string())
     }
 
-    /// Sessions as the sidebar lists them: workspaces in order with Quick tasks first,
-    /// newest first inside each, filtered by the search field.
+    /// Whether a session matches the sidebar's search (its title, login or workspace).
+    fn matches_search(&self, x: &Session, q: &str) -> bool {
+        q.is_empty()
+            || x.title.as_deref().unwrap_or("").to_lowercase().contains(q)
+            || self.login_label(x).to_lowercase().contains(q)
+            || self.workspace(&x.workspace_id).is_some_and(|w| w.name.to_lowercase().contains(q))
+    }
+
+    fn search_query(&self) -> String {
+        self.search.text.trim().to_lowercase()
+    }
+
+    /// The sidebar's Pinned section, in the order they were pinned, filtered by the search.
+    pub fn pinned_sessions(&self) -> Vec<&Session> {
+        let q = self.search_query();
+        let mut l: Vec<&Session> = self.sessions.iter().filter(|x| x.pinned_at.is_some() && self.matches_search(x, &q)).collect();
+        l.sort_by_key(|x| (x.pinned_at, x.created_at));
+        l
+    }
+
+    /// Sessions as the sidebar lists them under Workspaces: workspaces in order with Quick
+    /// tasks first, newest first inside each, filtered by the search field. Pinned sessions
+    /// are in the Pinned section instead.
     pub fn sidebar_groups(&self) -> Vec<(&Workspace, Vec<&Session>)> {
-        let q = self.search.text.trim().to_lowercase();
+        let q = self.search_query();
         let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
         ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
         let mut out = vec![];
@@ -962,13 +1053,7 @@ impl App {
             let mut list: Vec<&Session> = self
                 .sessions
                 .iter()
-                .filter(|x| x.workspace_id == w.workspace_id)
-                .filter(|x| {
-                    q.is_empty()
-                        || x.title.as_deref().unwrap_or("").to_lowercase().contains(&q)
-                        || self.login_label(x).to_lowercase().contains(&q)
-                        || w.name.to_lowercase().contains(&q)
-                })
+                .filter(|x| x.workspace_id == w.workspace_id && x.pinned_at.is_none() && self.matches_search(x, &q))
                 .collect();
             if list.is_empty() {
                 continue;
@@ -979,16 +1064,89 @@ impl App {
         out
     }
 
-    /// Session ids in sidebar order; ⌘1…⌘9 number the live ones in this order.
+    /// Whether a workspace's group is collapsed; a search shows every match regardless.
+    pub fn group_collapsed(&self, ws: &str) -> bool {
+        self.search_query().is_empty() && self.collapsed.contains(ws)
+    }
+
+    /// The rows a group shows, and how many "Show N more" hides: the newest
+    /// [`GROUP_SHOWN`], and past them any session that needs you or is working.
+    pub fn group_rows<'a>(&self, ws: &str, list: &[&'a Session]) -> (Vec<&'a Session>, usize) {
+        if self.group_collapsed(ws) {
+            return (vec![], 0);
+        }
+        if !self.search_query().is_empty() || self.show_all.contains(ws) || list.len() <= GROUP_SHOWN {
+            return (list.to_vec(), 0);
+        }
+        let shown: Vec<&Session> = list
+            .iter()
+            .enumerate()
+            .filter(|(i, x)| *i < GROUP_SHOWN || matches!(Status::of(x.state), Status::NeedsYou | Status::Working))
+            .map(|(_, x)| *x)
+            .collect();
+        let hidden = list.len() - shown.len();
+        (shown, hidden)
+    }
+
+    /// Collapse a workspace's group, or expand it again; remembered between launches.
+    pub fn toggle_group(&mut self, ws: &str) {
+        if !self.collapsed.remove(ws) {
+            self.collapsed.insert(ws.to_string());
+        }
+        if self.save_prefs {
+            // Load-modify-save, so the other remembered things (which host to
+            // connect to) survive this one.
+            let mut p = crate::prefs::load();
+            p.collapsed = self.collapsed.clone();
+            crate::prefs::save(&p);
+        }
+    }
+
+    /// Session ids in sidebar order, as the rows show: Pinned, then each group's visible
+    /// rows. ⌥⌘↑/↓ walk it and ⌘1…⌘9 number the live ones in this order.
     pub fn sidebar_order(&self) -> Vec<String> {
-        self.sidebar_groups().into_iter().flat_map(|(_, l)| l.into_iter().map(|s| s.session_id.clone())).collect()
+        let mut out: Vec<String> = self.pinned_sessions().into_iter().map(|x| x.session_id.clone()).collect();
+        for (w, l) in self.sidebar_groups() {
+            out.extend(self.group_rows(&w.workspace_id, &l).0.into_iter().map(|x| x.session_id.clone()));
+        }
+        out
     }
     pub fn numbered(&self) -> Vec<String> {
-        self.sidebar_groups()
-            .into_iter()
-            .flat_map(|(_, l)| l.into_iter().filter(|s| !s.state.is_terminal()).map(|s| s.session_id.clone()))
-            .take(9)
-            .collect()
+        self.sidebar_order().into_iter().filter(|id| self.session(id).is_some_and(|x| !x.state.is_terminal())).take(9).collect()
+    }
+
+    /// The host can pin sessions (protocol 8).
+    pub fn has_pins(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.protocol_version >= 8)
+    }
+
+    /// Pin a session to the top of the sidebar, or unpin it. The row moves at once; the
+    /// host's reply (and its `session.changed`) confirm it.
+    pub fn set_pinned(&mut self, id: &str, pinned: bool) {
+        let Some(x) = self.sessions.iter_mut().find(|x| x.session_id == id) else { return };
+        if pinned == x.pinned_at.is_some() {
+            return;
+        }
+        x.pinned_at = pinned.then(crate::view::now_ms);
+        self.hover_row = None;
+        self.act(if pinned { "Pin session" } else { "Unpin session" }, m::SESSION_PIN, json!({"session_id": id, "pinned": pinned}), Refresh::None);
+    }
+
+    /// Open the sidebar's search field (⌘F / Ctrl+F, the search button).
+    pub fn open_search(&mut self) {
+        self.sidebar_open = true;
+        self.search_open = true;
+        self.search.focused = true;
+    }
+
+    /// Escape in the search field: clear it, then close it.
+    pub fn close_search(&mut self) {
+        if !self.search.text.is_empty() {
+            self.search.replace_text("");
+        } else {
+            self.search_open = false;
+            self.search.focused = false;
+        }
     }
 
     /// One of the host's own tools, by name ("create_pull_request").
@@ -1119,7 +1277,7 @@ impl App {
         }
         let name = {
             let n = p.name.text.trim().to_string();
-            if n.is_empty() { "agenthost desktop".to_string() } else { n }
+            if n.is_empty() { "AgentOS Desktop".to_string() } else { n }
         };
         if let Some(p) = self.pair_remote.as_mut() {
             p.busy = true;
@@ -1153,9 +1311,9 @@ impl App {
                 } else {
                     // Nothing local to keep working with: go there now, and next
                     // launch too.
-                    let mut prefs = crate::bridge::load_prefs();
+                    let mut prefs = crate::prefs::load();
                     prefs.prefer_remote = true;
-                    crate::bridge::save_prefs(&prefs);
+                    crate::prefs::save(&prefs);
                     self.conn = Conn::Connecting;
                     if let Some(b) = &self.bridge {
                         b.send(ToHost::UseRemote(remote_state_path()));
@@ -1178,9 +1336,9 @@ impl App {
         let Some(b) = &self.bridge else { return };
         self.conn = Conn::Connecting;
         b.send(ToHost::UseRemote(remote_state_path()));
-        let mut prefs = crate::bridge::load_prefs();
+        let mut prefs = crate::prefs::load();
         prefs.prefer_remote = true;
-        crate::bridge::save_prefs(&prefs);
+        crate::prefs::save(&prefs);
     }
 
     /// Back to this computer's own host, by choice (not a fallback).
@@ -1188,9 +1346,9 @@ impl App {
         let Some(b) = &self.bridge else { return };
         self.conn = Conn::Connecting;
         b.send(ToHost::UseLocal);
-        let mut prefs = crate::bridge::load_prefs();
+        let mut prefs = crate::prefs::load();
         prefs.prefer_remote = false;
-        crate::bridge::save_prefs(&prefs);
+        crate::prefs::save(&prefs);
     }
 
     /// Add a folder as a workspace; from the New session sheet it's then selected.
@@ -1242,11 +1400,12 @@ impl App {
             Refresh::ProjectRoots => self.call(Tag::ProjectRoots, m::PROJECT_BROWSE, json!({})),
             Refresh::Archived => self.call(Tag::Archived, m::SESSION_LIST, json!({"archived": true})),
             Refresh::Automations => self.call(Tag::Automations, m::AUTOMATION_LIST, json!({})),
+            Refresh::Notes => self.call(Tag::Notes, m::NOTE_LIST, json!({})),
         }
     }
 
     pub fn refresh_all(&self) {
-        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals, Refresh::ProjectRoots, Refresh::Automations] {
+        for r in [Refresh::HostInfo, Refresh::Workspaces, Refresh::Connectors, Refresh::Devices, Refresh::Approvals, Refresh::ProjectRoots, Refresh::Automations, Refresh::Notes] {
             self.refresh(r);
         }
     }
@@ -1254,6 +1413,9 @@ impl App {
     /// Open a session: subscribe from what we already have, so nothing is lost
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
+        if self.screen == Screen::Notes {
+            self.save_note();
+        }
         self.menu = None;
         self.viewing = None;
         if self.session_rename.as_deref() != Some(id) {
@@ -1888,6 +2050,52 @@ impl App {
                         // The first session in a workspace sets its default login.
                         self.refresh(Refresh::Workspaces);
                     }
+                }
+                // Started from a note: its text waits in the composer, to edit and send.
+                (Tag::SessionFromNote(text), Ok(v)) => {
+                    if let Some(s) = parse::<Session>(v) {
+                        let id = s.session_id.clone();
+                        self.upsert_session(s);
+                        self.open_session(&id);
+                        if self.prompt.text.is_empty() {
+                            self.prompt.replace_text(&text);
+                        }
+                        self.refresh(Refresh::Workspaces);
+                    }
+                }
+                (Tag::SessionFromNote(_), Err(e)) => self.error = Some(format!("Could not start the session: {}", e.message)),
+                (Tag::Notes, Ok(v)) => {
+                    self.notes = parse(v).unwrap_or_default();
+                    sort_notes(&mut self.notes);
+                    self.sync_note_editor();
+                }
+                // An older host without notes: the screen says to update it.
+                (Tag::Notes, Err(_)) => self.notes.clear(),
+                (Tag::NoteSaved { new_gen }, Ok(v)) => {
+                    self.note_saving = false;
+                    if let Some(n) = parse::<Note>(v) {
+                        let id = n.note_id.clone();
+                        self.upsert_note(n);
+                        // A new note becomes the one shown, unless another was picked meanwhile.
+                        if new_gen.is_some_and(|g| g == self.note_gen) && self.new_note_ws.is_some() {
+                            self.new_note_ws = None;
+                            self.sel_note = Some(id.clone());
+                            self.note_base = self.note(&id).map(|n| n.text.clone()).unwrap_or_default();
+                        }
+                    }
+                }
+                (Tag::NoteSaved { .. }, Err(e)) => {
+                    self.note_saving = false;
+                    self.error = Some(format!("Could not save the note: {}", e.message));
+                }
+                (Tag::NoteAction { .. }, Ok(v)) => {
+                    if let Some(n) = parse::<Note>(v) {
+                        self.upsert_note(n);
+                    }
+                }
+                (Tag::NoteAction { what }, Err(e)) => {
+                    self.error = Some(format!("{what} failed: {}", e.message));
+                    self.refresh(Refresh::Notes);
                 }
                 (Tag::Subscribed(id), Ok(v)) => {
                     if let Some(sub) = v["subscription_id"].as_str() {
@@ -2544,7 +2752,7 @@ impl App {
         let now = std::time::Instant::now();
         let here = match &self.screen {
             Screen::Session(id) => Some(id.clone()),
-            Screen::Home | Screen::Automations => None,
+            Screen::Home | Screen::Automations | Screen::Notes => None,
         };
         let fresh: Vec<PendingApproval> = self.approvals.iter().filter(|a| !self.toasted_approvals.contains(&a.approval_id)).cloned().collect();
         for a in fresh {
@@ -2670,6 +2878,11 @@ impl App {
                 }
             }
             m::N_CONNECTOR_CHANGED => self.refresh(Refresh::Connectors),
+            m::N_NOTE_CHANGED => {
+                if let Some(ch) = parse::<NoteChanged>(n.params) {
+                    self.on_note_changed(ch);
+                }
+            }
             m::N_AUTOMATION_CHANGED => {
                 if let Some(ch) = parse::<AutomationChanged>(n.params) {
                     self.on_automation_changed(ch);
@@ -3158,6 +3371,9 @@ impl App {
 
     /// Open the Automations screen (on the automation chosen last, else the first).
     pub fn open_automations(&mut self) {
+        if self.screen == Screen::Notes {
+            self.save_note();
+        }
         self.close_overlays();
         self.session_rename = None;
         self.screen = Screen::Automations;
@@ -3425,5 +3641,238 @@ impl App {
         if had_runs && self.screen == Screen::Automations && self.sel_auto.as_deref() == Some(id.as_str()) {
             self.select_automation(&id);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Notes
+// ---------------------------------------------------------------------------
+
+/// A note's text as the host stores it (trailing space and leading blank lines dropped).
+pub fn clean_note(text: &str) -> &str {
+    text.trim_end().trim_start_matches(['\n', '\r'])
+}
+
+/// The host's order: open notes newest first, then done ones, most recently done first.
+pub fn sort_notes(list: &mut [Note]) {
+    list.sort_by(|a, b| {
+        (a.done_at.is_some(), std::cmp::Reverse(a.done_at.unwrap_or(a.created_at)), &a.note_id).cmp(&(b.done_at.is_some(), std::cmp::Reverse(b.done_at.unwrap_or(b.created_at)), &b.note_id))
+    });
+}
+
+impl App {
+    /// The host has notes (protocol 9).
+    pub fn host_has_notes(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.protocol_version >= 9)
+    }
+
+    pub fn note(&self, id: &str) -> Option<&Note> {
+        self.notes.iter().find(|n| n.note_id == id)
+    }
+
+    /// The note the editor shows, unless a new one is being written.
+    pub fn selected_note(&self) -> Option<&Note> {
+        if self.new_note_ws.is_some() {
+            return None;
+        }
+        self.sel_note.as_deref().and_then(|id| self.note(id))
+    }
+
+    /// The editor has text that isn't saved.
+    pub fn note_dirty(&self) -> bool {
+        let text = clean_note(&self.note_edit.text);
+        match (&self.new_note_ws, self.selected_note()) {
+            (Some(_), _) => !title_of(text).is_empty(),
+            (None, Some(_)) => text != self.note_base && !title_of(text).is_empty(),
+            (None, None) => false,
+        }
+    }
+
+    /// The workspace a new note goes in by default: the shown note's, else the last one
+    /// picked for a session, else the first folder.
+    fn default_note_ws(&self) -> Option<String> {
+        let live = |id: &String| self.workspace(id).is_some();
+        self.selected_note()
+            .map(|n| n.workspace_id.clone())
+            .filter(live)
+            .or_else(|| self.new_note_ws.clone().filter(live))
+            .or_else(|| self.new_ws.clone().filter(live))
+            .or_else(|| self.workspaces.iter().find(|w| w.kind != WorkspaceKind::Scratch).map(|w| w.workspace_id.clone()))
+            .or_else(|| self.workspaces.first().map(|w| w.workspace_id.clone()))
+    }
+
+    /// Open the Notes screen: on the note shown last, else the first open one; with no
+    /// notes, writing a new one.
+    pub fn open_notes(&mut self) {
+        self.close_overlays();
+        self.session_rename = None;
+        self.screen = Screen::Notes;
+        self.refresh(Refresh::Notes);
+        if self.new_note_ws.is_some() {
+            return;
+        }
+        let shown = self.selected_note().map(|n| n.note_id.clone()).or_else(|| self.notes.iter().find(|n| n.done_at.is_none()).map(|n| n.note_id.clone()));
+        match shown {
+            Some(id) => self.select_note(&id),
+            None => self.new_note(None),
+        }
+    }
+
+    /// Show a note in the editor, saving the one there first.
+    pub fn select_note(&mut self, id: &str) {
+        if self.sel_note.as_deref() == Some(id) && self.new_note_ws.is_none() {
+            return;
+        }
+        self.save_note();
+        let Some(text) = self.note(id).map(|n| n.text.clone()) else { return };
+        self.sel_note = Some(id.to_string());
+        self.new_note_ws = None;
+        self.note_edit = TextEdit::new(text.clone());
+        self.note_base = text;
+    }
+
+    /// Start writing a new note in `ws` (else the default workspace), saving the one shown.
+    pub fn new_note(&mut self, ws: Option<&str>) {
+        self.save_note();
+        let Some(ws) = ws.map(str::to_string).or_else(|| self.default_note_ws()) else { return };
+        self.screen = Screen::Notes;
+        self.close_overlays();
+        self.new_note_ws = Some(ws);
+        self.note_gen += 1;
+        self.note_edit = TextEdit::new("");
+        self.note_edit.focused = true;
+        self.note_base.clear();
+    }
+
+    /// A workspace's "New Note Here".
+    pub fn new_note_in(&mut self, ws: &str) {
+        self.refresh(Refresh::Notes);
+        self.new_note(Some(ws));
+    }
+
+    /// Move the new note to another workspace before it's saved.
+    pub fn pick_note_ws(&mut self, ws: &str) {
+        self.menu = None;
+        if self.new_note_ws.is_some() {
+            self.new_note_ws = Some(ws.to_string());
+        }
+    }
+
+    /// Save the editor's text if it changed (a blank editor saves nothing).
+    pub fn save_note(&mut self) {
+        if !self.note_dirty() {
+            return;
+        }
+        let text = clean_note(&self.note_edit.text).to_string();
+        if let Some(ws) = &self.new_note_ws {
+            // Once: a second Save before the answer would make it twice.
+            if self.note_saving {
+                return;
+            }
+            self.note_saving = true;
+            self.call(Tag::NoteSaved { new_gen: Some(self.note_gen) }, m::NOTE_CREATE, json!({"workspace_id": ws, "text": text}));
+        } else if let Some(n) = self.selected_note() {
+            let id = n.note_id.clone();
+            // Shown at once; the host's answer replaces it.
+            if let Some(n) = self.notes.iter_mut().find(|n| n.note_id == id) {
+                n.text = text.clone();
+            }
+            self.note_base = text.clone();
+            self.note_saving = true;
+            self.call(Tag::NoteSaved { new_gen: None }, m::NOTE_UPDATE, json!({"note_id": id, "text": text}));
+        }
+    }
+
+    /// Mark a note done, or open it again.
+    pub fn set_note_done(&mut self, id: &str, done: bool) {
+        if self.sel_note.as_deref() == Some(id) {
+            self.save_note();
+        }
+        if let Some(n) = self.notes.iter_mut().find(|n| n.note_id == id) {
+            n.done_at = if done { Some(n.done_at.unwrap_or_else(crate::view::now_ms)) } else { None };
+        }
+        sort_notes(&mut self.notes);
+        let what = if done { "Mark note done" } else { "Reopen note" };
+        self.call(Tag::NoteAction { what: what.into() }, m::NOTE_UPDATE, json!({"note_id": id, "done": done}));
+    }
+
+    /// Delete…: asks first, then deletes. The editor moves to the next open note.
+    pub fn delete_note(&mut self, id: &str) {
+        if self.confirm_delete_note.as_deref() != Some(id) {
+            self.menu = None;
+            self.confirm_delete_note = Some(id.to_string());
+            return;
+        }
+        self.confirm_delete_note = None;
+        self.notes.retain(|n| n.note_id != id);
+        if self.sel_note.as_deref() == Some(id) {
+            self.sel_note = None;
+            self.note_edit = TextEdit::new("");
+            self.note_base.clear();
+            if let Some(next) = self.notes.iter().find(|n| n.done_at.is_none()).map(|n| n.note_id.clone()) {
+                self.select_note(&next);
+            }
+        }
+        self.call(Tag::NoteAction { what: "Delete note".into() }, m::NOTE_DELETE, json!({"note_id": id}));
+    }
+
+    /// Start Session: the New Session sheet in the note's workspace; the session opens with
+    /// the note's text in its composer, to edit before sending.
+    pub fn start_from_note(&mut self, id: &str) {
+        if self.sel_note.as_deref() == Some(id) {
+            self.save_note();
+        }
+        let Some(n) = self.note(id).cloned() else { return };
+        let text = if self.sel_note.as_deref() == Some(id) && self.new_note_ws.is_none() { clean_note(&self.note_edit.text).to_string() } else { n.text.clone() };
+        self.new_ws = Some(n.workspace_id.clone());
+        self.open_new_session(false);
+        self.start_note = Some((n.note_id, n.workspace_id, text));
+    }
+
+    /// The editor follows the shown note when the host changes it, unless it holds unsaved
+    /// text; a deleted note leaves the editor.
+    fn sync_note_editor(&mut self) {
+        if self.new_note_ws.is_some() {
+            return;
+        }
+        let Some(id) = self.sel_note.clone() else { return };
+        match self.note(&id).map(|n| n.text.clone()) {
+            Some(text) if text != self.note_base => {
+                // Unsaved edits win; Save writes them over the host's.
+                if clean_note(&self.note_edit.text) == self.note_base {
+                    let focused = self.note_edit.focused;
+                    self.note_edit = TextEdit::new(text.clone());
+                    self.note_edit.focused = focused;
+                    self.note_base = text;
+                }
+            }
+            Some(_) => {}
+            None => {
+                self.sel_note = None;
+                self.note_edit = TextEdit::new("");
+                self.note_base.clear();
+            }
+        }
+    }
+
+    fn upsert_note(&mut self, n: Note) {
+        match self.notes.iter_mut().find(|x| x.note_id == n.note_id) {
+            Some(x) => *x = n,
+            None => self.notes.push(n),
+        }
+        sort_notes(&mut self.notes);
+    }
+
+    fn on_note_changed(&mut self, ch: NoteChanged) {
+        match ch.note {
+            Some(n) if !ch.removed => self.upsert_note(n),
+            _ => {
+                self.notes.retain(|n| n.note_id != ch.note_id);
+                if self.confirm_delete_note.as_deref() == Some(ch.note_id.as_str()) {
+                    self.confirm_delete_note = None;
+                }
+            }
+        }
+        self.sync_note_editor();
     }
 }

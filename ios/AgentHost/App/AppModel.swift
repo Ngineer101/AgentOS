@@ -123,6 +123,11 @@ final class AppModel: ObservableObject {
     /// Archived sessions, loaded when Settings → Archived Sessions is shown
     /// (nil until then). Not cached.
     @Published private(set) var archivedSessions: [SessionInfo]?
+    /// Sessions on their way to the archive: out of the list at once, before
+    /// the host answers. (It ends a live session first, and that "ended"
+    /// would otherwise move the row to the top just before it goes.) Back in
+    /// the list if archiving fails.
+    @Published private(set) var archiving: Set<String> = []
     @Published private(set) var approvals: [PendingApprovalModel] = []
     @Published private(set) var deviceName: String?
     @Published private(set) var transcripts: [String: Transcript] = [:]
@@ -131,6 +136,9 @@ final class AppModel: ObservableObject {
     /// Unsent text in each session's composer, kept while you look at
     /// another session. Not published: only the session's own view reads it.
     var drafts: [String: String] = [:]
+    /// Each session's composer attachments (pasted screenshots, photos,
+    /// files) for the same reason; uploads still running carry on.
+    private var composers: [String: ComposerModel] = [:]
     /// Set when the cache was written last (shown when offline).
     @Published private(set) var cachedAt: Date?
     /// The host's protocol version from `hello` on the last connection.
@@ -144,6 +152,10 @@ final class AppModel: ObservableObject {
     /// Automations is shown (nil until then) and kept current by
     /// `automation.changed`. Not cached. See AppModel+Automations.swift.
     @Published var automations: [AutomationModel]?
+    /// The host's notes (protocol 9), loaded when Notes is shown (nil until
+    /// then) and kept current by `note.changed`. Not cached. See
+    /// AppModel+Notes.swift.
+    @Published var notes: [NoteModel]?
     /// Streaming side answers (`session.delta` with a `side_id`), by side id;
     /// replaced by the coalesced `side.message` event.
     @Published private(set) var sideStreaming: [String: String] = [:]
@@ -161,7 +173,7 @@ final class AppModel: ObservableObject {
     @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: AppModel.notificationsEnabledKey)
     /// What this iPhone is notified about (sent with every `push.register`).
     @Published var pushPrefs = AppModel.storedPushPrefs
-    /// Whether iOS lets AgentHost show notifications.
+    /// Whether iOS lets AgentOS show notifications.
     @Published var pushAuthorization: UNAuthorizationStatus = .notDetermined
     /// The pairing flow's "Notifications" step, after the first connection.
     @Published var showPushOnboarding = false
@@ -340,7 +352,8 @@ final class AppModel: ObservableObject {
     /// Sessions grouped by workspace: Quick tasks first, then most recent
     /// activity first.
     var groupedSessions: [SessionGroup] {
-        let groups = Dictionary(grouping: sessions, by: { $0.workspaceId })
+        let listed = sessions.filter { !archiving.contains($0.sessionId) }
+        let groups = Dictionary(grouping: listed, by: { $0.workspaceId })
         return groups
             .map { entry in
                 SessionGroup(
@@ -396,13 +409,13 @@ final class AppModel: ObservableObject {
         context.localizedCancelTitle = "Cancel"
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            lockError = "Set a passcode on this iPhone to use AgentHost. (\(error?.localizedDescription ?? "unavailable"))"
+            lockError = "Set a passcode on this iPhone to use AgentOS. (\(error?.localizedDescription ?? "unavailable"))"
             return
         }
         do {
             let ok = try await context.evaluatePolicy(
                 .deviceOwnerAuthentication,
-                localizedReason: "Unlock AgentHost to see your sessions."
+                localizedReason: "Unlock AgentOS to see your sessions."
             )
             guard ok else { return }
         } catch {
@@ -451,7 +464,7 @@ final class AppModel: ObservableObject {
         let name = Self.unlockMethodName
         guard try await context.evaluatePolicy(
             .deviceOwnerAuthentication,
-            localizedReason: on ? "Turn on \(name) for AgentHost." : "Turn off \(name) for AgentHost."
+            localizedReason: on ? "Turn on \(name) for AgentOS." : "Turn off \(name) for AgentOS."
         ) else { return }
         if let creds = credentials {
             do {
@@ -558,11 +571,14 @@ final class AppModel: ObservableObject {
     private func clearContent() {
         saveTask?.cancel()
         drafts = [:]
+        for c in composers.values { c.clear() }
+        composers = [:]
         hostInfo = nil
         workspaces = []
         sessions = []
         archivedSessions = nil
         automations = nil
+        notes = nil
         approvals = []
         deviceName = nil
         transcripts = [:]
@@ -790,6 +806,9 @@ final class AppModel: ObservableObject {
         if automations != nil {
             await refreshAutomations()
         }
+        if notes != nil {
+            await refreshNotes()
+        }
         if let list: [ConnectorInfo] = try? await call(RPC.connectorList, [:]) {
             connectors = list
             iconCache = [:]
@@ -853,6 +872,16 @@ final class AppModel: ObservableObject {
 
     // MARK: Sessions
 
+    /// The attachments being prepared in a session's composer, the same
+    /// object each time the session is shown (not published: reading it
+    /// from a view's body must not change anything the view watches).
+    func composer(for sessionId: String) -> ComposerModel {
+        if let c = composers[sessionId] { return c }
+        let c = ComposerModel()
+        composers[sessionId] = c
+        return c
+    }
+
     /// The user opened a session: subscribe (once per connection) from the
     /// last seq this device has.
     func open(_ sessionId: String) {
@@ -888,8 +917,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Start a session as one login of the agent (`profileId` from host info;
-    /// nil on hosts before agent profiles).
-    func createSession(workspaceId: String, agent: String, profileId: String?) async throws -> SessionInfo {
+    /// nil on hosts before agent profiles). From a note (`note`, in the same
+    /// workspace): the note lists the session, and its text waits in the
+    /// session's composer to edit and send.
+    func createSession(workspaceId: String, agent: String, profileId: String?, note: NoteModel? = nil) async throws -> SessionInfo {
+        let note = note.flatMap { $0.workspaceId == workspaceId ? $0 : nil }
         #if DEBUG
         if isDemo {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -898,6 +930,10 @@ final class AppModel: ObservableObject {
                                 createdAt: now, updatedAt: now, lastSeq: 0)
             upsert(s)
             transcripts[s.sessionId] = Transcript(sessionId: s.sessionId)
+            if let note {
+                drafts[s.sessionId] = note.text
+                noteStartedSession(note.noteId, sessionId: s.sessionId)
+            }
             if let i = workspaces.firstIndex(where: { $0.workspaceId == workspaceId }),
                workspaces[i].defaultAgent == nil {
                 workspaces[i].defaultAgent = agent
@@ -908,8 +944,13 @@ final class AppModel: ObservableObject {
         #endif
         var params: [String: Any] = ["workspace_id": workspaceId, "agent": agent]
         if let profileId { params["profile_id"] = profileId }
+        if let note { params["note_id"] = note.noteId }
         let s: SessionInfo = try await call(RPC.sessionCreate, params)
         upsert(s)
+        if let note {
+            drafts[s.sessionId] = note.text
+            noteStartedSession(note.noteId, sessionId: s.sessionId)
+        }
         open(s.sessionId)
         // The host may have set the workspace's default login.
         Task { await refreshWorkspaces() }
@@ -1027,11 +1068,15 @@ final class AppModel: ObservableObject {
     /// Archive a session (the host ends it first if it is live). It leaves
     /// the list and stops being followed.
     func archive(_ sessionId: String) async throws {
+        archiving.insert(sessionId)
+        // After the answer has taken it out of `sessions`, or failed.
+        defer { archiving.remove(sessionId) }
         #if DEBUG
         if isDemo, var s = session(sessionId) {
             s.archivedAt = Int64(Date().timeIntervalSince1970 * 1000)
             s.state = SessionStateName.ended
             upsert(s)
+            notesDoneForArchived(sessionId)
             return
         }
         #endif
@@ -1144,6 +1189,8 @@ final class AppModel: ObservableObject {
             catchUpIfBehind(s.sessionId, hostLastSeq: s.lastSeq)
         case RPC.nScreenChanged:
             screenStatus = try? JSONDecoder().decode(ScreenStatusModel.self, from: data)
+        case RPC.nNoteChanged:
+            applyNoteChanged(data)
         case RPC.nAutomationChanged:
             applyAutomationChanged(data)
         case RPC.nDeviceRevoked:
@@ -1353,7 +1400,8 @@ final class AppModel: ObservableObject {
         connectors = d.connectors
         screenStatus = d.screenStatus
         automations = d.automations
-        hostProtocolVersion = RPC.automationProtocolVersion
+        notes = d.notes
+        hostProtocolVersion = RPC.noteProtocolVersion
         notificationsEnabled = d.screen == .notifications || d.screen == .notificationsOwnKey
         pushPrefs = PushPrefsModel()
         pushStatus = d.pushStatus(for: d.screen)

@@ -48,7 +48,7 @@ const KEY_SETTING: &str = "push.apns";
 /// Authenticated data of every sealed notification.
 pub const CONTENT_AAD: &[u8] = b"agenthost-push-v1";
 /// What Apple (and a phone that can't open the content) sees.
-pub const GENERIC_TITLE: &str = "AgentHost";
+pub const GENERIC_TITLE: &str = "AgentOS";
 pub const GENERIC_BODY: &str = "A session needs you";
 /// APNs wants a fresh provider token at least hourly and refuses one renewed
 /// more often than every 20 minutes.
@@ -360,7 +360,7 @@ impl Push {
         let content = PushContent {
             kind: "test".into(),
             title: "Notifications are on".into(),
-            body: "You'll hear from AgentHost when a session needs you.".into(),
+            body: "You'll hear from AgentOS when a session needs you.".into(),
             session_id: None,
             approval_id: None,
         };
@@ -988,6 +988,7 @@ mod tests {
                     config_options: vec![],
                     side_questions: false,
                     pull_request: None,
+                    pinned_at: None,
                     automation_id: None,
                     state: SessionState::Running,
                     state_reason: None,
@@ -1179,6 +1180,7 @@ mod tests {
                     config_options: vec![],
                     side_questions: false,
                     pull_request: None,
+                    pinned_at: None,
                     automation_id: None,
                     state: SessionState::Running,
                     state_reason: None,

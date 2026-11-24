@@ -1,4 +1,4 @@
-//! agenthost daemon library.
+//! AgentOS daemon library.
 //!
 //! One daemon owns agents, sandboxes, credentials and data. Clients (desktop,
 //! CLI, phone) speak one JSON-RPC protocol to it; see `agenthost-proto`.
@@ -17,6 +17,7 @@ pub mod gitremote;
 pub mod hostcmd;
 pub mod installer;
 pub mod mcp;
+pub mod notes;
 pub mod profiles;
 pub mod projects;
 pub mod proxy;

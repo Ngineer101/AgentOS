@@ -1,4 +1,4 @@
-//! Shared protocol for agenthost.
+//! Shared protocol for AgentOS.
 //!
 //! Both the desktop (over the host's Unix socket) and the phone (over the
 //! encrypted relay tunnel) speak exactly this protocol. It is JSON-RPC 2.0
@@ -8,12 +8,14 @@ pub mod automation;
 pub mod hookseal;
 pub mod jsonrpc;
 pub mod methods;
+pub mod note;
 pub mod screen;
 pub mod tunnel;
 pub mod types;
 
 pub use jsonrpc::{Message, Notification, Request, Response, RpcError};
 pub use automation::*;
+pub use note::*;
 pub use types::*;
 
 /// Version of the client protocol. `hello` refuses clients on an older version.
@@ -26,7 +28,9 @@ pub use types::*;
 /// 6: notifications through a relay (`push.register` `gateway`), so the
 /// host needs no APNs key.
 /// 7: images sent with prompts can be read back (`attachment.read`).
-pub const PROTOCOL_VERSION: u32 = 7;
+/// 8: pinned sessions (`session.pin`, `Session.pinned_at`).
+/// 9: notes (`note.*`, `session.create` `note_id`).
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

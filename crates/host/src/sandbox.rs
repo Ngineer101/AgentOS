@@ -967,7 +967,7 @@ mod tests {
         assert!(spec.env.contains(&("CODEX_HOME".into(), "/home/u/.codex-work".into())));
         assert_eq!(spec.credential_paths, vec![PathBuf::from("/home/u/.codex-work/auth.json")]);
 
-        // OpenCode and Gemini: the folder replaces their data or home folder.
+        // OpenCode: the folder replaces its data folder.
         let oc = profile(AgentKind::Opencode, "prof_o", "/home/u/oc-work");
         let spec = crate::agents::spec_for(AgentKind::Opencode, Some(&oc), &cfg);
         assert!(spec.env.contains(&("XDG_DATA_HOME".into(), "/home/u/oc-work".into())));
@@ -975,14 +975,10 @@ mod tests {
         assert!(policy(&spec)
             .deny_read
             .contains(&PathBuf::from("/home/u/.local/share/opencode")));
-        let gm = profile(AgentKind::Gemini, "prof_g", "/home/u/gemini-work");
-        let spec = crate::agents::spec_for(AgentKind::Gemini, Some(&gm), &cfg);
-        assert!(spec.env.contains(&("GEMINI_CLI_HOME".into(), "/home/u/gemini-work".into())));
-        assert_eq!(
-            spec.credential_paths,
-            vec![PathBuf::from("/home/u/gemini-work/.gemini/oauth_creds.json")]
-        );
-        assert!(policy(&spec).deny_read.contains(&PathBuf::from("/home/u/.gemini")));
+        // Antigravity: no profiles yet.
+        let ag = profile(AgentKind::Antigravity, "prof_g", "/home/u/agy-work");
+        let spec = crate::agents::spec_for(AgentKind::Antigravity, Some(&ag), &cfg);
+        assert!(spec.profile_problem.is_some());
     }
 
     #[test]
@@ -1008,7 +1004,14 @@ mod tests {
         assert!(spec.direct_gateway);
         assert_eq!(spec.auth_method, Some("cursor_login"));
 
-        let spec = crate::agents::spec(AgentKind::Gemini, &cfg);
+    }
+
+    #[test]
+    fn antigravity_sees_its_state_but_not_your_customizations() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = HostConfig::in_dir(dir.path());
+        cfg.home_dir = PathBuf::from("/home/u");
+        let spec = crate::agents::spec(AgentKind::Antigravity, &cfg);
         let p = policy_for(
             &cfg,
             &spec,
@@ -1016,11 +1019,30 @@ mod tests {
             Path::new("/tmp/ah/s1"),
             &NetworkProfile::default(),
         );
-        assert!(p.write.contains(&PathBuf::from("/home/u/.gemini")));
+        // Its settings, login file and conversations: writable.
+        assert!(p.write.contains(&PathBuf::from("/home/u/.gemini/antigravity-cli")));
+        assert!(p.write.contains(&PathBuf::from("/home/u/.gemini/antigravity")));
+        // The rest of ~/.gemini is readable, not writable; your plugins, MCP
+        // servers, hooks and skills are hidden.
+        assert!(!p.write.contains(&PathBuf::from("/home/u/.gemini")));
+        assert!(!p.deny_read.contains(&PathBuf::from("/home/u/.gemini")));
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.gemini/config")));
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.gemini/skills")));
         assert!(p.deny_read.contains(&PathBuf::from("/home/u/.cursor")));
-        let settings: serde_json::Value =
-            serde_json::from_str(crate::agents::GEMINI_SYSTEM_SETTINGS).unwrap();
-        assert_eq!(settings["mcp"]["allowed"], serde_json::json!(["agenthost"]));
-        assert_eq!(settings["hooksConfig"]["enabled"], false);
+        assert!(spec.args.starts_with(&["acp".to_string()]));
+        assert!(!spec.args.contains(&"--sandbox".to_string()));
+        assert!(spec.direct_gateway);
+        assert!(spec.login_fix.contains("acp --login"));
+
+        // Other agents can't read any of ~/.gemini.
+        let spec = crate::agents::spec(AgentKind::Codex, &cfg);
+        let p = policy_for(
+            &cfg,
+            &spec,
+            Path::new("/work/repo"),
+            Path::new("/tmp/ah/s1"),
+            &NetworkProfile::default(),
+        );
+        assert!(p.deny_read.contains(&PathBuf::from("/home/u/.gemini")));
     }
 }

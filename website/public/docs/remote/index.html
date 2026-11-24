@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote access and iOS · AgentOS</title>
+<meta name="description" content="Deploy the AgentOS relay, pair an iPhone, build the iOS app and turn on notifications.">
+<meta name="theme-color" content="#0b0d10">
+<meta property="og:title" content="Remote access and iOS · AgentOS">
+<meta property="og:description" content="Deploy the AgentOS relay, pair an iPhone, build the iOS app and turn on notifications.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/img/logo.svg" alt="" width="26" height="26">AgentOS</a>
+    <nav class="site-nav" aria-label="Main">
+      <a class="hide-s" href="/#how">How it works</a>
+      <a href="/#setup">Setup</a>
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a class="btn small" href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap docs">
+  <aside class="docs-nav">
+    <nav aria-label="Docs">
+      <h2>Docs</h2>
+      <ul><li><a href="/docs/">Getting started</a></li><li><a href="/docs/usage/">Using AgentOS</a></li><li><a href="/docs/remote/" aria-current="page">Remote access and iOS</a></li><li><a href="/docs/security/">Security model</a></li></ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/CONTRIBUTING.md">Contributing</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="prose">
+    <h1>Remote access and iOS</h1>
+    <p class="lede">Reach your host from your phone through a relay you deploy yourself. All of this is optional: the host, the CLI and the desktop app work without it.</p>
+
+<h2 id="relay">Deploy the relay</h2>
+<p>The relay is a Cloudflare Worker that pairs WebSockets from your host and your phones and forwards encrypted frames between them. It has no accounts and stores no transcripts. The Workers Free plan is enough.</p>
+<pre><code><span class="p">$ </span>cd relay
+<span class="p">$ </span>npm ci
+<span class="p">$ </span>npx wrangler login<span class="c">    # once, in a browser</span>
+<span class="p">$ </span>npx wrangler deploy</code></pre>
+<p>Wrangler prints the relay's address, for example <code>https://agenthost-relay.&lt;subdomain&gt;.workers.dev</code>. The host uses the WebSocket form of it:</p>
+<pre><code><span class="p">$ </span>scripts/install.sh --relay wss://agenthost-relay.&lt;subdomain&gt;.workers.dev</code></pre>
+<p>The address is remembered, so later runs of <code>scripts/install.sh</code> keep it.</p>
+<p class="note info">No Cloudflare account? <code>agenthostd dev-relay</code> runs a relay locally for testing; start the host with <code>--relay-url ws://127.0.0.1:8787</code>.</p>
+
+<h2 id="pair">Pair a device</h2>
+<pre><code><span class="p">$ </span>agenthost device pair<span class="c">    # shows a QR code</span></code></pre>
+<p>Or use Settings → Devices → Pair iPhone in the desktop app. Scan the code in the iPhone app and confirm the short code shown on both screens. A pairing code works once and expires after 2 minutes.</p>
+<p>Paired devices are listed under Settings → Devices, where you can rename or revoke them. A revoked phone deletes its keys and cached transcripts.</p>
+
+<h2 id="ios">Build the iPhone app</h2>
+<p>There is no App Store build. You need an Apple Silicon Mac with Xcode 15 or newer, <a href="https://rustup.rs">rustup</a> and <a href="https://github.com/yonaskolb/XcodeGen">XcodeGen</a> (<code>brew install xcodegen</code>).</p>
+<pre><code><span class="p">$ </span>cd ios
+<span class="p">$ </span>./build-rust.sh<span class="c">    # builds the shared protocol code for iOS</span>
+<span class="p">$ </span>xcodegen generate
+<span class="p">$ </span>open AgentHost.xcodeproj</code></pre>
+<p>Pick your team under Signing &amp; Capabilities, then run on your iPhone. The app needs iOS 17 or later.</p>
+<p class="note">The iPhone app has had the least testing of any part of the project. See <a href="https://github.com/Ngineer101/AgentOS/blob/main/ios/README.md">ios/README.md</a> for the details and known limits.</p>
+
+<h3 id="ios-does">What the app does</h3>
+<ul>
+  <li>Follows sessions live and keeps the last transcript readable offline.</li>
+  <li>Sends prompts, typed or dictated, with photos and files attached.</li>
+  <li>Starts sessions in your workspaces and answers approvals.</li>
+  <li>Shows the host's screen when a task needs it, if the computer allows it.</li>
+  <li>Optionally asks for Face ID each time you open it. The device's keys stay in the Keychain on that iPhone only.</li>
+</ul>
+
+<h2 id="notifications">Notifications</h2>
+<p>The app can notify you when a session needs your approval and, if you ask, when an agent finishes its turn or a session fails. Turn them on while pairing or under Settings → Notifications.</p>
+<p>What a notification says is encrypted to the phone. Apple and the relay see only "A session needs you".</p>
+<p>Notifications need the Push Notifications capability, which needs a <strong>paid Apple Developer account</strong>. Apple accepts notifications for an app only with the key of the team that signs it, so:</p>
+<ol>
+  <li>Create an APNs key at developer.apple.com (Certificates, Identifiers &amp; Profiles → Keys) and download the <code>.p8</code> file. It can be downloaded only once.</li>
+  <li>Give it to your relay:
+<pre><code><span class="p">$ </span>cd relay
+<span class="p">$ </span>npx wrangler secret put APNS_KEY &lt; AuthKey_XXXXXXXXXX.p8
+<span class="p">$ </span>echo XXXXXXXXXX | npx wrangler secret put APNS_KEY_ID<span class="c">    # from the file name</span>
+<span class="p">$ </span>echo YOURTEAMID | npx wrangler secret put APNS_TEAM_ID
+<span class="p">$ </span>echo dev.agenthost.ios | npx wrangler secret put APNS_TOPIC<span class="c">    # the app's bundle id</span>
+<span class="p">$ </span>npx wrangler deploy</code></pre></li>
+  <li>Phones paired through that relay then get notifications with nothing to set up on the host.</li>
+</ol>
+<p>Without such a relay, the host can send to Apple itself with your team's key; the app asks for it once per host. Check the setup with <code>agenthost push status</code> and <code>agenthost push test</code>.</p>
+
+<h2 id="relay-sees">What the relay can see</h2>
+<p>Everything between your phones and the host is end-to-end encrypted, so the relay forwards frames it cannot read. The one exception is webhooks: services like Sentry send plain HTTPS requests, which the relay seals to your host in memory as they arrive. The <a href="/docs/security/">security model</a> and the <a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">relay protocol</a> have the details.</p>
+
+    <div class="pager"><a class="btn" href="/docs/usage/">← Using AgentOS</a><a class="btn" href="/docs/security/">Security model →</a></div>
+  </main>
+</div>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>AgentOS is an independent open-source project, licensed MIT or Apache-2.0. It is not affiliated with or endorsed by Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names belong to their owners.</p>
+    <nav aria-label="Footer">
+      <a href="/docs/">Docs</a>
+      <a href="/docs/security/">Security</a>
+      <a href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+      <a href="https://github.com/Ngineer101/AgentOS/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+<script src="/site.js" defer></script>
+</body>
+</html>

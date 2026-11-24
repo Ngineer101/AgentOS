@@ -185,6 +185,9 @@ pub async fn serve_connection(
                     Ok(BusMsg::AutomationChanged(a)) if conn.greeted => {
                         conn.notify(m::N_AUTOMATION_CHANGED, serde_json::to_value(a).unwrap()).await;
                     }
+                    Ok(BusMsg::NoteChanged(n)) if conn.greeted => {
+                        conn.notify(m::N_NOTE_CHANGED, serde_json::to_value(n).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -377,6 +380,10 @@ impl Conn {
                 let r: agenthost_proto::SessionRenameParams = params(p)?;
                 to_value(h.sessions.rename(&r.session_id, r.title.as_deref())?)
             }
+            m::SESSION_PIN => {
+                let r: agenthost_proto::SessionPinParams = params(p)?;
+                to_value(h.sessions.set_pinned(&r.session_id, r.pinned)?)
+            }
             m::SESSION_UNARCHIVE => {
                 let r: SessionRef = params(p)?;
                 to_value(h.sessions.set_archived(&r.session_id, false).await?)
@@ -538,6 +545,15 @@ impl Conn {
             m::AUTOMATION_CHECK_SCHEDULE => {
                 let sp: ScheduleCheckParams = params(p)?;
                 to_value(h.automations.check_schedule(&sp.cron))
+            }
+
+            m::NOTE_LIST => to_value(crate::notes::list(&h.ctx, &params(p)?)?),
+            m::NOTE_CREATE => to_value(crate::notes::create(&h.ctx, params(p)?)?),
+            m::NOTE_UPDATE => to_value(crate::notes::update(&h.ctx, params(p)?)?),
+            m::NOTE_DELETE => {
+                let r: NoteRef = params(p)?;
+                crate::notes::delete(&h.ctx, &r.note_id)?;
+                Ok(json!({"removed": true}))
             }
 
             m::DEVICE_LIST

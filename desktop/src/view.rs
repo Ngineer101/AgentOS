@@ -47,6 +47,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(alert) = crate::automations::confirm(s, &t) {
         root = root.child(alert);
     }
+    if let Some(alert) = crate::notes::confirm(s, &t) {
+        root = root.child(alert);
+    }
     if let Some(v) = crate::session::image_viewer(s, &t) {
         root = root.child(v);
     }
@@ -85,15 +88,20 @@ pub(crate) fn is_web_link(url: &str) -> bool {
     ["https://", "http://", "mailto:"].iter().any(|p| lower.starts_with(p))
 }
 
-/// "3m", "2h", "1d" (macOS) or "3 min", "2 h", "1 d" (GNOME).
+/// "3m", "2h", "1d", "2w", "3mo", "1y" (macOS) or "3 min", "2 h", "1 d", "2 wk", "3 mo",
+/// "1 yr" (GNOME).
 pub fn short_age(ts: i64, look: Look) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
     let s = ((now - ts) / 1000).max(0);
+    const DAY: i64 = 86400;
     let (n, unit_mac, unit_gnome) = match s {
         s if s < 60 => return "now".into(),
         s if s < 3600 => (s / 60, "m", " min"),
-        s if s < 86400 => (s / 3600, "h", " h"),
-        s => (s / 86400, "d", " d"),
+        s if s < DAY => (s / 3600, "h", " h"),
+        s if s < 14 * DAY => (s / DAY, "d", " d"),
+        s if s < 30 * DAY => (s / (7 * DAY), "w", " wk"),
+        s if s < 365 * DAY => (s / (30 * DAY), "mo", " mo"),
+        s => (s / (365 * DAY), "y", " yr"),
     };
     format!("{n}{}", if look.mac() { unit_mac } else { unit_gnome })
 }
@@ -221,109 +229,74 @@ pub fn status_glyph(t: &Theme, st: Status, on_accent: bool) -> El {
 
 fn sidebar(s: &App, t: &Theme) -> El {
     let mac = t.mac();
-    let header = if mac {
-        row()
-            .key("sidebar-top")
-            .w_full()
-            .h(t.toolbar_h)
-            .pl(20.0)
-            .pr(12.0)
-            .gap(4.0)
-            .center_y()
-            .window_drag()
-            .child(el().w(54.0))
-            .child(el().grow(1.0))
-            .child(t.icon_button(&ic::SIDEBAR, 18.0, &format!("Hide Sidebar ({})", keys(s.look, Cmd::ToggleSidebar)), |s, tx| run(s, Cmd::ToggleSidebar, tx)).key("toggle-sidebar"))
-            .child(t.icon_button(&ic::COMPOSE, 17.0, &format!("New Session ({})", keys(s.look, Cmd::NewSession)), |s, tx| run(s, Cmd::NewSession, tx)).key("nav-new"))
+    let toggle = t.icon_button(&ic::SIDEBAR, if mac { 18.0 } else { 17.0 }, &format!("Hide Sidebar ({})", keys(s.look, Cmd::ToggleSidebar)), |s, tx| run(s, Cmd::ToggleSidebar, tx)).key("toggle-sidebar");
+    let mut search_btn = t
+        .icon_button(&ic::SEARCH, if mac { 15.0 } else { 16.0 }, &format!("Search Sessions ({})", keys(s.look, Cmd::Search)), |s, _| if s.search_open { s.search.replace_text(""); s.close_search() } else { s.open_search() })
+        .key("sidebar-search")
+        .checked(s.search_open);
+    if s.search_open {
+        search_btn = search_btn.fill(t.control);
+    }
+    // Both looks: the sidebar's buttons sit at its trailing edge, as macOS has them beside
+    // the traffic lights. GNOME keeps its main menu (F10) there too.
+    let mut header = row().key("sidebar-top").w_full().h(t.toolbar_h).gap(if mac { 4.0 } else { 2.0 }).center_y().window_drag();
+    header = if mac {
+        header.pl(20.0).pr(12.0).child(el().w(54.0)).child(el().grow(1.0)).child(toggle).child(search_btn)
     } else {
-        row()
-            .key("sidebar-top")
-            .w_full()
-            .h(t.toolbar_h)
+        header
             .px(6.0)
-            .gap(4.0)
-            .center_y()
-            .window_drag()
-            .child(t.icon_button(&ic::PLUS, 16.0, &format!("New Session ({})", keys(s.look, Cmd::NewSession)), |s, tx| run(s, Cmd::NewSession, tx)).key("nav-new"))
-            .child(row().grow(1.0).justify_center().child(text("AgentHost").font(TextStyle::new(t.fs, 700.0)).color(t.text)))
+            .child(el().grow(1.0))
+            .child(toggle)
+            .child(search_btn)
             .child(t.icon_button(&ic::MENU, 16.0, &format!("Main Menu ({})", keys(s.look, Cmd::MainMenu)), |s, tx| run(s, Cmd::MainMenu, tx)).key("main-menu"))
     };
 
-    // Search.
-    let field = rune::text_input(&s.search, TextStyle::new(t.fs, 400.0))
-        .single_line()
-        .key("search-field")
-        .label("Search sessions")
-        .grow(1.0)
-        .min_w(0.0)
-        .color(t.text)
-        .placeholder(if mac { "Search" } else { "Search sessions" }, if mac { t.text3 } else { t.text2 })
-        .caret(t.text, t.accent.alpha(0.35))
-        .on_edit(|s: &mut App| &mut s.search);
-    let mut search = row()
-        .key("sidebar-search")
-        .h(if mac { 28.0 } else { 34.0 })
-        .mx(if mac { 12.0 } else { 10.0 })
-        .mt(if mac { 2.0 } else { 4.0 })
-        .mb(if mac { 10.0 } else { 8.0 })
-        .px(if mac { 8.0 } else { 10.0 })
-        .gap(if mac { 6.0 } else { 8.0 })
-        .center_y()
-        .radius(7.0)
-        .fill(Color::WHITE.alpha(if mac { 0.07 } else { 0.08 }))
-        .child(icon(&ic::SEARCH, if mac { 13.0 } else { 15.0 }).color(if mac { t.text3 } else { t.text2 }))
-        .child(field);
-    if s.search.text.is_empty() {
-        search = search.child(text(keys(s.look, Cmd::Search)).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(if mac { t.text3 } else { t.text2 }));
+    // Under the header: the search field while searching, else New Session and Automations.
+    let top = if s.search_open {
+        search_field(s, t)
     } else {
-        search = search.child(
-            row()
-                .role("button")
-                .label("Clear search")
-                .on_press(|s: &mut App| s.search.replace_text(""))
-                .child(icon(&ic::XMARK_CIRCLE, 13.0).color(t.text3)),
-        );
-    }
-    if s.search.focused {
-        search = search.box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() });
-    }
+        let new = nav_row(t, "nav-new", &ic::COMPOSE, "New Session", false, Some(text(keys(s.look, Cmd::NewSession)).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(if mac { t.text3 } else { t.text2 })), |s, tx| run(s, Cmd::NewSession, tx));
+        col().key("sidebar-nav").w_full().px(if mac { 10.0 } else { 6.0 }).pb(2.0).gap(if mac { 1.0 } else { 2.0 }).child(new).child(automations_nav(s, t)).children(notes_nav(s, t))
+    };
 
-    // Sessions, grouped.
+    // Pinned, then the workspaces' groups.
     let numbered = s.numbered();
+    let q = s.search.text.trim().to_lowercase();
     let mut list = col().key("session-list").w_full().px(if mac { 10.0 } else { 6.0 }).pb(10.0).gap(if mac { 1.0 } else { 2.0 }).role("list").focus_group();
-    let groups = s.sidebar_groups();
-    for (gi, (w, sessions)) in groups.iter().enumerate() {
-        let quick = w.kind == WorkspaceKind::Scratch;
-        let title = if quick { if mac { "Quick tasks".to_string() } else { "Quick Tasks".to_string() } } else { w.name.clone() };
-        let top = if gi == 0 { if mac { 6.0 } else { 8.0 } } else { 12.0 };
-        let wsid = w.workspace_id.clone();
-        list = list.child(
-            text(title)
-                .font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) })
-                .color(if mac { t.text3 } else { t.text2 })
-                .pt(top)
-                .pb(4.0)
-                .px(if mac { 10.0 } else { 12.0 })
-                .on_secondary_press(move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| {
-                    if s.look.mac() && rune::popup_menu_supported() {
-                        let ws = wsid.clone();
-                        let menu = rune::PopupMenu::new().item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions"));
-                        tx.popup_menu(menu, p, move |s: &mut App, picked, _| {
-                            if picked == Some("archive-ended") {
-                                s.archive_ended(&ws);
-                            }
-                        });
-                    } else {
-                        s.menu = Some(Menu::Section(wsid.clone(), p.x, p.y));
-                    }
-                }),
-        );
-        for x in sessions {
-            let n = numbered.iter().position(|id| *id == x.session_id).map(|i| i + 1);
-            list = list.child(session_row(s, t, x, n));
+    let pinned = s.pinned_sessions();
+    if !pinned.is_empty() {
+        list = list.child(heading(t, "Pinned", None));
+        for x in &pinned {
+            list = list.child(session_row(s, t, x, jump(&numbered, x), &q));
         }
     }
-    if groups.is_empty() {
+    let groups = s.sidebar_groups();
+    if !groups.is_empty() || pinned.is_empty() {
+        let add = row()
+            .key("add-folder")
+            .size(if mac { 22.0 } else { 28.0 }, if mac { 22.0 } else { 28.0 })
+            .center()
+            .radius(if mac { 5.0 } else { 7.0 })
+            .role("button")
+            .label("Add Folder…")
+            .help("Add Folder…")
+            .focusable(true)
+            .hover(Color::WHITE.alpha(0.08))
+            .on_press_tx(|_: &mut App, tx: &mut Tx| crate::settings::pick_workspace_folder(tx))
+            .child(icon(&ic::FOLDER_PLUS, if mac { 15.0 } else { 16.0 }).color(if mac { t.text3 } else { t.text2 }));
+        list = list.child(heading(t, "Workspaces", Some(add)));
+    }
+    for (gi, (w, sessions)) in groups.iter().enumerate() {
+        let (rows, hidden) = s.group_rows(&w.workspace_id, sessions);
+        list = list.child(group_row(s, t, w, sessions, gi > 0));
+        for x in &rows {
+            list = list.child(session_row(s, t, x, jump(&numbered, x), &q));
+        }
+        if hidden > 0 || (s.show_all.contains(&w.workspace_id) && sessions.len() > crate::model::GROUP_SHOWN && !s.group_collapsed(&w.workspace_id) && q.is_empty()) {
+            list = list.child(more_row(t, &w.workspace_id, hidden));
+        }
+    }
+    if groups.is_empty() && pinned.is_empty() {
         let msg = if !s.search.text.is_empty() {
             "No sessions match.".to_string()
         } else {
@@ -370,94 +343,329 @@ fn sidebar(s: &App, t: &Theme) -> El {
         .h_full()
         .min_h(0.0)
         .child(header)
-        .child(search)
-        .child(automations_nav(s, t))
+        .child(top)
         .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
         .child(host);
     sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
     sb
 }
 
-/// The sidebar's way to the Automations screen, above the sessions: how many are on, or how
-/// many run now.
+/// A session's place among the numbered ones (⌘1…⌘9), if it has one.
+fn jump(numbered: &[String], x: &Session) -> Option<usize> {
+    numbered.iter().position(|id| *id == x.session_id).map(|i| i + 1)
+}
+
+/// The sidebar's search field, under the header; Escape clears it, then closes it.
+fn search_field(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
+    let field = rune::text_input(&s.search, TextStyle::new(t.fs, 400.0))
+        .single_line()
+        .key("search-field")
+        .label("Search sessions")
+        .grow(1.0)
+        .min_w(0.0)
+        .color(t.text)
+        .placeholder(if mac { "Search" } else { "Search sessions" }, if mac { t.text3 } else { t.text2 })
+        .caret(t.text, t.accent.alpha(0.35))
+        .on_edit(|s: &mut App| &mut s.search)
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, _: &mut Tx| {
+            if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() {
+                s.close_search();
+                return true;
+            }
+            false
+        });
+    let mut search = row()
+        .key("search-box")
+        .h(if mac { 28.0 } else { 34.0 })
+        .mx(if mac { 12.0 } else { 10.0 })
+        .mb(if mac { 8.0 } else { 6.0 })
+        .px(if mac { 8.0 } else { 10.0 })
+        .gap(if mac { 6.0 } else { 8.0 })
+        .center_y()
+        .radius(7.0)
+        .fill(Color::WHITE.alpha(if mac { 0.07 } else { 0.08 }))
+        .child(icon(&ic::SEARCH, if mac { 13.0 } else { 15.0 }).color(if mac { t.text3 } else { t.text2 }))
+        .child(field);
+    if !s.search.text.is_empty() {
+        search = search.child(
+            row()
+                .key("search-clear")
+                .role("button")
+                .label("Clear search")
+                .on_press(|s: &mut App| s.search.replace_text(""))
+                .child(icon(&ic::XMARK_CIRCLE, 13.0).color(t.text3)),
+        );
+    }
+    if s.search.focused {
+        search = search.box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() });
+    }
+    search
+}
+
+/// One of the sidebar's destinations above the sessions (New Session, Automations).
+fn nav_row(t: &Theme, key: &str, glyph: &'static rune::Icon, label: &str, selected: bool, trailing: Option<El>, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
+    let mac = t.mac();
+    let mut r = row()
+        .key(key.to_string())
+        .w_full()
+        .h(if mac { 28.0 } else { 34.0 })
+        .gap(if mac { 8.0 } else { 10.0 })
+        .px(if mac { 10.0 } else { 12.0 })
+        .center_y()
+        .radius(t.row_radius)
+        .role("button")
+        .label(label.to_string())
+        .focusable(true)
+        .on_press_tx(f)
+        .child(row().size(16.0, 16.0).center().child(icon(glyph, if mac { 15.0 } else { 16.0 }).color(if selected || !mac { t.text } else { t.text2 })))
+        .child(text(label.to_string()).font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(if selected && mac { Color::WHITE } else { t.text }).grow(1.0));
+    if let Some(e) = trailing {
+        r = r.child(e);
+    }
+    if selected {
+        r.fill(t.row_selected)
+    } else {
+        r.hover(t.row_hover)
+    }
+}
+
+/// A small heading over a part of the list ("Pinned", "Workspaces"), with an optional button.
+fn heading(t: &Theme, title: &str, button: Option<El>) -> El {
+    let mac = t.mac();
+    let mut r = row()
+        .w_full()
+        .h(if mac { 30.0 } else { 38.0 })
+        .pl(10.0)
+        .pr(if mac { 2.0 } else { 0.0 })
+        .pt(8.0)
+        .center_y()
+        .child(text(title.to_string()).font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) }).color(if mac { t.text3 } else { t.text2 }).grow(1.0));
+    if let Some(b) = button {
+        r = r.child(b);
+    }
+    r
+}
+
+/// A workspace's row: the chevron collapses it, "+" starts a session in it. Collapsed, it
+/// shows how many sessions it holds and an orange dot if one needs you.
+fn group_row(s: &App, t: &Theme, w: &Workspace, sessions: &[&Session], gap_above: bool) -> El {
+    let mac = t.mac();
+    let quick = w.kind == WorkspaceKind::Scratch;
+    let title = if quick { if mac { "Quick tasks".to_string() } else { "Quick Tasks".to_string() } } else { w.name.clone() };
+    let collapsed = s.group_collapsed(&w.workspace_id);
+    let searching = !s.search.text.trim().is_empty();
+    let ink = t.text2;
+    let wsid = w.workspace_id.clone();
+    let mut r = row()
+        .key(format!("group-{}", w.workspace_id))
+        .w_full()
+        .h(if mac { 26.0 } else { 32.0 })
+        .pl(if mac { 10.0 } else { 12.0 })
+        .pr(if mac { 4.0 } else { 3.0 })
+        .gap(if mac { 8.0 } else { 10.0 })
+        .center_y()
+        .radius(t.row_radius)
+        .role("button")
+        .label(format!("{title}, {} session{}, {}", sessions.len(), if sessions.len() == 1 { "" } else { "s" }, if collapsed { "collapsed" } else { "expanded" }))
+        .focusable(true)
+        .hover(t.row_hover)
+        .child(row().size(if mac { 14.0 } else { 16.0 }, 14.0).center().child(icon(if collapsed { &ic::CHEVRON_R } else { &ic::CHEVRON_D }, if mac { 10.0 } else { 12.0 }).color(ink)))
+        .child(text(title.clone()).font(if mac { TextStyle::new(t.fs, 500.0) } else { TextStyle::new(t.fs, 700.0) }).color(ink).truncate().grow(1.0).min_w(0.0))
+        .on_secondary_press({
+            let wsid = wsid.clone();
+            move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| section_menu(s, &wsid, p, tx)
+        });
+    if gap_above {
+        r = r.mt(6.0);
+    }
+    if !searching {
+        let id = wsid.clone();
+        r = r.on_press(move |s: &mut App| s.toggle_group(&id));
+    }
+    if collapsed {
+        if sessions.iter().any(|x| Status::of(x.state) == Status::NeedsYou) {
+            r = r.child(t.dot(t.warn, if mac { 7.0 } else { 8.0 }));
+        }
+        r = r.child(text(sessions.len().to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(if mac { t.text3 } else { t.text2 }));
+    }
+    let id = wsid.clone();
+    let size = if mac { 20.0 } else { 26.0 };
+    r.child(
+        row()
+            .key(format!("group-new-{}", w.workspace_id))
+            .size(size, size)
+            .center()
+            .radius(if mac { 5.0 } else { size / 2.0 })
+            .role("button")
+            .label(format!("New Session in {title}"))
+            .help(format!("New Session in {title}"))
+            .hover(Color::WHITE.alpha(0.10))
+            .press(Color::WHITE.alpha(0.16))
+            .on_press(move |s: &mut App| s.open_new_session_in(&id))
+            .child(icon(&ic::PLUS_SMALL, if mac { 11.0 } else { 12.0 }).color(if mac { t.text2 } else { t.text })),
+    )
+}
+
+/// "Show 6 more" under a group's newest sessions, or "Show less" once they all show.
+fn more_row(t: &Theme, ws: &str, hidden: usize) -> El {
+    let mac = t.mac();
+    let label = match (hidden, mac) {
+        (0, true) => "Show less".to_string(),
+        (0, false) => "Show Less".to_string(),
+        (n, true) => format!("Show {n} more"),
+        (n, false) => format!("Show {n} More"),
+    };
+    let id = ws.to_string();
+    row()
+        .key(format!("more-{ws}"))
+        .w_full()
+        .h(if mac { 26.0 } else { 32.0 })
+        .px(if mac { 10.0 } else { 12.0 })
+        .gap(if mac { 8.0 } else { 10.0 })
+        .center_y()
+        .radius(t.row_radius)
+        .role("button")
+        .label(label.clone())
+        .focusable(true)
+        .hover(t.row_hover)
+        .on_press(move |s: &mut App| {
+            if hidden > 0 {
+                s.show_all.insert(id.clone());
+            } else {
+                s.show_all.remove(&id);
+            }
+        })
+        .child(el().w(if mac { 14.0 } else { 16.0 }))
+        .child(text(label).font(t.font()).color(if mac { t.text3 } else { t.accent_text }))
+}
+
+/// A workspace row's context menu: native on macOS, the app's own elsewhere.
+fn section_menu(s: &mut App, ws: &str, p: rune::PointerPress, tx: &mut Tx) {
+    if s.look.mac() && rune::popup_menu_supported() {
+        let ws = ws.to_string();
+        let mut menu = rune::PopupMenu::new().item(rune::PopupItem::new("new", "New Session Here"));
+        if s.host_has_notes() {
+            menu = menu.item(rune::PopupItem::new("note", "New Note Here"));
+        }
+        let menu = menu.separator().item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions"));
+        tx.popup_menu(menu, p, move |s: &mut App, picked, _| match picked {
+            Some("new") => s.open_new_session_in(&ws),
+            Some("note") => s.new_note_in(&ws),
+            Some("archive-ended") => s.archive_ended(&ws),
+            _ => {}
+        });
+    } else {
+        s.menu = Some(Menu::Section(ws.to_string(), p.x, p.y));
+    }
+}
+
+/// The sidebar's way to the Automations screen: how many are on, or a spinner while one runs.
 fn automations_nav(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let selected = s.screen == Screen::Automations;
     let running = s.automations_running();
     let on = s.automations.iter().filter(|a| a.enabled).count();
-    let ink = if selected && mac { Color::WHITE } else { t.text };
-    let faint = if selected && mac { Color::WHITE.alpha(0.75) } else { t.text3 };
-    let mut r = row()
-        .key("nav-automations")
-        .w_full()
-        .gap(if mac { 9.0 } else { 10.0 })
-        .px(if mac { 10.0 } else { 12.0 })
-        .py(if mac { 5.0 } else { 8.0 })
-        .center_y()
-        .radius(t.row_radius)
-        .role("button")
-        .label(if running > 0 { format!("Automations, {running} running") } else { "Automations".to_string() })
-        .focusable(true)
-        .on_press(|s: &mut App| s.open_automations())
-        .child(row().size(14.0, 14.0).center().child(icon(&ic::CLOCK, if mac { 13.0 } else { 14.0 }).color(if selected && mac { Color::WHITE } else { t.text2 })))
-        .child(text("Automations").font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(ink).grow(1.0));
-    if running > 0 {
-        r = r.child(icon(&ic::SPINNER, 12.0).color(faint).looping(rune::LoopSpec::rotation(0.9)));
+    let faint = if selected && mac { Color::WHITE.alpha(0.75) } else if mac { t.text3 } else { t.text2 };
+    let trailing = if running > 0 {
+        Some(icon(&ic::SPINNER, 12.0).color(faint).looping(rune::LoopSpec::rotation(0.9)))
     } else if on > 0 {
-        r = r.child(text(on.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(faint));
-    }
-    let r = if selected { r.fill(t.row_selected) } else { r.hover(t.row_hover) };
-    col().w_full().px(if mac { 10.0 } else { 6.0 }).pb(if mac { 4.0 } else { 2.0 }).child(r)
+        Some(text(on.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(faint))
+    } else {
+        None
+    };
+    let label = if running > 0 { format!("Automations, {running} running") } else { "Automations".to_string() };
+    nav_row(t, "nav-automations", &ic::CLOCK, "Automations", selected, trailing, |s, _| s.open_automations()).label(label)
 }
 
-fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
+/// The sidebar's way to the Notes screen, with how many are open (hosts with notes only).
+fn notes_nav(s: &App, t: &Theme) -> Option<El> {
+    if !s.host_has_notes() {
+        return None;
+    }
+    let mac = t.mac();
+    let selected = s.screen == Screen::Notes;
+    let open = s.notes.iter().filter(|n| n.done_at.is_none()).count();
+    let faint = if selected && mac { Color::WHITE.alpha(0.75) } else if mac { t.text3 } else { t.text2 };
+    let trailing = (open > 0).then(|| text(open.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(faint));
+    let label = if open > 0 { format!("Notes, {open} open") } else { "Notes".to_string() };
+    Some(nav_row(t, "nav-notes", &ic::NOTE, "Notes", selected, trailing, |s, _| s.open_notes()).label(label))
+}
+
+/// A session's exception line: only when it needs you, failed, or has agents running.
+fn exception_line(s: &App, t: &Theme, x: &Session, status: Status) -> Option<(String, Color)> {
+    match status {
+        Status::NeedsYou => Some((status.word().to_string(), t.warn)),
+        Status::Failed => Some((x.state_reason.as_deref().map(|r| format!("Failed · {r}")).unwrap_or_else(|| "Failed".into()), t.danger)),
+        Status::Working => crate::model::running_label(s.running_work(&x.session_id).0, 0).map(|l| (l, t.text2)),
+        _ => None,
+    }
+}
+
+/// Byte ranges of `q` (lowercase) in `title`, bolded in the row while searching.
+fn match_spans(title: &str, q: &str, weight: f32) -> Vec<rune::Span> {
+    let lower = title.to_lowercase();
+    if q.is_empty() || lower.len() != title.len() {
+        return vec![];
+    }
+    lower.match_indices(q).map(|(i, m)| rune::Span::new(i, i + m.len()).weight(weight)).collect()
+}
+
+/// A session in the sidebar: status, title, then its pull request and automation icons and
+/// its age. Hovered, Pin and Archive take their place; with the jump keys' modifier held
+/// the age gives way to ⌘1…9. Everything else (login, branch, PR number) is in its tooltip.
+fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El {
     let mac = t.mac();
     let selected = s.screen == Screen::Session(x.session_id.clone());
     let ended = x.state.is_terminal();
     let title = s.session_title(x);
-    // The status, then the login: a profile's name alone says which ("Needs you · Work · 3m").
-    // "Your turn" is the resting state, and its dot says so: the line leaves it out.
     let status = Status::of(x.state);
     let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
-    // "Working · 2 agents running" while subagents run.
-    let agents = if status == Status::Working { s.running_work(&x.session_id).0 } else { 0 };
-    let line = match crate::model::running_label(agents, 0) {
-        Some(r) => format!("{} · {r}", status.word()),
-        None => {
-            let word = (status != Status::YourTurn).then(|| status.word().to_string());
-            word.into_iter().chain([profile.unwrap_or_else(|| x.agent.display_name().to_string()), short_age(x.updated_at, s.look)]).collect::<Vec<_>>().join(" · ")
-        }
-    };
-    // The pull request it opened leads the line, so it survives truncation ("#48 · Work · 3m").
-    let pr = x.pull_request.as_ref().map(|p| p.number);
-    let sub = match pr {
-        Some(n) => format!("#{n} · {line}"),
-        None => line.clone(),
-    };
-    let mut spoken = if status == Status::YourTurn { format!("{}, {line}", status.word()) } else { line };
-    if let Some(n) = pr {
-        spoken = format!("Pull request {n}, {spoken}");
-    }
-    // A run of an automation: a small clock before the line.
+    let age = short_age(x.updated_at, s.look);
+    let line = exception_line(s, t, x, status);
     let run = x.automation_id.is_some();
-    let spoken = if run { format!("{spoken}, automation run") } else { spoken };
-    let (title_c, sub_c) = if selected && mac {
-        (Color::WHITE, Color::WHITE.alpha(0.8))
+    let pr = x.pull_request.as_ref().map(|p| p.number);
+    let ws = s.workspace(&x.workspace_id).map(|w| if w.kind == WorkspaceKind::Scratch { "Quick tasks".to_string() } else { w.name.clone() });
+
+    // What the second line used to say, for the tooltip and the screen reader.
+    let mut facts = vec![line.as_ref().map(|l| l.0.clone()).unwrap_or_else(|| status.word().to_string()), profile.unwrap_or_else(|| x.agent.display_name().to_string())];
+    facts.extend(ws.clone());
+    facts.push(age.clone());
+    let mut tip = facts.join(" · ");
+    let mut extra = vec![];
+    if let Some(n) = pr {
+        extra.push(format!("Pull request #{n}"));
+    }
+    if let Some(w) = &x.worktree {
+        extra.push(w.branch.clone());
+    }
+    if run {
+        extra.push("An automation's run".to_string());
+    }
+    if !extra.is_empty() {
+        tip = format!("{tip}\n{}", extra.join(" · "));
+    }
+    let spoken = format!("{title}, {}", tip.replace('\n', ", "));
+
+    let (title_c, sub_faint) = if selected && mac {
+        (Color::WHITE, t.text2)
     } else if ended {
         (t.text2, t.text3)
     } else {
-        (t.text, t.text2)
+        (t.text, if mac { t.text3 } else { t.text2 })
     };
     let id = x.session_id.clone();
+    let hover_id = x.session_id.clone();
+    let two = line.is_some();
     let mut r = row()
         .key(x.session_id.clone())
         .w_full()
-        .gap(if mac { 9.0 } else { 10.0 })
+        .gap(if mac { 8.0 } else { 10.0 })
         .px(if mac { 10.0 } else { 12.0 })
-        .py(if mac { 6.0 } else { 8.0 })
         .radius(t.row_radius)
         .role("listitem")
-        .label(format!("{title}, {spoken}"))
+        .label(spoken)
+        .help(tip)
         .focusable(true)
         .on_press(move |s: &mut App| {
             s.close_overlays();
@@ -467,27 +675,68 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>) -> El {
             let id = x.session_id.clone();
             move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| row_menu(s, &id, p, tx)
         })
-        .child(status_glyph(t, status, selected && mac).mt(if mac { 2.0 } else { 0.0 }));
-    r = if mac { r.items_start() } else { r.center_y() };
-    let weight = if selected && !mac { 700.0 } else { 400.0 };
-    // Kept short: the session's branch is in its header.
-    let names = col()
-        .grow(1.0)
-        .min_w(0.0)
-        .gap(1.0)
-        .child(text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate())
-        .child({
-            let line = text(sub).font(t.font_small()).color(sub_c).truncate();
-            if run {
-                row().w_full().min_w(0.0).gap(4.0).center_y().help("An automation's run").child(icon(&ic::CLOCK, if mac { 10.0 } else { 11.0 }).color(sub_c)).child(line.shrink().min_w(0.0))
-            } else {
-                line
+        .on_hover_change(move |s: &mut App, inside: bool, _: &mut Tx| {
+            if inside {
+                s.hover_row = Some(hover_id.clone());
+            } else if s.hover_row.as_deref() == Some(hover_id.as_str()) {
+                s.hover_row = None;
             }
         });
-    r = r.child(names);
-    if let (Some(n), true) = (n, mac) {
-        r = r.child(text(format!("⌘{n}")).font(TextStyle::new(11.0, 400.0)).color(if selected { Color::WHITE.alpha(0.75) } else { t.text3 }).mt(1.0));
+    r = if two { r.py(if mac { 6.0 } else { 7.0 }).items_start() } else { r.h(if mac { 28.0 } else { 34.0 }).center_y() };
+    let glyph = status_glyph(t, status, false);
+    r = r.child(if two { row().h(if mac { 16.0 } else { 20.0 }).center_y().child(glyph) } else { glyph });
+
+    let weight = if selected && !mac { 700.0 } else { 400.0 };
+    let name = text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate().min_w(0.0).spans(match_spans(&s.session_title(x), q, if mac { 700.0 } else { 800.0 }));
+    r = r.child(match &line {
+        Some((l, c)) => col().grow(1.0).min_w(0.0).gap(1.0).child(name).child(text(l.clone()).font(t.font_small()).color(*c).truncate()),
+        None => name.grow(1.0),
+    });
+
+    // The trailing column.
+    let small = TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0);
+    let mut end = row().gap(if mac { 6.0 } else { 8.0 }).center_y();
+    if two {
+        end = end.mt(if mac { 1.0 } else { 2.0 });
     }
+    let hovered = s.hover_row.as_deref() == Some(x.session_id.as_str()) && x.archived_at.is_none();
+    if hovered {
+        let size = if mac { 20.0 } else { 26.0 };
+        let button = |key: String, glyph: &'static rune::Icon, label: &str, f: Box<dyn Fn(&mut App)>| {
+            row()
+                .key(key)
+                .size(size, size)
+                .center()
+                .radius(if mac { 5.0 } else { size / 2.0 })
+                .role("button")
+                .label(label.to_string())
+                .help(label.to_string())
+                .hover(Color::WHITE.alpha(0.10))
+                .press(Color::WHITE.alpha(0.16))
+                .on_press(move |s: &mut App| f(s))
+                .child(icon(glyph, if mac { 13.0 } else { 14.0 }).color(if mac { t.text2 } else { t.text }))
+        };
+        if s.has_pins() {
+            let pinned = x.pinned_at.is_some();
+            let id = x.session_id.clone();
+            end = end.child(button(format!("pin-{}", x.session_id), if pinned { &ic::UNPIN } else { &ic::PIN }, if pinned { "Unpin" } else { "Pin" }, Box::new(move |s| s.set_pinned(&id, !pinned))));
+        }
+        let id = x.session_id.clone();
+        end = end.child(button(format!("archive-{}", x.session_id), &ic::ARCHIVE, if ended { "Archive" } else { "Archive…" }, Box::new(move |s| s.archive(&id))));
+        end = end.mr(if mac { -6.0 } else { -8.0 });
+    } else {
+        if pr.is_some() {
+            end = end.child(icon(&ic::PULL_REQUEST, if mac { 12.0 } else { 14.0 }).color(if ended { t.pr.alpha(0.7) } else { t.pr }));
+        }
+        if run {
+            end = end.child(icon(&ic::CLOCK, if mac { 12.0 } else { 14.0 }).color(sub_faint));
+        }
+        match n.filter(|_| s.jump_held) {
+            Some(n) => end = end.child(text(keys(s.look, Cmd::Jump(n as u8))).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 600.0)).color(t.text)),
+            None => end = end.child(text(age).font(small).color(sub_faint)),
+        }
+    }
+    r = r.child(end);
     if selected {
         r.fill(t.row_selected)
     } else {
@@ -504,6 +753,7 @@ fn main_pane(s: &App, t: &Theme, k: &rune_kit::Kit, cx: &mut Cx<App>) -> El {
     let content = match &s.screen {
         Screen::Session(id) if s.session(id).is_some() => crate::session::screen(s, id, t, k),
         Screen::Automations => crate::automations::screen(s, t),
+        Screen::Notes => crate::notes::screen(s, t),
         _ => home(s, t),
     };
     let mut c = col().key("main").grow(1.0).min_w(0.0).h_full().min_h(0.0).fill(t.content).child(toolbar(s, t));
@@ -521,9 +771,10 @@ fn toolbar(s: &App, t: &Theme) -> El {
         // on which branch: the same live or ended.
         Some(x) => (s.session_title(x), s.session_context(x)),
         None if s.screen == Screen::Automations => ("Automations".to_string(), crate::automations::summary(s)),
+        None if s.screen == Screen::Notes => ("Notes".to_string(), crate::notes::summary(s)),
         None => {
             let live = s.sessions.iter().filter(|x| !x.state.is_terminal()).count();
-            ("AgentHost".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
+            ("AgentOS".to_string(), if live == 0 { "No live sessions".to_string() } else { format!("{live} live session{}", if live == 1 { "" } else { "s" }) })
         }
     };
     let branch = sess.and_then(|x| x.worktree.as_ref()).map(|w| w.branch.clone());
@@ -617,9 +868,14 @@ fn toolbar(s: &App, t: &Theme) -> El {
             .center_y()
             .fill(t.toolbar)
             .box_shadow(rune::Shadow { y: 1.0, color: Color::BLACK.alpha(0.3), ..Default::default() })
-            .window_drag()
-            .child(t.icon_button(&ic::SIDEBAR, 17.0, &format!("Toggle Sidebar ({})", keys(s.look, Cmd::ToggleSidebar)), |s, tx| run(s, Cmd::ToggleSidebar, tx)))
-            .child(col().grow(1.0).min_w(0.0).items_center().child(titles.w_full().items_center()));
+            .window_drag();
+        // While the sidebar shows, its own header has the toggle (as on macOS).
+        bar = if s.sidebar_open {
+            bar.child(el().w(34.0))
+        } else {
+            bar.child(t.icon_button(&ic::SIDEBAR, 17.0, &format!("Show Sidebar ({})", keys(s.look, Cmd::ToggleSidebar)), |s, tx| run(s, Cmd::ToggleSidebar, tx)).key("show-sidebar"))
+        };
+        bar = bar.child(col().grow(1.0).min_w(0.0).items_center().child(titles.w_full().items_center()));
         if sess.is_some() {
             bar = bar.child(stop).child(more);
             if let Some(b) = side {
@@ -690,14 +946,19 @@ fn row_menu(s: &mut App, id: &str, p: rune::PointerPress, tx: &mut Tx) {
         if let Ok(k) = "ctrl+cmd+a".parse::<rune::Shortcut>() {
             archive = archive.key_equivalent(k);
         }
-        let menu = rune::PopupMenu::new()
-            .item(rune::PopupItem::new("open", "Open"))
+        let mut menu = rune::PopupMenu::new().item(rune::PopupItem::new("open", "Open"));
+        if s.has_pins() {
+            menu = menu.item(rune::PopupItem::new("pin", if x.pinned_at.is_some() { "Unpin" } else { "Pin" }));
+        }
+        let menu = menu
             .separator()
             .item(archive)
             .item(rune::PopupItem::new("archive-ended", "Archive Ended Sessions in This Workspace"));
         let (id, ws) = (id.to_string(), x.workspace_id.clone());
+        let pinned = x.pinned_at.is_some();
         tx.popup_menu(menu, p, move |s: &mut App, picked, _| match picked {
             Some("open") => s.open_session(&id),
+            Some("pin") => s.set_pinned(&id, !pinned),
             Some("archive") => s.archive(&id),
             Some("archive-ended") => s.archive_ended(&ws),
             _ => {}
@@ -941,6 +1202,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("New Session", keys(look, Cmd::NewSession), |s, tx| run(s, Cmd::NewSession, tx))),
                 Some(Item::new("New Quick Task", keys(look, Cmd::QuickTask), |s, tx| run(s, Cmd::QuickTask, tx))),
                 Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
+                Some(Item::new("Notes", String::new(), |s, _| s.open_notes()).enabled(s.host_has_notes())),
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),
@@ -954,14 +1216,18 @@ fn menu_layer(s: &App, t: &Theme) -> El {
         }
         Some(Menu::Row(id, x, y)) => {
             if let Some(sess) = s.session(id) {
-                let (a, c, ws) = (id.clone(), id.clone(), sess.workspace_id.clone());
+                let (a, c, ws, p) = (id.clone(), id.clone(), sess.workspace_id.clone(), id.clone());
                 let live = !sess.state.is_terminal();
-                let items = vec![
-                    Some(Item::new("Open", String::new(), move |s, _| s.open_session(&a))),
+                let pinned = sess.pinned_at.is_some();
+                let mut items = vec![Some(Item::new("Open", String::new(), move |s, _| s.open_session(&a)))];
+                if s.has_pins() {
+                    items.push(Some(Item::new(if pinned { "Unpin" } else { "Pin" }, String::new(), move |s, _| s.set_pinned(&p, !pinned))));
+                }
+                items.extend([
                     None,
                     Some(Item::new(if live { "Archive Session…" } else { "Archive Session" }, keys(look, Cmd::Archive), move |s, _| s.archive(&c))),
                     Some(Item::new("Archive Ended Sessions Here", String::new(), move |s, _| s.archive_ended(&ws))),
-                ];
+                ]);
                 layer = layer.child(menu_box(t, items, 280.0).pin(Some(*x), Some(*y), None, None));
             }
         }
@@ -971,8 +1237,12 @@ fn menu_layer(s: &App, t: &Theme) -> El {
             }
         }
         Some(Menu::Section(ws, x, y)) => {
-            let ws = ws.clone();
-            let items = vec![Some(Item::new("Archive Ended Sessions", String::new(), move |s, _| s.archive_ended(&ws)))];
+            let (ws, here, note) = (ws.clone(), ws.clone(), ws.clone());
+            let mut items = vec![Some(Item::new("New Session Here", String::new(), move |s, _| s.open_new_session_in(&here)))];
+            if s.host_has_notes() {
+                items.push(Some(Item::new("New Note Here", String::new(), move |s, _| s.new_note_in(&note))));
+            }
+            items.extend([None, Some(Item::new("Archive Ended Sessions", String::new(), move |s, _| s.archive_ended(&ws)))]);
             layer = layer.child(menu_box(t, items, 240.0).pin(Some(*x), Some(*y), None, None));
         }
         _ => {}

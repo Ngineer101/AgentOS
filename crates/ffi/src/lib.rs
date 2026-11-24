@@ -1,4 +1,4 @@
-//! UniFFI bindings for the agenthost iOS app.
+//! UniFFI bindings for the AgentOS iOS app.
 //!
 //! The phone does exactly what `agenthost-cli`'s [`remote`] module does
 //! (pairing over `Noise_XXpsk3`, then `Noise_IK` connections through the relay,
@@ -158,7 +158,7 @@ fn runtime() -> &'static Runtime {
             .thread_name("agenthost-ffi")
             .enable_all()
             .build()
-            .expect("start the agenthost tokio runtime")
+            .expect("start the AgentOS tokio runtime")
     })
 }
 
@@ -245,7 +245,7 @@ pub struct PairingQrInfo {
     pub relay_id: String,
 }
 
-/// Check that a scanned string is an agenthost pairing code without using it.
+/// Check that a scanned string is an AgentOS pairing code without using it.
 #[uniffi::export]
 pub fn parse_pairing_qr(qr: String) -> Result<PairingQrInfo, AgentHostError> {
     let q = PairingQr::decode(&qr).map_err(|e| AgentHostError::InvalidInput {

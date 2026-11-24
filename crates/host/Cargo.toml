@@ -1,6 +1,6 @@
 [package]
 name = "agenthost-host"
-description = "The agenthost daemon: sessions, sandboxes, event log, MCP gateway and relay connector"
+description = "The AgentOS daemon: sessions, sandboxes, event log, MCP gateway and relay connector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

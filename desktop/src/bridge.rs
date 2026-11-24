@@ -6,9 +6,8 @@ use agenthost_cli::remote::{self, Closed, DeviceState};
 use agenthost_cli::Client;
 use agenthost_proto::jsonrpc::{Notification, RpcError};
 use agenthost_proto::methods::{self as m, Capability};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +73,15 @@ pub enum Tag {
     AutomationRan(String),
     /// `automation.check_schedule` of this cron expression.
     ScheduleCheck(String),
+    /// `note.list`.
+    Notes,
+    /// `note.create` (of the new note begun `new_gen`-th) or a text `note.update` from the
+    /// Notes editor: answered with the note.
+    NoteSaved { new_gen: Option<u64> },
+    /// A quick `note.update` (Done, Reopen) or `note.delete`: errors show; the list reloads.
+    NoteAction { what: String },
+    /// `session.create` from a note: the new session's composer gets the note's text.
+    SessionFromNote(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -89,6 +97,7 @@ pub enum Refresh {
     ProjectRoots,
     Archived,
     Automations,
+    Notes,
 }
 
 pub enum ToHost {
@@ -204,57 +213,15 @@ enum Mode {
     Remote(PathBuf),
 }
 
-/// The app's own small preferences, kept beside the paired-host state. The
-/// host stores nothing of this; it is this app's to choose at every launch.
-#[derive(Default, Debug, Serialize, Deserialize)]
-pub struct Prefs {
-    /// Start against the paired remote host (`remote.json`) rather than the
-    /// local one. Set by pairing while no local host answers, or by choosing
-    /// "Connect" on the offline screen.
-    pub prefer_remote: bool,
-}
-
-/// Where the desktop app keeps its own files (the paired-host keys and these
-/// preferences): the same folder the host uses for its data.
-pub fn config_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("AGENTHOST_DESKTOP_DIR") {
-        return PathBuf::from(d);
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    if cfg!(target_os = "macos") {
-        return PathBuf::from(home).join("Library/Application Support/agenthost");
-    }
-    if let Ok(x) = std::env::var("XDG_DATA_HOME") {
-        return PathBuf::from(x).join("agenthost");
-    }
-    PathBuf::from(home).join(".local/share/agenthost")
-}
-
 /// The paired remote host's keys: `$AGENTHOST_REMOTE`, or `remote.json` in the
-/// config folder. The same file `agenthost remote pair --state` writes, so the
-/// CLI and this app can share one paired host.
+/// app's config folder ([`crate::prefs::config_dir`]). The same file
+/// `agenthost remote pair --state` writes, so the CLI and this app can share
+/// one paired host.
 pub fn remote_state_path() -> PathBuf {
     if let Some(p) = std::env::var_os("AGENTHOST_REMOTE") {
         return PathBuf::from(p);
     }
-    config_dir().join("remote.json")
-}
-
-pub fn load_prefs() -> Prefs {
-    read_json(&config_dir().join("desktop.json")).unwrap_or_default()
-}
-
-pub fn save_prefs(p: &Prefs) {
-    let _ = std::fs::create_dir_all(config_dir());
-    let _ = write_json(&config_dir().join("desktop.json"), p);
-}
-
-fn read_json<T: serde::de::DeserializeOwned>(p: &Path) -> Option<T> {
-    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
-}
-
-fn write_json<T: Serialize>(p: &Path, v: &T) -> Option<()> {
-    std::fs::write(p, serde_json::to_string_pretty(v).ok()?).ok()
+    crate::prefs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("remote.json")
 }
 
 /// The tunnel task reports why it closed on a watch channel; a local
@@ -386,7 +353,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                 // own host.
                 let mut mode = if let Some(p) = std::env::var_os("AGENTHOST_REMOTE") {
                     Mode::Remote(PathBuf::from(p))
-                } else if load_prefs().prefer_remote && remote_state_path().is_file() {
+                } else if crate::prefs::load().prefer_remote && remote_state_path().is_file() {
                     Mode::Remote(remote_state_path())
                 } else {
                     Mode::Local

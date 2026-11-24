@@ -88,6 +88,7 @@ fn base(s: &mut App) {
         config_options: vec![],
         side_questions: false,
         pull_request: None,
+        pinned_at: None,
         automation_id: None,
     };
     s.sessions = vec![
@@ -217,15 +218,15 @@ fn base(s: &mut App) {
             agent(AgentKind::Codex, "Codex", "2.6.0", Some("codex"), None, None, true),
             agent(AgentKind::Opencode, "OpenCode", "2.3.0", Some("opencode"), None, None, true),
             AgentStatus {
-                agent: AgentKind::Gemini,
-                display_name: "Gemini CLI".into(),
+                agent: AgentKind::Antigravity,
+                display_name: "Antigravity CLI".into(),
                 installed: true,
-                version: Some("0.9.1".into()),
+                version: Some("1.5.14".into()),
                 logged_in: false,
                 available: false,
                 problem: Some("not logged in".into()),
-                fix: Some("gemini auth login".into()),
-                profile_id: Some("gemini".into()),
+                fix: Some("agy acp --login".into()),
+                profile_id: Some("antigravity".into()),
                 profile_name: None,
                 config_dir: None,
             },
@@ -322,6 +323,37 @@ fn automations(s: &mut App) {
     s.runs.insert("auto_tidy".into(), vec![]);
 }
 
+/// A host with notes (protocol 9): ideas kept for later in relay and demo; one became a
+/// session, one is done.
+fn notes(s: &mut App) {
+    session(s);
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 9;
+    }
+    let t = now();
+    const H: i64 = 3_600_000;
+    let note = |id: &str, ws: &str, text: &str, ago: i64, done: Option<i64>, sessions: &[&str]| Note {
+        note_id: id.into(),
+        workspace_id: ws.into(),
+        text: text.into(),
+        done_at: done.map(|d| t - d),
+        session_ids: sessions.iter().map(|x| x.to_string()).collect(),
+        created_at: t - ago,
+        updated_at: t - ago,
+    };
+    s.notes = vec![
+        note("note_rate", "ws_relay", "Rate-limit pairing attempts\nA phone that keeps failing the handshake should back off, not hammer the relay.\nMaybe 5 tries a minute per device key, then a cool-down the desktop can clear.", 2 * H, None, &[]),
+        note("note_oauth", "ws_relay", "Refresh OAuth tokens before they expire\nNot only on a 401: check expires_at when a session starts.", 26 * H, None, &["ses_2"]),
+        note("note_icons", "ws_demo", "Try a darker app icon\nGlass rim, no green.", 50 * H, None, &[]),
+        note("note_flaky", "ws_relay", "Find why the resume test is flaky", 72 * H, Some(5 * H), &["ses_1"]),
+    ];
+    crate::model::sort_notes(&mut s.notes);
+    s.screen = Screen::Notes;
+    s.sel_note = Some("note_rate".into());
+    s.note_base = s.notes[0].text.clone();
+    s.note_edit = rune::TextEdit::new(s.note_base.clone());
+}
+
 /// The Automations screen on one automation. The newest runs' sessions are in the sidebar,
 /// open for follow-up questions.
 fn automations_screen(s: &mut App, id: &str) {
@@ -348,6 +380,7 @@ fn automations_screen(s: &mut App, id: &str) {
         side_questions: false,
         automation_id: Some(auto.into()),
         pull_request: None,
+        pinned_at: None,
     };
     s.sessions.push(run_session("ses_r3", "auto_deps", "Upgrade dependencies", 21 * H));
     s.sessions.push(run_session("ses_r4", "auto_sentry", "Investigate Sentry alerts", 2 * H));
@@ -545,7 +578,7 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
     let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
     let a = &mut s.approvals[0];
     a.connector_id = BUILTIN_CONNECTOR_ID.into();
-    a.connector_name = "AgentHost".into();
+    a.connector_name = "AgentOS".into();
     a.tool = tool.into();
     if tool == "run_command" {
         a.summary = Some("Run gh pr edit on this computer".into());
@@ -585,7 +618,7 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
         for e in t.events.iter_mut() {
             if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
                 e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
-                e.payload["connector_name"] = json!("AgentHost");
+                e.payload["connector_name"] = json!("AgentOS");
                 e.payload["tool"] = json!(tool);
                 e.payload["arguments"] = Value::Null;
             }
@@ -616,6 +649,7 @@ fn subagents(s: &mut App) {
             config_options: config_options(),
             side_questions: true,
             pull_request: None,
+            pinned_at: None,
             automation_id: None,
         },
     );
@@ -676,7 +710,62 @@ fn subagents(s: &mut App) {
     s.screen = Screen::Session(sid.into());
 }
 
+/// The compact sidebar with everything it shows: a pinned session, a pull request, an
+/// automation's run, a long workspace ("Show 6 more") and a host that pins (protocol 8).
+fn sidebar(s: &mut App) {
+    session(s);
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 8;
+    }
+    let t = now();
+    let more = [
+        ("ses_s1", "Rate-limit the pairing endpoint", SessionState::Running, 540_000),
+        ("ses_s2", "Nightly dependency audit", SessionState::Idle, 21_600_000),
+        ("ses_s4", "Resume after host restart", SessionState::Failed, 86_400_000),
+        ("ses_s5", "Bump rune to e7f3ad9", SessionState::Idle, 90_000_000),
+        ("ses_s6", "Collapsible workspace sections", SessionState::Ended, 3 * 86_400_000),
+        ("ses_s7", "Host name in the sessions bar", SessionState::Ended, 15 * 86_400_000),
+        ("ses_s8", "Device auth tokens", SessionState::Ended, 40 * 86_400_000),
+        ("ses_s9", "Relay worker rate limits", SessionState::Ended, 41 * 86_400_000),
+        ("ses_s10", "Transcript paging", SessionState::Ended, 50 * 86_400_000),
+        ("ses_s11", "Pairing QR contrast", SessionState::Ended, 60 * 86_400_000),
+    ];
+    let proto = s.sessions.iter().find(|x| x.session_id == "ses_2").cloned().unwrap();
+    for (id, title, state, ago) in more {
+        s.sessions.push(Session { session_id: id.into(), title: Some(title.into()), state, created_at: t - ago, updated_at: t - ago, worktree: None, ..proto.clone() });
+    }
+    for x in s.sessions.iter_mut() {
+        match x.session_id.as_str() {
+            "ses_3" => x.pinned_at = Some(t - 86_400_000),
+            "ses_s2" => x.automation_id = Some("auto_deps".into()),
+            "ses_s4" => x.state_reason = Some("agent exited (code 1)".into()),
+            "ses_s5" | "ses_s6" => x.pull_request = Some(SessionPullRequest { number: 25, url: "https://github.com/nico/relay/pull/25".into() }),
+            _ => {}
+        }
+    }
+}
+
 pub const SCENES: &[(&str, fn(&mut App))] = &[
+    ("sidebar", sidebar),
+    ("sidebar-search", |s| {
+        sidebar(s);
+        s.search_open = true;
+        s.search.replace_text("auth");
+        s.search.focused = true;
+    }),
+    ("sidebar-collapsed", |s| {
+        sidebar(s);
+        s.collapsed.insert("ws_notes".into());
+        s.collapsed.insert(QUICK_WORKSPACE_ID.into());
+    }),
+    ("sidebar-hover", |s| {
+        sidebar(s);
+        s.hover_row = Some("ses_2".into());
+    }),
+    ("sidebar-jump", |s| {
+        sidebar(s);
+        s.jump_held = true;
+    }),
     ("session", |s| {
         session(s);
         chip(s);
@@ -800,7 +889,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         let sid = s.approvals.first().map(|a| a.session_id.clone()).unwrap_or_default();
         let a = &mut s.approvals[0];
         a.connector_id = BUILTIN_CONNECTOR_ID.into();
-        a.connector_name = "AgentHost".into();
+        a.connector_name = "AgentOS".into();
         a.tool = "install_tool".into();
         a.summary = Some("Install agent-desktop 1.3.1 with npm, on this computer".into());
         a.arguments = json!({"command": "npm install --global agent-desktop@1.3.1", "manager": "npm", "package": "agent-desktop", "version": "1.3.1", "reason": "You asked me to set up agent-desktop so you can drive desktop apps from the terminal."});
@@ -809,7 +898,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
             for e in t.events.iter_mut() {
                 if e.kind == EventType::ApprovalRequested && e.payload["approval_id"] == aid {
                     e.payload["connector_id"] = json!(BUILTIN_CONNECTOR_ID);
-                    e.payload["connector_name"] = json!("AgentHost");
+                    e.payload["connector_name"] = json!("AgentOS");
                     e.payload["tool"] = json!("install_tool");
                 }
             }
@@ -1150,6 +1239,33 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     // Automations: the nightly upgrade with its runs, the Sentry webhook with its last
     // delivery, and none yet.
     ("automations", |s| automations_screen(s, "auto_deps")),
+    // Notes: one open in the editor (with the sessions started from it), done ones shown,
+    // a new one being written, Start Session's sheet, Delete's question, an older host.
+    ("notes", notes),
+    ("notes-session", |s| {
+        notes(s);
+        s.select_note("note_oauth");
+        s.notes_show_done = true;
+    }),
+    ("notes-new", |s| {
+        notes(s);
+        s.new_note(Some("ws_demo"));
+        s.note_edit.replace_text("Show the relay's latency in Settings\nNext to Connected.");
+    }),
+    ("notes-start", |s| {
+        notes(s);
+        s.start_from_note("note_rate");
+    }),
+    ("notes-confirm-delete", |s| {
+        notes(s);
+        s.confirm_delete_note = Some("note_rate".into());
+    }),
+    ("notes-old-host", |s| {
+        notes(s);
+        if let Some(i) = s.info.as_mut() {
+            i.protocol_version = 8;
+        }
+    }),
     ("automations-webhook", |s| automations_screen(s, "auto_sentry")),
     ("automations-empty", |s| {
         base(s);

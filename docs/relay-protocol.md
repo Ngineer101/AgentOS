@@ -286,7 +286,7 @@ The relay checks that the key's relay id is the one in the path, that the
 time is within 5 minutes of its clock, the signature, and that the handle
 opens and names this relay id; then at most 60 notifications per host per
 minute (in that host's Durable Object, in memory). It sends Apple
-`{"aps": {"alert": {"title": "AgentHost", "body": "A session needs you"},
+`{"aps": {"alert": {"title": "AgentOS", "body": "A session needs you"},
 "sound": "default", "mutable-content": 1}, "v": 1, "e": sealed}` with
 `apns-push-type: alert`, priority 10, a 1-hour expiry and the collapse id,
 signed with an ES256 provider token (`iat` rounded down to 40 minutes, so

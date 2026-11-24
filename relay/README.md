@@ -1,7 +1,7 @@
-# agenthost relay
+# AgentOS relay
 
 A Cloudflare Worker plus one Durable Object per host that pairs WebSockets
-from an agenthost host daemon and its phones, and forwards opaque binary frames
+from an AgentOS host daemon and its phones, and forwards opaque binary frames
 between them. Everything forwarded between phones and the host is end-to-end
 Noise ciphertext; the relay cannot read it. The one exception is webhook
 ingress: services like Sentry or GitHub POST plain HTTPS requests, which the

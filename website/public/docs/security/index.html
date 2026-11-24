@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security model · AgentOS</title>
+<meta name="description" content="How AgentOS sandboxes agent sessions, what needs your approval, and what the relay can see.">
+<meta name="theme-color" content="#0b0d10">
+<meta property="og:title" content="Security model · AgentOS">
+<meta property="og:description" content="How AgentOS sandboxes agent sessions, what needs your approval, and what the relay can see.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/img/logo.svg" alt="" width="26" height="26">AgentOS</a>
+    <nav class="site-nav" aria-label="Main">
+      <a class="hide-s" href="/#how">How it works</a>
+      <a href="/#setup">Setup</a>
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a class="btn small" href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap docs">
+  <aside class="docs-nav">
+    <nav aria-label="Docs">
+      <h2>Docs</h2>
+      <ul><li><a href="/docs/">Getting started</a></li><li><a href="/docs/usage/">Using AgentOS</a></li><li><a href="/docs/remote/">Remote access and iOS</a></li><li><a href="/docs/security/" aria-current="page">Security model</a></li></ul>
+      <h2>Reference</h2>
+      <ul>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/relay-protocol.md">Relay protocol</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified</a></li>
+        <li><a href="https://github.com/Ngineer101/AgentOS/blob/main/CONTRIBUTING.md">Contributing</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="prose">
+    <h1>Security model</h1>
+    <p class="lede">The sandbox is the boundary. Agents run with their own approvals on auto, so what keeps them in check is what the sandbox lets them reach, not a prompt asking "may I?" before every command.</p>
+
+<h2 id="sandbox">The sandbox</h2>
+<p>Every session runs in a sandbox: bubblewrap and seccomp on Linux, Seatbelt on macOS, through Anthropic's <code>sandbox-runtime</code> at a pinned version. A session:</p>
+<ul>
+  <li><strong>can write</strong> only its workspace, its temp folder, its agent's own state and a shared tools folder where agents install helpers for themselves, never into your home folder;</li>
+  <li><strong>cannot read</strong> secrets folders, other agents' credentials or the host's data;</li>
+  <li><strong>has no network</strong> except the host's per-session proxy, which allows only the agent's provider plus the workspace's network profile, resolves names itself and refuses private addresses.</li>
+</ul>
+<p>Each agent gets a configuration the host controls, with none of your personal MCP servers, hooks or plugins. Nothing from the repository, such as its git hooks, runs outside the sandbox.</p>
+
+<h2 id="approval">Leaving the sandbox, with your approval</h2>
+<p>Anything that needs your credentials goes through the host, which shows you what will run and waits for you, on the desktop or your phone.</p>
+<table>
+  <tr><th>What</th><th>How it is handled</th></tr>
+  <tr><td>MCP connectors</td><td>Reached only through the host's gateway, which holds the credentials and asks before write tools by default.</td></tr>
+  <tr><td>Installing a tool on your computer</td><td>You see the exact command and the agent's reason. It runs as you only after you approve: a registry package and plain version, no shell, one at a time, logged.</td></tr>
+  <tr><td>Pushing</td><td>The sandbox can't read your git credentials. The host asks you to approve the exact <code>git push</code> and runs it for the agent. Fetching runs without asking.</td></tr>
+  <tr><td>Pull requests</td><td>Opened with your GitHub CLI after you approve the title and description.</td></tr>
+  <tr><td>Any other command that needs your logins</td><td>You see the exact argument list and its input. The host runs it as you in the session's folder after you approve, never through a shell.</td></tr>
+</table>
+<p>"Always Allow" lets a command prefix such as <code>gh pr edit</code> run without asking from then on. These are listed, and undone, under Settings → Connectors. Shells, interpreters and build tools always ask.</p>
+
+<h2 id="remote">Remote access and the relay</h2>
+<p>The host listens on no network port. Local clients use a Unix socket, and the host dials out to the relay. Phones and the host talk through the relay over end-to-end Noise tunnels (<code>XXpsk3</code> to pair, <code>IK</code> afterwards), so the relay forwards ciphertext it cannot read.</p>
+<p>The one exception is webhook ingress, which the relay seals to the host in memory as it arrives. So the owner of the Cloudflare account the relay runs on, which is you, could see webhook contents and nothing else.</p>
+
+<h2 id="push">Push notifications</h2>
+<p>Notifications go from the host to the relay, which passes them to Apple. Their content is sealed with a key each phone gives the host (ChaCha20-Poly1305) and opened on the phone, so Apple and the relay see only a generic alert. The phone's notification token goes to the relay, never to the host.</p>
+
+<h2 id="limits">Limits and reporting</h2>
+<p>AgentOS is early software. <a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">docs/status.md</a> records what has been verified, how, and on which platforms, including the sandbox escape test suite.</p>
+<p>Found a vulnerability? Please report it privately, as described in <a href="https://github.com/Ngineer101/AgentOS/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+
+    <div class="pager"><a class="btn" href="/docs/remote/">← Remote access and iOS</a><span></span></div>
+  </main>
+</div>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>AgentOS is an independent open-source project, licensed MIT or Apache-2.0. It is not affiliated with or endorsed by Anthropic, OpenAI, Cursor, Google or the makers of OpenCode. Product names belong to their owners.</p>
+    <nav aria-label="Footer">
+      <a href="/docs/">Docs</a>
+      <a href="/docs/security/">Security</a>
+      <a href="https://github.com/Ngineer101/AgentOS">GitHub</a>
+      <a href="https://github.com/Ngineer101/AgentOS/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+<script src="/site.js" defer></script>
+</body>
+</html>

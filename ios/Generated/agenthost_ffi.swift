@@ -2631,7 +2631,7 @@ public func pair(qr: String, deviceName: String, listener: PairingListener)async
         )
 }
 /**
- * Check that a scanned string is an agenthost pairing code without using it.
+ * Check that a scanned string is an AgentOS pairing code without using it.
  */
 public func parsePairingQr(qr: String)throws  -> PairingQrInfo  {
     return try  FfiConverterTypePairingQrInfo_lift(try rustCallWithError(FfiConverterTypeAgentHostError_lift) {
@@ -2670,7 +2670,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_agenthost_ffi_checksum_func_pair() != 19282) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agenthost_ffi_checksum_func_parse_pairing_qr() != 15244) {
+    if (uniffi_agenthost_ffi_checksum_func_parse_pairing_qr() != 11631) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agenthost_ffi_checksum_func_protocol_constants() != 59933) {

@@ -6,7 +6,7 @@ members = ["."]
 
 [package]
 name = "agenthost-desktop"
-description = "Desktop app for agenthost, built with Rune"
+description = "Desktop app for AgentOS, built with Rune"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"

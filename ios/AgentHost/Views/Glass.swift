@@ -180,7 +180,7 @@ struct AgentBadge: View {
         switch agent {
         case "claude": return ("AgentClaude", .white, Color(red: 0.85, green: 0.47, blue: 0.34))
         case "codex": return ("AgentCodex", .black, .white)
-        case "gemini": return ("AgentGemini", .white, Color(red: 0.26, green: 0.38, blue: 0.96))
+        case "antigravity", "gemini": return ("AgentAntigravity", .white, Color(red: 0.26, green: 0.38, blue: 0.96))
         case "opencode": return ("AgentOpenCode", .white, Color(white: 0.32))
         case "cursor": return ("AgentCursor", .black, Color(white: 0.85))
         default: return (nil, .white, Color(white: 0.32))

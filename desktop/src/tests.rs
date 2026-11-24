@@ -1022,6 +1022,33 @@ fn session_rename_round_trips_through_the_host() {
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 
+/// `session.pin` against a real host: the row moves to Pinned at once, the host keeps it,
+/// and unpinning sends it back to its workspace.
+#[test]
+fn pins_round_trip_through_the_host() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::Builder::new().prefix("ahp").tempdir_in("/tmp").unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_host, socket) = start_host(&rt, dir.path(), None);
+    let mut app = connect(&socket);
+    let mut tx = rune::Tx::default();
+    assert!(app.has_pins(), "the host is on protocol 8");
+    commands::run(&mut app, Cmd::QuickTask, &mut tx);
+    app.new_agent = Some("fake".into());
+    app.start_from_sheet();
+    pump(&mut app, |a| matches!(&a.screen, Screen::Session(id) if a.session(id).is_some_and(|s| s.state == SessionState::Idle)));
+    let Screen::Session(sid) = app.screen.clone() else { unreachable!() };
+    app.set_pinned(&sid, true);
+    assert_eq!(app.pinned_sessions().len(), 1, "it moves at once");
+    // The host's own copy says so too (a fresh list, not ours).
+    app.call(bridge::Tag::Sessions, agenthost_proto::methods::SESSION_LIST, serde_json::json!({}));
+    pump(&mut app, |a| a.session(&sid).is_some_and(|s| s.pinned_at.is_some()) && a.error.is_none());
+    app.set_pinned(&sid, false);
+    pump(&mut app, |a| a.session(&sid).is_some_and(|s| s.pinned_at.is_none()));
+    assert!(app.sidebar_groups().iter().any(|(_, l)| l.iter().any(|x| x.session_id == sid)));
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
 #[test]
 fn subagents_group_children_under_their_calls() {
     let app = demo("subagents");
@@ -1864,7 +1891,7 @@ fn remote_pairing_result_switches_a_laptop_with_no_local_host() {
     let saved = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
     assert_eq!((saved.host_name.as_str(), saved.device_id.as_str()), ("workstation", "dev_1"));
     assert!(app.conn == Conn::Connecting, "a laptop with no host of its own goes there at once");
-    assert!(bridge::load_prefs().prefer_remote, "and comes back there next launch");
+    assert!(crate::prefs::load().prefer_remote, "and comes back there next launch");
     assert!(app.notice.as_deref().is_some_and(|n| n.contains("Paired with workstation")));
 }
 
@@ -1889,7 +1916,7 @@ fn remote_pairing_result_leaves_a_live_local_host_alone() {
 
     // Still on the local host; the keys are kept but nothing is hijacked.
     assert!(app.conn == Conn::Connected);
-    assert!(!bridge::load_prefs().prefer_remote, "the next launch is not taken over");
+    assert!(!crate::prefs::load().prefer_remote, "the next launch is not taken over");
     assert!(agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).is_ok());
     assert!(app.notice.as_deref().is_some_and(|n| n.contains("Settings")), "the notice points at the switch");
 
@@ -1943,7 +1970,7 @@ fn remote_pairing_connects_runs_and_stays_read_only() {    let _turn = HOST_TEST
     // Nothing local was in use, so the app went there by itself — and will
     // next launch too.
     pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin);
-    assert!(bridge::load_prefs().prefer_remote, "a laptop with no host of its own comes back to the paired one");
+    assert!(crate::prefs::load().prefer_remote, "a laptop with no host of its own comes back to the paired one");
     let state = agenthost_cli::remote::DeviceState::load(&bridge::remote_state_path()).unwrap();
     assert_eq!(state.host_name, app.remote_host.clone().unwrap());
 
@@ -2001,16 +2028,306 @@ fn pairing_with_a_local_host_leaves_the_switch_to_you() {
 
     // Still on the local host, which keeps its rights: the switch is a choice.
     assert!(app.conn == Conn::Connected && !app.link_remote && app.admin);
-    assert!(!bridge::load_prefs().prefer_remote, "nothing hijacks the next launch");
+    assert!(!crate::prefs::load().prefer_remote, "nothing hijacks the next launch");
     assert!(app.notice.as_deref().is_some_and(|n| n.contains("Settings")), "the notice points at the switch");
 
     // The choice, once made, is remembered.
     app.connect_remote();
     pump(&mut app, |a| a.conn == Conn::Connected && a.link_remote && !a.admin);
-    assert!(bridge::load_prefs().prefer_remote);
+    assert!(crate::prefs::load().prefer_remote);
 
     // And back again, by choice too.
     app.use_local_host();
     pump(&mut app, |a| a.conn == Conn::Connected && !a.link_remote && a.admin);
-    assert!(!bridge::load_prefs().prefer_remote);
+    assert!(!crate::prefs::load().prefer_remote);
+}
+
+/// The compact sidebar's model: Pinned first (in the order pinned), groups of the newest few
+/// with "Show N more", collapsed groups out of the walking order, and search showing all.
+#[test]
+fn compact_sidebar_pins_collapses_and_shows_more() {
+    let mut app = model::init();
+    let scene = crate::demo::SCENES.iter().find(|(n, _)| *n == "sidebar").unwrap().1;
+    scene(&mut app);
+    let ids = |l: Vec<&agenthost_proto::Session>| l.into_iter().map(|x| x.session_id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(app.pinned_sessions()), ["ses_3"]);
+    let relay = || app.sidebar_groups().into_iter().find(|(w, _)| w.workspace_id == "ws_relay").map(|(_, l)| l.len()).unwrap();
+    assert_eq!(relay(), 12, "the pinned one leaves its group");
+    let group = |a: &model::App| {
+        let groups = a.sidebar_groups();
+        let (_, l) = groups.iter().find(|(w, _)| w.workspace_id == "ws_relay").unwrap();
+        let (rows, hidden) = a.group_rows("ws_relay", l);
+        (rows.len(), hidden)
+    };
+    assert_eq!(group(&app), (model::GROUP_SHOWN, 4));
+    // Pinned sessions come first in the order and the numbers.
+    assert_eq!(app.sidebar_order()[0], "ses_3");
+    assert_eq!(app.numbered()[0], "ses_3");
+    // A session that's working always shows, however old.
+    app.sessions.iter_mut().find(|x| x.session_id == "ses_s11").unwrap().state = SessionState::Running;
+    assert_eq!(group(&app), (model::GROUP_SHOWN + 1, 3));
+    app.show_all.insert("ws_relay".into());
+    assert_eq!(group(&app), (12, 0));
+    // Collapsed: no rows, nothing to walk or number; a search shows the matches anyway.
+    app.toggle_group("ws_relay");
+    assert_eq!(group(&app), (0, 0));
+    assert!(!app.sidebar_order().contains(&"ses_1".to_string()));
+    app.search.replace_text("oauth");
+    assert_eq!(app.sidebar_order(), ["ses_2"]);
+    app.search.replace_text("");
+    app.toggle_group("ws_relay");
+    assert!(app.sidebar_order().contains(&"ses_1".to_string()));
+    // Pinning another puts it after the first; unpinning sends it home.
+    app.set_pinned("ses_1", true);
+    assert_eq!(ids(app.pinned_sessions()), ["ses_3", "ses_1"]);
+    app.set_pinned("ses_3", false);
+    assert_eq!(ids(app.pinned_sessions()), ["ses_1"]);
+    assert!(app.sidebar_groups().iter().any(|(_, l)| l.iter().any(|x| x.session_id == "ses_3")));
+    // Escape in the search field clears it, then closes it.
+    app.open_search();
+    app.search.replace_text("x");
+    app.close_search();
+    assert!(app.search_open && app.search.text.is_empty());
+    app.close_search();
+    assert!(!app.search_open);
+    // A host before protocol 8 can't pin.
+    assert!(app.has_pins());
+    app.info.as_mut().unwrap().protocol_version = 7;
+    assert!(!app.has_pins());
+}
+
+/// The compact sidebar lays out in both looks and its buttons do what they say: search,
+/// collapse, "Show N more", a workspace's "+", and a hovered row's Pin and Archive.
+#[test]
+fn compact_sidebar_lays_out_and_clicks_through() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1000.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let state = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = open("sidebar", look);
+        for k in ["toggle-sidebar", "sidebar-search", "nav-new", "nav-automations", "add-folder", "group-ws_relay", "group-new-ws_relay", "more-ws_relay", "ses_3", "ses_s4"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        assert!(ui.find("search-field").is_none(), "{look:?}: search is behind its button");
+        assert!(ui.find("pin-ses_2").is_none(), "{look:?}: Pin shows on hover only");
+        // The search button opens the field in the nav's place.
+        click(&mut ui, "sidebar-search");
+        assert!(state(&mut ui, &|s| s.search_open));
+        assert!(ui.find("search-field").is_some() && ui.find("nav-new").is_none(), "{look:?}");
+        click(&mut ui, "sidebar-search");
+        assert!(state(&mut ui, &|s| !s.search_open));
+        // Show more, then collapse.
+        assert!(ui.find("ses_s11").is_none(), "{look:?}: past the newest few");
+        click(&mut ui, "more-ws_relay");
+        assert!(ui.find("ses_s11").is_some(), "{look:?}: Show more shows the rest");
+        click(&mut ui, "group-ws_relay");
+        assert!(state(&mut ui, &|s| s.collapsed.contains("ws_relay")));
+        assert!(ui.find("ses_1").is_none() && ui.find("ses_3").is_some(), "{look:?}: the pinned one stays");
+        // A workspace's "+" opens the sheet on it.
+        click(&mut ui, "group-new-ws_notes");
+        assert!(state(&mut ui, &|s| s.new_open && s.new_ws.as_deref() == Some("ws_notes")));
+
+        // Hovered: Pin and Archive in place of the age; pressing one doesn't open the row.
+        let mut ui = open("sidebar-hover", look);
+        assert!(ui.find("pin-ses_2").is_some() && ui.find("archive-ses_2").is_some(), "{look:?}");
+        click(&mut ui, "archive-ses_2");
+        assert!(state(&mut ui, &|s| s.confirm_archive.as_deref() == Some("ses_2")), "{look:?}: a live one asks first");
+        assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_1".into())), "{look:?}: the row didn't open");
+        let mut ui = open("sidebar-hover", look);
+        click(&mut ui, "pin-ses_2");
+        assert!(state(&mut ui, &|s| s.session("ses_2").is_some_and(|x| x.pinned_at.is_some()) && s.pinned_sessions().len() == 2), "{look:?}");
+        assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_1".into())), "{look:?}: the row didn't open");
+    }
+}
+
+// ---- notes -------------------------------------------------------------------------------
+
+fn note_changed(ch: NoteChanged) -> bridge::FromHost {
+    bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: agenthost_proto::methods::N_NOTE_CHANGED.into(), params: serde_json::to_value(ch).unwrap() })
+}
+
+#[test]
+fn notes_follow_the_host_but_keep_unsaved_edits() {
+    let mut app = demo("notes");
+    assert_eq!(app.notes.iter().map(|n| n.note_id.as_str()).collect::<Vec<_>>(), ["note_rate", "note_oauth", "note_icons", "note_flaky"], "open newest first, then done");
+    assert_eq!(crate::notes::summary(&app), "3 open notes");
+    assert!(!app.note_dirty());
+    // Changed on the phone while shown here, unedited: the editor shows the new text.
+    let mut n = app.note("note_rate").unwrap().clone();
+    n.text = "Rate-limit pairing attempts\nPer device key.".into();
+    app.apply(note_changed(NoteChanged { note_id: n.note_id.clone(), note: Some(n.clone()), removed: false }));
+    assert_eq!(app.note_edit.text, "Rate-limit pairing attempts\nPer device key.");
+    assert!(!app.note_dirty());
+    // Edited here first: the edit stays, still unsaved.
+    app.note_edit.replace_text("Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    n.text = "Something else".into();
+    app.apply(note_changed(NoteChanged { note_id: n.note_id.clone(), note: Some(n.clone()), removed: false }));
+    assert_eq!(app.note_edit.text, "Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    assert!(app.note_dirty());
+    // Picking another note saves it (shown at once) and shows the other.
+    app.select_note("note_icons");
+    assert_eq!(app.note("note_rate").unwrap().text, "Rate-limit pairing attempts\nPer device key, 5 a minute.");
+    assert_eq!(app.note_edit.text, "Try a darker app icon\nGlass rim, no green.");
+    // Trailing space and blank lines alone aren't a change; a blank note isn't saved.
+    app.note_edit.replace_text("Try a darker app icon\nGlass rim, no green.\n\n  ");
+    assert!(!app.note_dirty());
+    app.note_edit.replace_text("   \n");
+    assert!(!app.note_dirty());
+    // Done moves it after the open ones; deleted elsewhere, it leaves the editor.
+    app.set_note_done("note_rate", true);
+    assert_eq!(app.notes.iter().map(|n| n.note_id.as_str()).collect::<Vec<_>>(), ["note_oauth", "note_icons", "note_rate", "note_flaky"], "done ones last, the latest done first");
+    app.apply(note_changed(NoteChanged { note_id: "note_icons".into(), note: None, removed: true }));
+    assert!(app.note("note_icons").is_none() && app.sel_note.is_none() && app.note_edit.text.is_empty());
+    // Delete asks first.
+    app.delete_note("note_oauth");
+    assert!(app.note("note_oauth").is_some() && app.confirm_delete_note.as_deref() == Some("note_oauth"));
+    app.delete_note("note_oauth");
+    assert!(app.note("note_oauth").is_none() && app.confirm_delete_note.is_none());
+}
+
+#[test]
+fn a_new_note_is_adopted_once_saved() {
+    let mut app = demo("notes-new");
+    assert_eq!(app.new_note_ws.as_deref(), Some("ws_demo"));
+    assert!(app.note_dirty());
+    app.save_note();
+    assert!(app.note_saving);
+    // A second Save before the answer sends nothing more.
+    app.save_note();
+    let saved = Note { note_id: "note_new".into(), workspace_id: "ws_demo".into(), text: "Show the relay's latency in Settings\nNext to Connected.".into(), done_at: None, session_ids: vec![], created_at: crate::view::now_ms(), updated_at: crate::view::now_ms() };
+    let gen = app.note_gen;
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::NoteSaved { new_gen: Some(gen) }, result: Ok(serde_json::to_value(&saved).unwrap()) });
+    assert!(!app.note_saving && app.new_note_ws.is_none());
+    assert_eq!(app.sel_note.as_deref(), Some("note_new"));
+    assert!(!app.note_dirty());
+    // An answer for a new note begun before this one only adds it to the list.
+    app.new_note(Some("ws_relay"));
+    let old = Note { note_id: "note_late".into(), text: "Late".into(), ..saved };
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::NoteSaved { new_gen: Some(gen) }, result: Ok(serde_json::to_value(&old).unwrap()) });
+    assert!(app.note("note_late").is_some());
+    assert_eq!(app.new_note_ws.as_deref(), Some("ws_relay"), "still writing the new one");
+}
+
+#[test]
+fn start_session_from_a_note_fills_the_composer() {
+    let mut app = demo("notes-start");
+    assert!(app.new_open);
+    assert_eq!(app.new_ws.as_deref(), Some("ws_relay"));
+    assert_eq!(app.start_note.as_ref().map(|(id, ws, _)| (id.as_str(), ws.as_str())), Some(("note_rate", "ws_relay")));
+    let text = app.start_note.as_ref().unwrap().2.clone();
+    assert!(text.starts_with("Rate-limit pairing attempts\n"));
+    // Another New Session forgets the note.
+    let mut other = demo("notes-start");
+    other.open_new_session(false);
+    assert!(other.start_note.is_none());
+    // The host's answer opens the session with the note waiting in the composer.
+    let mut s = app.session("ses_3").unwrap().clone();
+    s.session_id = "ses_from_note".into();
+    s.title = None;
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::SessionFromNote(text.clone()), result: Ok(serde_json::to_value(&s).unwrap()) });
+    assert_eq!(app.screen, Screen::Session("ses_from_note".into()));
+    assert_eq!(app.prompt.text, text);
+}
+
+/// The Notes screens lay out in both looks, and clicking through them does what it says.
+#[test]
+fn note_screens_lay_out_and_click_through() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1200.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str], &[&str]); 6] = [
+        ("notes", &["nav-notes", "note-list", "note-group-ws_relay", "note-new-ws_relay", "note-note_rate", "note-done-note_rate", "note-text", "note-save", "note-start", "note-toggle-done", "delete-note", "note-sessions", "show-done"], &["note-note_flaky"]),
+        ("notes-session", &["note-session-ses_2", "note-note_flaky"], &[]),
+        ("notes-new", &["note-row-new", "note-ws", "note-save", "note-group-ws_demo"], &["note-start"]),
+        ("notes-start", &["new-session", "start-session"], &[]),
+        ("notes-confirm-delete", &["delete-note-alert", "confirm-delete-note"], &[]),
+        ("notes-old-host", &[], &["nav-notes", "note-list"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, there, absent) in scenes {
+            let ui = open(scene, look);
+            for k in there {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+            for k in absent {
+                assert!(ui.find(k).is_none(), "{look:?} {scene}: {k} should not be on screen");
+            }
+        }
+    }
+    let state = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let mut ui = open("notes", Look::Gnome);
+    // Another note shows in the editor; its session opens; the sidebar brings Notes back.
+    click(&mut ui, "note-note_oauth");
+    assert!(state(&mut ui, &|s| s.sel_note.as_deref() == Some("note_oauth") && s.note_edit.text.starts_with("Refresh OAuth")));
+    click(&mut ui, "note-session-ses_2");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Session("ses_2".into())));
+    click(&mut ui, "nav-notes");
+    assert!(state(&mut ui, &|s| s.screen == Screen::Notes && s.sel_note.as_deref() == Some("note_oauth")));
+    // Its checkbox marks it done: it leaves the list until done ones are shown.
+    click(&mut ui, "note-done-note_oauth");
+    assert!(state(&mut ui, &|s| s.note("note_oauth").is_some_and(|n| n.done_at.is_some())));
+    assert!(ui.find("note-note_oauth").is_none());
+    click(&mut ui, "show-done-box");
+    assert!(ui.find("note-note_oauth").is_some() && ui.find("note-note_flaky").is_some());
+    // A workspace's "+" starts a new note there; Start Session opens the sheet on the note's workspace.
+    click(&mut ui, "note-new-ws_relay");
+    assert!(state(&mut ui, &|s| s.new_note_ws.as_deref() == Some("ws_relay") && s.note_edit.text.is_empty()));
+    assert!(ui.find("note-row-new").is_some());
+    click(&mut ui, "note-note_rate");
+    click(&mut ui, "note-start");
+    assert!(state(&mut ui, &|s| s.new_open && s.start_note.as_ref().is_some_and(|(id, _, _)| id == "note_rate")));
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }

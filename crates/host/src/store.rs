@@ -153,6 +153,22 @@ CREATE TABLE IF NOT EXISTS hook_deliveries (
     delivery_id TEXT PRIMARY KEY,
     received_at INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS notes (
+    note_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    done_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS notes_by_workspace ON notes(workspace_id);
+CREATE TABLE IF NOT EXISTS note_sessions (
+    note_id TEXT NOT NULL REFERENCES notes(note_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    linked_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS note_sessions_by_session ON note_sessions(session_id);
 "#;
 
 /// A tool as fetched from the server, before policy is applied.
@@ -281,11 +297,12 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
             (Some(n), Some(url)) => Some(SessionPullRequest { number: n as u64, url }),
             _ => None,
         },
+        pinned_at: r.get(19)?,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
 /// [`SESSION_COLS`] to read: the title shown is the user's, else the host's.
-const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url";
+const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -323,6 +340,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // relay gave the phone (`token` is then empty).
     ("push_devices", "gateway_url", "TEXT"),
     ("push_devices", "gateway_handle", "TEXT"),
+    // When the user pinned the session (`session.pin`).
+    ("sessions", "pinned_at", "INTEGER"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -643,7 +662,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -663,7 +682,8 @@ impl Store {
                 s.side_questions as i64,
                 s.automation_id,
                 s.pull_request.as_ref().map(|p| p.number as i64),
-                s.pull_request.as_ref().map(|p| p.url.clone())
+                s.pull_request.as_ref().map(|p| p.url.clone()),
+                s.pinned_at
             ],
         )?;
         Ok(())
@@ -678,6 +698,14 @@ impl Store {
                 row_session,
             )
             .optional()?)
+    }
+
+    /// Pin a session (at `at`, ms) or with `None` unpin it. Returns whether it exists.
+    pub fn session_set_pinned(&self, id: &str, at: Option<i64>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET pinned_at = ?2 WHERE session_id = ?1",
+            params![id, at],
+        )? > 0)
     }
 
     pub fn session_set_title(&self, id: &str, title: Option<&str>) -> Result<bool> {
@@ -1408,6 +1436,20 @@ fn row_automation(r: &Row) -> rusqlite::Result<AutomationRow> {
     })
 }
 
+const NOTE_COLS: &str = "note_id, workspace_id, text, done_at, created_at, updated_at";
+
+fn row_note(r: &Row) -> rusqlite::Result<Note> {
+    Ok(Note {
+        note_id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        text: r.get(2)?,
+        done_at: r.get(3)?,
+        session_ids: vec![],
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+    })
+}
+
 const RUN_COLS: &str = "run_id, automation_id, session_id, trigger, scheduled_for, started_at, finished_at, outcome, summary, detail";
 
 fn row_run(r: &Row) -> rusqlite::Result<AutomationRun> {
@@ -1579,6 +1621,85 @@ impl Store {
         )?)
     }
 
+    // ---- notes ----
+
+    fn note_sessions(db: &Connection, note_id: &str) -> Result<Vec<String>> {
+        let mut st = db.prepare("SELECT session_id FROM note_sessions WHERE note_id = ?1 ORDER BY linked_at, session_id")?;
+        let ids = st.query_map(params![note_id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
+    fn notes_where(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Note>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!("SELECT {NOTE_COLS} FROM notes {clause}"))?;
+        let mut notes = st.query_map(args, row_note)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for n in &mut notes {
+            n.session_ids = Self::note_sessions(&db, &n.note_id)?;
+        }
+        Ok(notes)
+    }
+
+    pub fn note_insert(&self, n: &Note) -> Result<()> {
+        self.db().execute(
+            &format!("INSERT INTO notes ({NOTE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
+            params![n.note_id, n.workspace_id, n.text, n.done_at, n.created_at, n.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn note_get(&self, id: &str) -> Result<Option<Note>> {
+        Ok(self.notes_where("WHERE note_id = ?1", &[&id])?.pop())
+    }
+
+    /// Notes of workspaces that weren't removed (of one, when given): open
+    /// ones first, newest first; then done ones, most recently done first.
+    pub fn note_list(&self, workspace_id: Option<&str>) -> Result<Vec<Note>> {
+        self.notes_where(
+            "WHERE (?1 IS NULL OR workspace_id = ?1)
+               AND workspace_id IN (SELECT workspace_id FROM workspaces WHERE removed_at IS NULL)
+             ORDER BY done_at IS NOT NULL, COALESCE(done_at, created_at) DESC, rowid DESC",
+            &[&workspace_id],
+        )
+    }
+
+    pub fn note_count(&self, workspace_id: &str) -> Result<usize> {
+        let n: i64 = self.db().query_row("SELECT COUNT(*) FROM notes WHERE workspace_id = ?1", params![workspace_id], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// Save a note's text and done time.
+    pub fn note_save(&self, n: &Note) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE notes SET text = ?2, done_at = ?3, updated_at = ?4 WHERE note_id = ?1",
+            params![n.note_id, n.text, n.done_at, n.updated_at],
+        )? > 0)
+    }
+
+    pub fn note_remove(&self, id: &str) -> Result<bool> {
+        Ok(self.db().execute("DELETE FROM notes WHERE note_id = ?1", params![id])? > 0)
+    }
+
+    pub fn note_link_session(&self, note_id: &str, session_id: &str) -> Result<()> {
+        self.db().execute(
+            "INSERT OR IGNORE INTO note_sessions (note_id, session_id, linked_at) VALUES (?1, ?2, ?3)",
+            params![note_id, session_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Mark the open notes a session was started from done; their ids.
+    pub fn notes_done_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let now = now_ms();
+        let mut st = db.prepare(
+            "UPDATE notes SET done_at = ?2, updated_at = ?2
+             WHERE done_at IS NULL AND note_id IN (SELECT note_id FROM note_sessions WHERE session_id = ?1)
+             RETURNING note_id",
+        )?;
+        let ids = st.query_map(params![session_id, now], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
     /// Remember a webhook delivery id; false if it was seen already. Ids
     /// older than a week are forgotten (the relay keeps deliveries a day).
     pub fn hook_delivery_first(&self, delivery_id: &str) -> Result<bool> {
@@ -1622,6 +1743,7 @@ mod tests {
             config_options: vec![],
             side_questions: false,
             pull_request: None,
+            pinned_at: None,
             automation_id: None,
             state: SessionState::Created,
             state_reason: None,
@@ -1664,6 +1786,18 @@ mod tests {
         assert!(st.session_set_pull_request(&sid, &pr).unwrap());
         assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, Some(pr));
         assert!(!st.session_set_pull_request("ses_none", &SessionPullRequest { number: 1, url: "u".into() }).unwrap());
+    }
+
+    #[test]
+    fn a_session_can_be_pinned_and_unpinned() {
+        let (st, sid) = setup();
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, None);
+        assert!(st.session_set_pinned(&sid, Some(1234)).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, Some(1234));
+        assert_eq!(st.session_list(None).unwrap()[0].pinned_at, Some(1234), "the list carries it too");
+        assert!(st.session_set_pinned(&sid, None).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pinned_at, None);
+        assert!(!st.session_set_pinned("ses_none", Some(1)).unwrap());
     }
 
     #[test]

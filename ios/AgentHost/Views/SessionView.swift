@@ -11,6 +11,17 @@ struct SessionView: View {
     @EnvironmentObject private var model: AppModel
     let sessionId: String
 
+    var body: some View {
+        // The session's attachments outlive this screen, like its draft text,
+        // so a pasted screenshot is still there when you come back.
+        SessionScreen(sessionId: sessionId, composer: model.composer(for: sessionId))
+    }
+}
+
+private struct SessionScreen: View {
+    @EnvironmentObject private var model: AppModel
+    let sessionId: String
+
     @State private var draft = ""
     @State private var actionError: String?
     @State private var archiving: SessionInfo?
@@ -25,7 +36,8 @@ struct SessionView: View {
     @Environment(\.openURL) private var openURL
 
     // Attachments (protocol 2 hosts) and voice input (iOS dictation).
-    @StateObject private var composer = ComposerModel()
+    /// The session's attachments, kept by the model (`AppModel.composer(for:)`).
+    @ObservedObject var composer: ComposerModel
     @StateObject private var dictation = SpeechDictation()
     @State private var showPhotoPicker = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -450,7 +462,7 @@ struct SessionView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(!canPrompt)
+            .disabled(!canPrompt || dictation.isStarting)
             .accessibilityLabel("Dictate")
 
             Spacer(minLength: 8)
@@ -596,6 +608,7 @@ struct SessionView: View {
             }
             ForEach(pending) { p in
                 PendingPromptRow(prompt: p)
+                    .transition(.promptSent)
             }
             if let working {
                 WorkingRow(label: working)
@@ -648,7 +661,10 @@ struct SessionView: View {
             }
             return
         }
-        model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
+        // Only the new bubble (and "Working…") animates, not the composer.
+        withAnimation(.spring(duration: 0.4, bounce: 0.2)) {
+            model.sendPrompt(sessionId: sessionId, text: draft, attachments: composer.ready)
+        }
         draft = ""
         composer.clear()
     }
@@ -676,15 +692,29 @@ struct SessionView: View {
 
     @MainActor
     private func startDictation() {
-        guard canPrompt, !dictation.isListening, !dictation.isFinishing else { return }
+        guard canPrompt, !dictation.isListening, !dictation.isFinishing, !dictation.isStarting else { return }
         dictation.onAutoStop = { stopDictation() }
-        do {
-            try dictation.start()
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            actionError = nil
-        } catch {
-            actionError = "Dictation failed: \(userMessage(for: error))"
+        Task {
+            do {
+                try await dictation.start(vocabulary: dictationVocabulary)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                actionError = nil
+            } catch {
+                actionError = "Dictation failed: \(userMessage(for: error))"
+            }
         }
+    }
+
+    /// Names you're likely to say here, as hints to the recognizer: this
+    /// session's title and agent, then every workspace.
+    private var dictationVocabulary: [String] {
+        var words: [String] = []
+        if let s = session {
+            words.append(model.sessionTitle(s))
+            words.append(model.agentLabel(s))
+        }
+        words += model.workspaces.map(\.name)
+        return words
     }
 
     @MainActor
@@ -910,6 +940,20 @@ struct ThoughtRow: View {
                     .padding(.leading, 24)
             }
         }
+    }
+}
+
+extension AnyTransition {
+    /// A sent prompt rises into place from the composer, growing from its
+    /// bottom trailing corner. It goes without one: the host's copy of the
+    /// prompt takes its place in the transcript, so a fade would show both.
+    static var promptSent: AnyTransition {
+        .asymmetric(
+            insertion: .opacity
+                .combined(with: .scale(scale: 0.85, anchor: .bottomTrailing))
+                .combined(with: .offset(y: 24)),
+            removal: .identity
+        )
     }
 }
 

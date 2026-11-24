@@ -1,0 +1,54 @@
+name: Bug report
+description: Something doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Detailed reports are the most useful contribution to this project.
+        Please remove anything private (tokens, paths, transcripts) from logs before pasting them.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options: [Host (agenthostd), Sandbox / network, CLI, Desktop app, iOS app, Relay, Automations / webhooks, Install or dev scripts, Docs]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, or the steps in the app.
+      placeholder: |
+        1. agenthost workspace add ~/code/demo --profile packages
+        2. agenthost run ~/code/demo claude "…"
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Exact error text, screenshots if it's the UI.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `agenthost status`, and relevant lines from `<data dir>/logs/host.log` (run the host with `AGENTHOST_ACP_TRACE=1` for agent problems).
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and version, the commit you built (`git rev-parse --short HEAD`), the agent CLI and its version, iOS version if relevant.
+    validations:
+      required: true

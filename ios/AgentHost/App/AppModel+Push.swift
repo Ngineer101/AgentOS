@@ -32,7 +32,7 @@ extension AppModel {
         (hostProtocolVersion ?? hostInfo?.protocolVersion ?? 0) >= RPC.pushRelayProtocolVersion
     }
 
-    /// iOS lets AgentHost show notifications (or hasn't been asked yet).
+    /// iOS lets AgentOS show notifications (or hasn't been asked yet).
     var pushAllowedBySystem: Bool {
         switch pushAuthorization {
         case .denied: return false
@@ -212,7 +212,7 @@ extension AppModel {
 
     enum PushEnableResult {
         case enabled(PushStatusModel)
-        /// iOS (or the user, earlier) said no: on in AgentHost, off in iOS
+        /// iOS (or the user, earlier) said no: on in AgentOS, off in iOS
         /// Settings until they allow it there.
         case denied
     }
@@ -494,7 +494,7 @@ enum PushError: LocalizedError {
         switch self {
         case .unreadable: return "Could not read that file."
         case .notAKey: return "That is not an APNs key. Choose the AuthKey_….p8 file you downloaded from your Apple Developer account."
-        case .noToken: return "iOS did not give AgentHost a notification token. Check that the app is signed with the Push Notifications capability, then try again."
+        case .noToken: return "iOS did not give AgentOS a notification token. Check that the app is signed with the Push Notifications capability, then try again."
         }
     }
 }

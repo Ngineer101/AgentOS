@@ -92,7 +92,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
             .gap(10.0)
             .px(24.0)
             .child(icon(&ic::CLOCK, 40.0).color(t.text3))
-            .child(text("Update AgentHost").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("Update AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
             .child(t.small("This host has no automations. Update agenthostd to run sessions on a schedule or from a webhook.").wrap().align(rune::Align::Center).max_w(420.0));
     }
     if s.automations.is_empty() {
@@ -400,14 +400,14 @@ fn capitalize(s: &str) -> String {
 // Pickers: a native pop-up menu where there is one, else the app's own under the button
 // ---------------------------------------------------------------------------
 
-struct Opt {
-    id: String,
-    title: String,
-    checked: bool,
-    enabled: bool,
+pub(crate) struct Opt {
+    pub id: String,
+    pub title: String,
+    pub checked: bool,
+    pub enabled: bool,
 }
 
-fn picker(t: &Theme, key: &'static str, label: &str, options: Vec<Opt>, pick: fn(&mut App, &str)) -> El {
+pub(crate) fn picker(t: &Theme, key: &'static str, label: &str, options: Vec<Opt>, pick: fn(&mut App, &str)) -> El {
     popup_button(t, key.to_string(), label).on_press_tx(move |s: &mut App, tx: &mut Tx| {
         if rune::popup_menu_supported() {
             let menu = options.iter().fold(rune::PopupMenu::new(), |m, o| m.item(rune::PopupItem::new(o.id.clone(), o.title.clone()).checked(o.checked).enabled(o.enabled)));
@@ -422,7 +422,7 @@ fn picker(t: &Theme, key: &'static str, label: &str, options: Vec<Opt>, pick: fn
     })
 }
 
-fn pick_menu(s: &App, t: &Theme, key: &'static str, options: Vec<Opt>, pick: fn(&mut App, &str)) -> Option<El> {
+pub(crate) fn pick_menu(s: &App, t: &Theme, key: &'static str, options: Vec<Opt>, pick: fn(&mut App, &str)) -> Option<El> {
     if s.menu != Some(Menu::Pick(key)) {
         return None;
     }

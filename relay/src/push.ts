@@ -34,7 +34,7 @@ export interface PushEnv {
 export type ApnsEnvironment = "sandbox" | "production";
 
 /** What Apple, and a phone that can't open the content, shows. */
-export const GENERIC_TITLE = "AgentHost";
+export const GENERIC_TITLE = "AgentOS";
 export const GENERIC_BODY = "A session needs you";
 
 /** How far a host's clock may be from ours. */

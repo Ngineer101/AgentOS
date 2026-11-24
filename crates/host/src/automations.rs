@@ -567,6 +567,7 @@ impl Automations {
                     agent: a.agent,
                     profile_id: a.profile_id.clone(),
                     title: Some(a.name.clone()),
+                    note_id: None,
                 },
                 &id,
             )

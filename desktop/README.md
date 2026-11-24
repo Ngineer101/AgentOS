@@ -1,4 +1,4 @@
-# agenthost desktop
+# AgentOS desktop
 
 The full control surface, built with [Rune](https://github.com/anomalyco/rune)
 (pinned to rev `e7f3ad9`). It runs on the same machine as the host and talks
@@ -10,9 +10,17 @@ Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
 patterns, Linux gets GNOME / libadwaita. The look follows the OS;
 `AGENTHOST_DESKTOP_LOOK=macos|gnome` picks one, so both render on one machine.
 
-- **Sidebar**: sessions only, grouped by workspace with Quick tasks first, a
-  search field (⌘F / Ctrl+F) and the host line at the bottom (click it for
-  status). Live sessions are numbered ⌘1…⌘9 (Alt+1…9).
+- **Sidebar** (compact, nano page "Desktop sidebar v3"): New Session and
+  Automations at the top, then Pinned and the workspaces (Quick tasks first),
+  each a collapsible group with a "+" for a new session there; the newest 8
+  show, "Show N more" the rest. A row is one line: status, title, a pull
+  request or automation icon and its age; a second line only when it needs
+  you, failed or has agents running. Hover a row for Pin and Archive (pins
+  need a host on protocol 8). Search sits behind the header's magnifier
+  (⌘F / Ctrl+F; Escape clears, then closes). Live sessions are numbered
+  ⌘1…⌘9 (Alt+1…9), shown while you hold the key. Collapsed groups are
+  remembered in `desktop.json` (`~/Library/Application Support/AgentHost/`,
+  or `~/.config/agenthost/`). The host line at the bottom opens status.
 - **Session**: the transcript in a 700 pt (GNOME 720 px) column: prompts,
   Markdown replies (streaming), thoughts, tool calls (expand for output),
   blocked hosts with "Allow for <workspace>", approvals inline with
@@ -75,7 +83,8 @@ cd desktop
 cargo run --release
 # Headless snapshots of every screen with sample data (no host needed):
 AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.png --scene session --size 1280x800
-#   scenes: session session-compose session-voice-download session-no-sidebar session-menu main-menu
+#   scenes: sidebar sidebar-search sidebar-collapsed sidebar-hover sidebar-jump
+#           session session-compose session-voice-download session-no-sidebar session-menu main-menu
 #           home new new-other-login new-login-menu confirm-archive row-menu failed
 #           settings-archived archived-open settings-general settings-agents settings-agents-add
 #           settings-workspaces settings-connectors settings-connectors-add settings-devices

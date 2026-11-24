@@ -209,6 +209,13 @@ fn make_default_box(s: &App, t: &Theme) -> Option<El> {
     )
 }
 
+/// Started from a note (and still in its workspace): which one, since its text goes in the
+/// new session's message box.
+fn from_note(s: &App) -> Option<String> {
+    let (_, _, text) = s.start_note.as_ref().filter(|(_, ws, _)| s.new_ws.as_ref() == Some(ws))?;
+    Some(format!("From the note \u{201c}{}\u{201d}: it opens in the message box, ready to send.", crate::view::clip(agenthost_proto::title_of(text), 60)))
+}
+
 fn mac_sheet(s: &App, t: &Theme) -> El {
     let ready = s.new_ws.is_some() && s.new_agent.is_some();
     let form = col()
@@ -243,7 +250,7 @@ fn mac_sheet(s: &App, t: &Theme) -> El {
                 .pt(18.0)
                 .pb(6.0)
                 .child(text("New Session").font(TextStyle::new(15.0, 600.0)).color(t.text))
-                .child(text("Pick where the agent works and which login it uses.").font(TextStyle::new(12.0, 400.0)).color(t.text2)),
+                .child(text(from_note(s).unwrap_or_else(|| "Pick where the agent works and which login it uses.".into())).font(TextStyle::new(12.0, 400.0)).color(t.text2).truncate()),
         )
         .child(col().w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(form))
         .child(
@@ -321,6 +328,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         .px(24.0)
         .pt(12.0)
         .pb(24.0)
+        .children(from_note(s).map(|n| t.small(n).truncate()))
         .child(col().w_full().gap(10.0).child(t.group_title("Workspace")).child(t.group(workspace_rows(s, t), 0.0)))
         .child(agent_block);
     let body = match make_default_box(s, t) {

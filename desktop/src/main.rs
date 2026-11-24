@@ -1,4 +1,4 @@
-//! agenthost desktop app: the full control surface, over the host's Unix socket.
+//! AgentOS desktop app: the full control surface, over the host's Unix socket.
 
 mod audio;
 mod automations;
@@ -9,6 +9,8 @@ mod demo;
 mod icons;
 mod look;
 mod model;
+mod notes;
+mod prefs;
 mod session;
 mod settings;
 mod sheet;
@@ -27,6 +29,8 @@ fn setup(s: &mut App, waker: Waker) {
     if std::env::var_os("AGENTHOST_DESKTOP_OFFLINE").is_none() {
         s.bridge = Some(bridge::start(waker));
         s.hostname = hostname();
+        s.collapsed = prefs::load().collapsed;
+        s.save_prefs = true;
     }
 }
 
@@ -88,6 +92,12 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     commands::on_key(s, ev, tx)
 }
 
+/// Holding the jump keys' modifier alone (⌘ on macOS, Alt on GNOME) shows their numbers.
+fn on_modifiers(s: &mut App, m: rune::Mods, _: &mut Tx) {
+    let held = if s.look.mac() { m.cmd && !m.alt && !m.shift && !m.ctrl } else { m.alt && !m.ctrl && !m.shift && !m.logo };
+    s.jump_held = held;
+}
+
 pub(crate) fn app() -> rune::App<App> {
     let look = look::Look::current();
     // macOS: content under a transparent titlebar, the traffic lights centred in the 52 pt
@@ -101,9 +111,10 @@ pub(crate) fn app() -> rune::App<App> {
         scenes: demo::SCENES,
         min_size: Some((760.0, 520.0)),
         families,
-        ..AppSpec::new("AgentHost", (1280.0, 800.0), model::init, view::view)
+        ..AppSpec::new("AgentOS", (1280.0, 800.0), model::init, view::view)
     })
     .chrome(chrome)
+    .on_modifiers(on_modifiers)
     .standard_menus();
     if look.mac() {
         for item in commands::menu_bar() {

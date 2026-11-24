@@ -1,4 +1,4 @@
-# XcodeGen project for the AgentHost iOS app.
+# XcodeGen project for the AgentOS iOS app.
 #   1. ./build-rust.sh        (Rust staticlib -> Frameworks/AgentHostFFI.xcframework,
 #                              regenerates Generated/agenthost_ffi.swift)
 #   2. xcodegen generate      (writes AgentHost.xcodeproj; not committed)
@@ -58,7 +58,7 @@ targets:
     info:
       path: AgentHost/Info.plist
       properties:
-        CFBundleDisplayName: AgentHost
+        CFBundleDisplayName: AgentOS
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -70,10 +70,10 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSCameraUsageDescription: AgentHost uses the camera to scan the pairing QR code shown on your computer.
-        NSMicrophoneUsageDescription: AgentHost listens to your voice to turn it into text for your prompts.
-        NSSpeechRecognitionUsageDescription: AgentHost uses iOS dictation to turn your voice into text, on this iPhone where it can.
-        NSFaceIDUsageDescription: AgentHost asks for Face ID before showing your sessions and releasing this device's key.
+        NSCameraUsageDescription: AgentOS uses the camera to scan the pairing QR code shown on your computer.
+        NSMicrophoneUsageDescription: AgentOS listens to your voice to turn it into text for your prompts.
+        NSSpeechRecognitionUsageDescription: AgentOS uses iOS dictation to turn your voice into text, on this iPhone where it can.
+        NSFaceIDUsageDescription: AgentOS asks for Face ID before showing your sessions and releasing this device's key.
         ITSAppUsesNonExemptEncryption: false
         # "<TEAMID>." at build time: the team id sent with the APNs key
         # (push.set_key) and the prefix of the shared Keychain group.
@@ -121,7 +121,7 @@ targets:
     info:
       path: AgentHostNotifications/Info.plist
       properties:
-        CFBundleDisplayName: AgentHost Notifications
+        CFBundleDisplayName: AgentOS Notifications
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
