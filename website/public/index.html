@@ -14,7 +14,7 @@
 </head>
 <body>
 <header class="site-header">
-  <div class="wrap">
+  <div class="bar">
     <a class="brand" href="/"><img src="/img/logo.svg" alt="" width="26" height="26">AgentOS</a>
     <nav class="site-nav" aria-label="Main">
       <a class="hide-s" href="/#how">How it works</a>
@@ -28,28 +28,15 @@
 <div class="hero">
   <div class="wrap">
     <div>
-      <p class="eyebrow">Self-hosted · open source</p>
       <h1>Run your coding agents on your own machine. Steer them from anywhere.</h1>
-      <p class="lede">AgentOS is a host for Claude Code, Codex, OpenCode, Cursor and Antigravity that runs on your Linux or macOS computer, on the subscriptions you already have. Every session is sandboxed. You drive it from a desktop app, the command line or your iPhone, and your code never leaves your machine.</p>
+      <p class="lede">AgentOS runs the agent CLIs you already pay for on your Linux or macOS computer, each session in a sandbox. You drive it from a desktop app, the command line or your iPhone, and your code never leaves your machine.</p>
       <div class="actions">
         <a class="btn primary" href="#setup">Set it up</a>
         <a class="btn" href="https://github.com/Ngineer101/AgentOS">View on GitHub</a>
       </div>
-      <div class="terminal">
-        <div class="bar"><i></i><i></i><i></i></div>
-        <pre><code><span class="p">$ </span>scripts/install.sh
-<span class="p">$ </span>agenthost workspace add ~/code/myproject
-<span class="p">$ </span>agenthost run ~/code/myproject claude "Fix the flaky resume test"</code></pre>
-      </div>
+      <div class="chips" aria-label="Supported agents"><span class="chip"><span class="tile" style="background:#d97857"><img src="/img/agents/claude.svg" alt="" width="15" height="15"></span>Claude Code</span><span class="chip"><span class="tile dark" style="background:#fff"><img src="/img/agents/codex.svg" alt="" width="15" height="15"></span>Codex</span><span class="chip"><span class="tile" style="background:#525252"><img src="/img/agents/opencode.svg" alt="" width="15" height="15"></span>OpenCode</span><span class="chip"><span class="tile dark" style="background:#d9d9d9"><img src="/img/agents/cursor.svg" alt="" width="15" height="15"></span>Cursor</span><span class="chip"><span class="tile" style="background:#4261f5"><img src="/img/agents/antigravity.svg" alt="" width="15" height="15"></span>Antigravity</span></div>
     </div>
     <div class="phone"><img src="/img/ios-sessions.png" width="786" height="1704" alt="The AgentOS iPhone app: a host named workstation with four sessions grouped by workspace, and a banner saying one approval is waiting."></div>
-  </div>
-</div>
-
-<div class="agents">
-  <div class="wrap">
-    <span class="label">Runs the agents you already use</span>
-    <span class="agent"><img src="/img/agents/claude.svg" alt="" width="20" height="20">Claude Code</span><span class="agent"><img src="/img/agents/codex.svg" alt="" width="20" height="20">Codex</span><span class="agent"><img src="/img/agents/opencode.svg" alt="" width="20" height="20">OpenCode</span><span class="agent"><img src="/img/agents/cursor.svg" alt="" width="20" height="20">Cursor</span><span class="agent"><img src="/img/agents/antigravity.svg" alt="" width="20" height="20">Antigravity</span>
   </div>
 </div>
 
@@ -57,26 +44,25 @@
   <div class="wrap">
     <div class="section-head">
       <h2>One daemon on your computer. Nothing else in the middle.</h2>
-      <p>The host starts each agent CLI as shipped, inside its own sandbox, and keeps every session in a local log. Your phone reaches it through a relay you deploy yourself, which only ever carries ciphertext.</p>
+      <p>The host starts each agent CLI as shipped, inside its own sandbox, and keeps every session in a local log. Your phone reaches it through a relay you deploy yourself.</p>
     </div>
-    <div class="arch" role="img" aria-label="Diagram: on your computer, the desktop app and the CLI talk to the host daemon over a Unix socket; the daemon runs each agent in its own sandbox behind an egress proxy. The daemon dials out to your relay, and the iPhone app connects to the same relay. The relay forwards end-to-end encrypted frames only.">
-      <div class="arch-box">
-        <div class="cap">Your computer</div>
-        <div class="arch-row"><div class="node">Desktop app</div><div class="node">CLI<small>agenthost</small></div></div>
-        <div class="arch-down">Unix socket ↓</div>
+    <div class="arch" role="img" aria-label="Diagram: on your computer, the desktop app and the CLI talk to the host daemon over a Unix socket; the daemon runs each agent in its own sandbox. The daemon dials out to your relay, and the iPhone app connects to the same relay. The relay forwards end-to-end encrypted frames only.">
+      <div class="glass">
+        <p class="where">Your computer</p>
+        <div class="arch-row"><div class="node">Desktop app</div><div class="node">Command line</div></div>
+        <div class="arch-down">Unix socket</div>
         <div class="arch-row"><div class="node hub">agenthostd</div></div>
-        <div class="arch-down">↓</div>
-        <div class="arch-row"><div class="node sandbox">sandbox<small>Claude Code</small></div><div class="node sandbox">sandbox<small>Codex</small></div><div class="node sandbox">sandbox<small>…</small></div></div>
-        <div class="arch-down">egress proxy · allow-list</div>
+        <div class="arch-down">one sandbox per session</div>
+        <div class="arch-row"><div class="node sandbox">Claude Code</div><div class="node sandbox">Codex</div><div class="node sandbox">…</div></div>
       </div>
       <div class="arch-link">wss</div>
-      <div class="arch-box">
-        <div class="cap">Your Cloudflare account</div>
-        <div class="arch-row"><div class="node">Relay<small>a Worker you deploy</small></div></div>
+      <div class="glass">
+        <p class="where">Your Cloudflare account</p>
+        <div class="arch-row"><div class="node">Relay<small>sees only ciphertext</small></div></div>
       </div>
       <div class="arch-link">wss</div>
-      <div class="arch-box">
-        <div class="cap">Your pocket</div>
+      <div class="glass">
+        <p class="where">Your pocket</p>
         <div class="arch-row"><div class="node">iPhone app</div></div>
       </div>
     </div>
@@ -90,13 +76,17 @@
       <h2>The sandbox is the boundary</h2>
       <p>Agents run with their own approvals on auto. What keeps them in check is what the sandbox lets them reach, not a prompt before every command.</p>
     </div>
-    <div class="grid">
-      <div class="card"><div class="dot"></div><h3>Sandboxed sessions</h3><p>Each session runs in bubblewrap and seccomp on Linux or Seatbelt on macOS. It can write only its workspace and its own state, and can't read your secrets or other agents' logins.</p></div>
-      <div class="card"><div class="dot"></div><h3>Network allow-list</h3><p>A session reaches the network only through its own proxy, which allows the agent's provider plus the hosts you choose for that workspace. Private addresses are refused.</p></div>
-      <div class="card"><div class="dot orange"></div><h3>Your credentials stay yours</h3><p>Pushing, opening pull requests, installing tools and MCP connectors go through the host. It shows you exactly what will run and waits for you to approve.</p></div>
-      <div class="card"><div class="dot blue"></div><h3>Your subscriptions, as shipped</h3><p>The host never runs its own agent loop. Each CLI is driven over the Agent Client Protocol with your existing login, so there is no extra API bill.</p></div>
-      <div class="card"><div class="dot blue"></div><h3>End-to-end encrypted</h3><p>Phones pair by QR code and talk to the host over Noise tunnels. The relay in between has no accounts and stores no transcripts.</p></div>
-      <div class="card"><div class="dot blue"></div><h3>Nothing lost on disconnect</h3><p>Sessions are an append-only event log in SQLite on your machine. Close the laptop lid on the train; the phone catches up without gaps.</p></div>
+    <div class="groups">
+      <ul class="group glass">
+        <li><span class="tile t-green"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg></span><div><h3>Sandboxed sessions</h3><p>Bubblewrap and seccomp on Linux, Seatbelt on macOS. A session writes only its workspace and can't read your secrets or other agents' logins.</p></div></li>
+        <li><span class="tile t-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg></span><div><h3>Network allow-list</h3><p>Each session reaches only its agent's provider and the hosts you allow for that workspace. Private addresses are refused.</p></div></li>
+        <li><span class="tile t-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l3 3"/></svg></span><div><h3>Your credentials stay yours</h3><p>Pushing, pull requests, installing tools and MCP connectors go through the host, which shows you what will run and waits for your approval.</p></div></li>
+      </ul>
+      <ul class="group glass">
+        <li><span class="tile t-purple"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7"/></svg></span><div><h3>Your subscriptions, as shipped</h3><p>No agent loop of its own. Each CLI runs unmodified with your existing login, so there is no extra API bill.</p></div></li>
+        <li><span class="tile t-mint"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><div><h3>End-to-end encrypted</h3><p>Phones pair by QR code and talk to the host over Noise tunnels. The relay has no accounts and stores no transcripts.</p></div></li>
+        <li><span class="tile t-indigo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></svg></span><div><h3>Nothing lost on disconnect</h3><p>Sessions are an append-only log on your machine. Lose signal on the train and the phone catches up without gaps.</p></div></li>
+      </ul>
     </div>
   </div>
 </section>
@@ -104,20 +94,20 @@
 <section>
   <div class="wrap split">
     <div>
-      <div class="section-head" style="margin-bottom:24px">
+      <div class="section-head" style="margin-bottom:28px">
         <h2>Away from your desk, still in the loop</h2>
         <p>When an agent wants to do something with your credentials, the request comes to you, wherever you are.</p>
       </div>
       <div class="approval" aria-hidden="true">
-        <span class="bell">!</span>
-        <span><strong>1 approval waiting</strong><code>git push origin agenthost/fix-flaky-resume</code></span>
+        <span class="bell"><svg viewBox="0 0 24 24"><path d="M12 2.5a6 6 0 0 0-6 6v3.600l-1.600 3.200a1 1 0 0 0 .9 1.450h13.400a1 1 0 0 0 .9-1.450L18 12.100V8.500a6 6 0 0 0-6-6zM9.500 18.500a2.500 2.500 0 0 0 5 0z"/></svg></span>
+        <span><strong>1 approval waiting</strong><span class="cmd">git push origin agenthost/fix-flaky-resume</span></span>
         <span class="review">Review</span>
       </div>
       <ul class="checks">
         <li><strong>Approve from your phone.</strong> See the exact command and the agent's reason, then allow or deny it.</li>
-        <li><strong>Start and follow sessions.</strong> Send prompts by typing or dictating, attach photos and files, and read the transcript offline.</li>
-        <li><strong>Automations.</strong> Run a session on a schedule or when a webhook arrives, such as a Sentry alert to investigate.</li>
-        <li><strong>See the host's screen</strong> when a task needs it, for a sign-in page or an approval in a browser.</li>
+        <li><strong>Start and follow sessions.</strong> Type or dictate prompts, attach photos and files, read transcripts offline.</li>
+        <li><strong>Automate.</strong> Run a session on a schedule, or when a webhook such as a Sentry alert arrives.</li>
+        <li><strong>See the host's screen</strong> when a task needs a sign-in page or an approval in a browser.</li>
       </ul>
     </div>
     <div class="shot"><img src="/img/desktop-devices.png" width="940" height="780" loading="lazy" alt="The desktop app's Devices settings: a paired iPhone, the relay shown as connected, and switches for letting phones see and control this screen."></div>
@@ -128,7 +118,7 @@
   <div class="wrap">
     <div class="section-head">
       <h2>Set it up</h2>
-      <p>You build it from source. The host and desktop app take one script; remote access and the iPhone app are optional extras.</p>
+      <p>You build it from source. The host and desktop app take one script; remote access and the iPhone app are optional.</p>
     </div>
     <ol class="steps">
       <li><div>
@@ -159,7 +149,7 @@
 <span class="p">$ </span>open AgentHost.xcodeproj</code></pre>
       </div></li>
     </ol>
-    <p style="margin-top:20px;color:var(--text-2)">The commands keep the project's earlier name, <code>agenthost</code>. <a href="/docs/">Getting started</a> has the full walkthrough.</p>
+    <p class="after">The commands keep the project's earlier name, <code>agenthost</code>.</p>
   </div>
 </section>
 
@@ -168,13 +158,13 @@
     <div class="section-head">
       <h2>Documentation</h2>
     </div>
-    <div class="grid two">
-      <a class="card" href="/docs/"><h3>Getting started</h3><p>Prerequisites, installing, updating and uninstalling, and running it without installing.</p></a>
-      <a class="card" href="/docs/usage/"><h3>Using AgentOS</h3><p>Workspaces, quick tasks, several logins per agent, automations and webhooks.</p></a>
-      <a class="card" href="/docs/remote/"><h3>Remote access and iOS</h3><p>Deploying the relay, pairing a phone, building the app and turning on notifications.</p></a>
-      <a class="card" href="/docs/security/"><h3>Security model</h3><p>What the sandbox allows, what asks for approval, and what the relay can see.</p></a>
+    <div class="group links glass">
+      <a href="/docs/"><div><h3>Getting started</h3><p>Prerequisites, installing, updating and uninstalling, and running it without installing.</p></div><span class="chev"></span></a>
+      <a href="/docs/usage/"><div><h3>Using AgentOS</h3><p>Workspaces, quick tasks, several logins per agent, automations and webhooks.</p></div><span class="chev"></span></a>
+      <a href="/docs/remote/"><div><h3>Remote access and iOS</h3><p>Deploying the relay, pairing a phone, building the app and turning on notifications.</p></div><span class="chev"></span></a>
+      <a href="/docs/security/"><div><h3>Security model</h3><p>What the sandbox allows, what asks for approval, and what the relay can see.</p></div><span class="chev"></span></a>
     </div>
-    <p class="note" style="margin-top:28px"><strong>Early software.</strong> AgentOS is a personal project, built for one person's own use and shared in the open. It is developed mainly on Linux; macOS and the iPhone app have had less testing. <a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified, and how</a>.</p>
+    <p class="note" style="margin-top:20px"><strong>Early software.</strong> AgentOS is a personal project, built for one person's own use and shared in the open. It is developed mainly on Linux; macOS and the iPhone app have had less testing. <a href="https://github.com/Ngineer101/AgentOS/blob/main/docs/status.md">What has been verified, and how</a>.</p>
   </div>
 </section>
 </main>
