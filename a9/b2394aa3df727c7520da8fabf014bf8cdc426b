@@ -1,0 +1,21 @@
+assets/agents/codex.svg
+  s_1a823ddf0c5bb7::t_7cd4443771aa0b 1
+ios/AgentHost/Assets.xcassets/AgentCodex.imageset/codex.svg
+  s_1a823ddf0c5bb7::t_6d7529b3ba3071 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9b2394aa3df727c7520da8fabf014bf8cdc426b",
+  "prompts": {},
+  "sessions": {
+    "s_1a823ddf0c5bb7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_1a823ddf0c5bb7",
+        "model": "unknown"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
