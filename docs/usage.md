@@ -19,6 +19,16 @@ A workspace's `--profile` decides what its sessions may reach on the network
 besides the agent's own provider: any of `packages`, `github` and `web`
 (comma-separated), or `agent-only` for nothing else.
 
+Antigravity is a standalone binary, not one of the pinned tools: install it
+with `curl -fsSL https://antigravity.google/cli/install.sh | bash` (or set
+`AGENTHOST_ANTIGRAVITY_BIN`), then sign in once with the command
+`agenthost status` shows. On Linux that is
+`DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent agy acp --login`: sessions
+can't reach your keyring, so the login has to be kept in Antigravity's own
+folder (`~/.gemini/antigravity-cli`). Sessions see that folder and its
+conversations, not your plugins, MCP servers, hooks or skills in
+`~/.gemini/config`.
+
 ## Quick tasks
 
 No project needed? Use the built-in **Quick tasks** workspace: each session
@@ -42,8 +52,8 @@ folders (`agenthost project roots --set ~/Code,~/Work`);
 
 Several subscriptions of one agent (a work and a personal Claude account,
 say)? Give each its own config folder, as you would with `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME`, `GEMINI_CLI_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux
-only, `XDG_CONFIG_HOME`), and add it as a profile. New sessions then pick it,
+`CODEX_HOME`, or `XDG_DATA_HOME` for OpenCode (Cursor: Linux only,
+`XDG_CONFIG_HOME`; Antigravity: not yet), and add it as a profile. New sessions then pick it,
 here as `agent:name`, on the desktop and the phone from the agent list:
 
 ```sh

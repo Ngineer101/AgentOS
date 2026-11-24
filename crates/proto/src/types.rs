@@ -15,7 +15,10 @@ pub enum AgentKind {
     Claude,
     Opencode,
     Cursor,
-    Gemini,
+    /// Google's Antigravity CLI (`agy`). Hosts before it offered Gemini CLI
+    /// as `gemini`, which now names this agent.
+    #[serde(alias = "gemini")]
+    Antigravity,
     /// Scripted ACP agent used for tests. Only offered when the host enables it.
     Fake,
 }
@@ -26,7 +29,7 @@ impl AgentKind {
         AgentKind::Claude,
         AgentKind::Opencode,
         AgentKind::Cursor,
-        AgentKind::Gemini,
+        AgentKind::Antigravity,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -35,7 +38,7 @@ impl AgentKind {
             AgentKind::Claude => "claude",
             AgentKind::Opencode => "opencode",
             AgentKind::Cursor => "cursor",
-            AgentKind::Gemini => "gemini",
+            AgentKind::Antigravity => "antigravity",
             AgentKind::Fake => "fake",
         }
     }
@@ -46,7 +49,9 @@ impl AgentKind {
             "claude" | "claude-code" | "claude_code" => AgentKind::Claude,
             "opencode" => AgentKind::Opencode,
             "cursor" | "cursor-agent" | "cursor_agent" => AgentKind::Cursor,
-            "gemini" | "gemini-cli" | "gemini_cli" => AgentKind::Gemini,
+            "antigravity" | "antigravity-cli" | "antigravity_cli" | "agy" => AgentKind::Antigravity,
+            // Gemini CLI, which Antigravity replaced (stored sessions and profiles).
+            "gemini" | "gemini-cli" | "gemini_cli" => AgentKind::Antigravity,
             "fake" => AgentKind::Fake,
             _ => return None,
         })
@@ -59,8 +64,9 @@ impl AgentKind {
         Some(match self {
             AgentKind::Claude => "CLAUDE_CONFIG_DIR",
             AgentKind::Codex => "CODEX_HOME",
-            // The folder is Gemini's home: its state goes in `<folder>/.gemini`.
-            AgentKind::Gemini => "GEMINI_CLI_HOME",
+            // Antigravity's folder is set by a flag (`--gemini-dir`), not a
+            // setting; not offered until a separate login there is checked.
+            AgentKind::Antigravity => return None,
             // Login and history in `<folder>/opencode`.
             AgentKind::Opencode => "XDG_DATA_HOME",
             // Linux: login in `<folder>/cursor/auth.json`. On macOS Cursor
@@ -77,7 +83,7 @@ impl AgentKind {
             AgentKind::Claude => "Claude Code",
             AgentKind::Opencode => "OpenCode",
             AgentKind::Cursor => "Cursor",
-            AgentKind::Gemini => "Gemini CLI",
+            AgentKind::Antigravity => "Antigravity CLI",
             AgentKind::Fake => "Fake agent",
         }
     }
@@ -413,6 +419,10 @@ pub struct Session {
     /// The automation this session is a run of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_id: Option<String>,
+    /// When the user pinned it (`session.pin`, protocol 8): clients list
+    /// pinned sessions first, in the order they were pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_at: Option<i64>,
 }
 
 /// A pull request a session opened.
@@ -479,6 +489,13 @@ pub struct SessionRenameParams {
     /// The new title; empty or omitted clears it (the host's title shows again).
     #[serde(default)]
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionPinParams {
+    pub session_id: String,
+    /// Pin it (`true`) or unpin it (`false`).
+    pub pinned: bool,
 }
 
 /// Longest session title, in characters.
@@ -1568,6 +1585,17 @@ pub struct PushContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gemini CLI sessions and profiles, stored and sent as `gemini`, load as Antigravity.
+    #[test]
+    fn gemini_is_antigravity() {
+        assert_eq!(AgentKind::parse("gemini"), Some(AgentKind::Antigravity));
+        assert_eq!(AgentKind::parse("agy"), Some(AgentKind::Antigravity));
+        let k: AgentKind = serde_json::from_str("\"gemini\"").unwrap();
+        assert_eq!(k, AgentKind::Antigravity);
+        assert_eq!(serde_json::to_string(&k).unwrap(), "\"antigravity\"");
+        assert_eq!(AgentKind::parse(k.as_str()), Some(k));
+    }
 
     #[test]
     fn device_names_leave_out_the_id() {

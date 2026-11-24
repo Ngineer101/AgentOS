@@ -26,7 +26,8 @@ pub use types::*;
 /// 6: notifications through a relay (`push.register` `gateway`), so the
 /// host needs no APNs key.
 /// 7: images sent with prompts can be read back (`attachment.read`).
-pub const PROTOCOL_VERSION: u32 = 7;
+/// 8: pinned sessions (`session.pin`, `Session.pinned_at`).
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

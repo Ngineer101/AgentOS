@@ -1,8 +1,8 @@
 # agenthost
 
 A self-hosted agent host. A daemon on your own Linux or macOS machine runs
-**Claude Code**, **Codex**, **OpenCode**, **Cursor** and **Gemini CLI** on
-your existing subscriptions, each session inside an OS sandbox. You drive it
+**Claude Code**, **Codex**, **OpenCode**, **Cursor** and Google's
+**Antigravity CLI** (`agy`) on your existing subscriptions, each session inside an OS sandbox. You drive it
 from a desktop app, a command-line client or an iOS app; the phone reaches
 your machine through a relay you deploy yourself, which only ever carries
 ciphertext. Your code, transcripts and credentials stay on your machine.

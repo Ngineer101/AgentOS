@@ -171,7 +171,7 @@ struct DemoData {
                 Self.agent("claude", "Claude Code", profile: ("claude-personal", "Personal"), dir: "~/.claude-p"),
                 Self.agent("codex", "Codex"),
                 Self.agent("opencode", "OpenCode"),
-                Self.agent("gemini", "Gemini CLI", loggedIn: false),
+                Self.agent("antigravity", "Antigravity CLI", loggedIn: false),
             ],
             sandbox: SandboxHealthInfo(backend: "podman", ok: true, runtimeVersion: "5.2.1", problem: nil),
             relay: RelayStatusInfo(configured: true, connected: true, url: "wss://agenthost-relay.example.net", error: nil)

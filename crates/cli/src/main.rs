@@ -54,7 +54,7 @@ enum Cmd {
     Run {
         /// Workspace id or folder path.
         workspace: String,
-        /// codex, claude, opencode, cursor, gemini (or fake, if enabled);
+        /// codex, claude, opencode, cursor, antigravity (or fake, if enabled);
         /// add :name for a profile, e.g. claude:work.
         agent: String,
         prompt: String,
@@ -130,10 +130,10 @@ enum AgentCmd {
     /// Every agent login: the default ones and the profiles.
     List,
     /// Add a profile: another login of an agent, kept in its own config
-    /// folder (what CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CLI_HOME or
-    /// XDG_DATA_HOME for OpenCode point at). Use it as agent:name.
+    /// folder (what CLAUDE_CONFIG_DIR, CODEX_HOME, or XDG_DATA_HOME for
+    /// OpenCode point at). Use it as agent:name.
     Add {
-        /// codex, claude, opencode, cursor or gemini.
+        /// codex, claude, opencode or cursor.
         agent: String,
         /// A short name, e.g. work.
         name: String,
@@ -883,7 +883,7 @@ async fn resolve_workspace(c: &Client, s: &str) -> Result<Workspace> {
 
 fn parse_agent(s: &str) -> Result<AgentKind> {
     AgentKind::parse(s).ok_or_else(|| {
-        anyhow!("unknown agent {s:?}; use codex, claude, opencode, cursor or gemini")
+        anyhow!("unknown agent {s:?}; use codex, claude, opencode, cursor or antigravity")
     })
 }
 

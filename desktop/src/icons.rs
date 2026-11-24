@@ -74,6 +74,14 @@ icon!(CLOCK, "ah-clock", 14.0, r#"<circle cx="7" cy="7" r="5.8" stroke="currentC
 icon!(HOOK, "ah-hook", 14.0, r#"<circle cx="7" cy="3.2" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="3" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="11" cy="10.6" r="1.8" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M6.1 4.8L3.9 9M7.9 4.8l2.2 4.2M4.8 10.6h4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#);
 icon!(PLAY, "ah-play", 14.0, r#"<path d="M4 2.6v8.8a.6.6 0 0 0 .9.5l7-4.4a.6.6 0 0 0 0-1L4.9 2.1a.6.6 0 0 0-.9.5z" fill="currentColor"/>"#);
 
+// The compact sidebar: a pull request the session opened, pin and unpin, archive, and the
+// Workspaces heading's Add Folder.
+icon!(PULL_REQUEST, "ah-pr", 12.0, r#"<circle cx="3" cy="2.6" r="1.4" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="3" cy="9.4" r="1.4" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="9" cy="9.4" r="1.4" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M3 4v4M9 8V5.2a1.6 1.6 0 0 0-1.6-1.6H5.4M6.6 2.4L5.4 3.6l1.2 1.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
+icon!(PIN, "ah-pin", 14.0, r#"<path d="M5 1.6h4l-.5 3.5 2.4 2.3v1.1H3.1V7.4l2.4-2.3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 8.5v3.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#);
+icon!(UNPIN, "ah-unpin", 14.0, r#"<path d="M5 1.6h4l-.5 3.5 2.4 2.3v1.1H3.1V7.4l2.4-2.3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 8.5v3.9M1.8 1.8l10.4 10.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#);
+icon!(ARCHIVE, "ah-archive", 14.0, r#"<rect x="1.5" y="2.3" width="11" height="3.2" rx="0.9" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M2.6 5.5v5.4a1.1 1.1 0 0 0 1.1 1.1h6.6a1.1 1.1 0 0 0 1.1-1.1V5.5M5.6 8h2.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#);
+icon!(FOLDER_PLUS, "ah-folder-plus", 15.0, r#"<path d="M1 3.5a1.4 1.4 0 0 1 1.4-1.4h3l1.4 1.5h5.2a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H2.4A1.4 1.4 0 0 1 1 11z" stroke="currentColor" stroke-width="1.25" fill="none"/><path d="M7.2 5.9v4M5.2 7.9h4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>"#);
+
 // The agents' own marks (assets/agents/, from LobeHub's icon set), in their element's colour:
 // the badge's ink on its brand tile, or the model chip's text colour.
 macro_rules! agent_logo {
@@ -84,7 +92,7 @@ macro_rules! agent_logo {
 
 agent_logo!(LOGO_CLAUDE, "ah-logo-claude", "claude.svg");
 agent_logo!(LOGO_CODEX, "ah-logo-codex", "codex.svg");
-agent_logo!(LOGO_GEMINI, "ah-logo-gemini", "gemini.svg");
+agent_logo!(LOGO_ANTIGRAVITY, "ah-logo-antigravity", "antigravity.svg");
 agent_logo!(LOGO_OPENCODE, "ah-logo-opencode", "opencode.svg");
 agent_logo!(LOGO_CURSOR, "ah-logo-cursor", "cursor.svg");
 
@@ -94,7 +102,7 @@ pub fn agent_logo(agent: agenthost_proto::AgentKind) -> Option<&'static Icon> {
     match agent {
         A::Claude => Some(&LOGO_CLAUDE),
         A::Codex => Some(&LOGO_CODEX),
-        A::Gemini => Some(&LOGO_GEMINI),
+        A::Antigravity => Some(&LOGO_ANTIGRAVITY),
         A::Opencode => Some(&LOGO_OPENCODE),
         A::Cursor => Some(&LOGO_CURSOR),
         A::Fake => None,
@@ -140,7 +148,7 @@ mod tests {
         }
         same!("claude.svg", "AgentClaude");
         same!("codex.svg", "AgentCodex");
-        same!("gemini.svg", "AgentGemini");
+        same!("antigravity.svg", "AgentAntigravity");
         same!("opencode.svg", "AgentOpenCode");
         same!("cursor.svg", "AgentCursor");
     }

@@ -11,9 +11,11 @@ enum Route: Hashable {
     case automation(String)
 }
 
-/// Sessions grouped by workspace (Quick tasks first) under a large title with
-/// the host's name; Search and Compose in glass at the bottom, Settings at
-/// the top right.
+/// Sessions grouped by workspace (Quick tasks first). The host's name and
+/// status sit at the top left of the navigation bar, level with Screen and
+/// Settings at the top right; Search and New in glass at the bottom. Each
+/// workspace's name is the first row of its card; tapping it collapses the
+/// workspace into that row, or expands it again.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var path: [Route] = []
@@ -24,6 +26,18 @@ struct SessionsView: View {
     @State private var search = ""
     /// Asking before archiving a live session.
     @State private var archiving: SessionInfo?
+    /// Workspaces collapsed on this phone: their ids, one per line.
+    @AppStorage("collapsedWorkspaces") private var collapsedIds = ""
+
+    private var collapsed: Set<String> {
+        Set(collapsedIds.split(separator: "\n").map(String.init))
+    }
+
+    private func toggleCollapsed(_ workspaceId: String) {
+        var ids = collapsed
+        if ids.remove(workspaceId) == nil { ids.insert(workspaceId) }
+        collapsedIds = ids.sorted().joined(separator: "\n")
+    }
 
     private var groups: [SessionGroup] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -41,14 +55,6 @@ struct SessionsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                Section {
-                    HostStatusLine()
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-                        .frame(height: 20)
-                }
-                .listSectionSpacing(14)
-
                 if model.showsConnectionStatus {
                     Section {
                         ConnectionStatusRow()
@@ -69,42 +75,55 @@ struct SessionsView: View {
                 }
 
                 ForEach(groups) { group in
+                    // Searching shows every match, collapsed or not.
+                    let isCollapsed = search.isEmpty && collapsed.contains(group.workspaceId)
                     Section {
-                        ForEach(group.sessions) { s in
-                            NavigationLink(value: Route.session(s.sessionId)) {
-                                SessionRow(session: s)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                        WorkspaceRow(
+                            title: model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName,
+                            sessions: group.sessions,
+                            collapsed: isCollapsed,
+                            toggle: search.isEmpty ? { toggleCollapsed(group.workspaceId) } : nil
+                        )
+                        .listRowSeparator(.hidden)
+                        if !isCollapsed {
+                            ForEach(group.sessions) { s in
+                                NavigationLink(value: Route.session(s.sessionId)) {
+                                    SessionRow(session: s)
                                 }
-                                .tint(.indigo)
-                            }
-                            .contextMenu {
-                                Button {
-                                    archiving = s
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.indigo)
+                                }
+                                .contextMenu {
+                                    Button {
+                                        archiving = s
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
                                 }
                             }
                         }
-                    } header: {
-                        GroupHeader(model.isQuickTasks(group.workspaceId) ? "Quick tasks" : group.workspaceName)
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .animation(.default, value: model.showsConnectionStatus)
+            .animation(.bouncy, value: collapsedIds)
+            // An archived row fades out of the list straight away.
+            .animation(.default, value: model.archiving)
+            .sensoryFeedback(.selection, trigger: collapsedIds)
             .environment(\.defaultMinListRowHeight, 20)
-            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.top, 14, for: .scrollContent)
             .overlay {
-                if model.sessions.isEmpty {
+                if model.groupedSessions.isEmpty {
                     ContentUnavailableView {
                         Label("No Sessions", systemImage: "rectangle.stack")
                     } description: {
-                        Text("Start one with the compose button.")
+                        Text("Start one with the + button.")
                     }
                 } else if groups.isEmpty {
                     ContentUnavailableView.search(text: search)
@@ -117,8 +136,12 @@ struct SessionsView: View {
                     model.retryNow()
                 }
             }
+            // The title stays for the back button in pushed screens; the
+            // bar shows HostTitleItem instead.
             .navigationTitle(model.hostName)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                HostTitleItem()
                 if model.screenStatus?.policy.enabled == true {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -237,7 +260,7 @@ struct SessionsView: View {
     #endif
 }
 
-/// Search and Compose at the bottom: the system search field in the bottom
+/// Search and New at the bottom: the system search field in the bottom
 /// glass toolbar on iOS 26; a material capsule and a tinted circle before.
 private struct SessionsBottomBar: ViewModifier {
     @Binding var search: String
@@ -253,7 +276,7 @@ private struct SessionsBottomBar: ViewModifier {
                     ToolbarSpacer(.fixed, placement: .bottomBar)
                     ToolbarItem(placement: .bottomBar) {
                         Button(action: compose) {
-                            Image(systemName: "square.and.pencil")
+                            NewSessionIcon()
                         }
                         .buttonStyle(.glassProminent)
                         .disabled(!canCompose)
@@ -282,7 +305,7 @@ private struct SessionsBottomBar: ViewModifier {
                         .frame(height: 48)
                         .glassSurface(Capsule())
                         Button(action: compose) {
-                            Image(systemName: "square.and.pencil")
+                            NewSessionIcon()
                                 .foregroundStyle(.white)
                         }
                         .buttonStyle(GlassCircleButtonStyle(size: 48, tint: .accentColor))
@@ -296,16 +319,98 @@ private struct SessionsBottomBar: ViewModifier {
     }
 }
 
-/// "● Connected · 4 sessions" under the large title.
+/// The New session button's glyph: a bold plus, large enough to fill the
+/// button.
+private struct NewSessionIcon: View {
+    var body: some View {
+        Image(systemName: "plus")
+            .font(.title2.weight(.semibold))
+            .imageScale(.large)
+    }
+}
+
+/// The host's name over "● Connected · 4 sessions", at the top left of the
+/// sessions list's navigation bar, without the glass capsule iOS 26 would
+/// put behind it. The inline title is hidden by an empty principal item.
+struct HostTitleItem: ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(iOS 26, *) {
+            title.sharedBackgroundVisibility(.hidden)
+            blank.sharedBackgroundVisibility(.hidden)
+        } else {
+            title
+            blank
+        }
+    }
+
+    private var title: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            HostTitle()
+        }
+    }
+
+    private var blank: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct HostTitle: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        // The bar sizes a leading item by its compressed width, which for
+        // one-line text is a letter and "…"; IdealWidth asks for the full
+        // width instead, capped so a long name can't reach the buttons.
+        IdealWidth(max: 220) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.hostName)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HostStatusLine()
+            }
+        }
+        .padding(.leading, 4)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Sizes its content at its ideal width, up to `max`, whatever width it is
+/// offered (truncating beyond `max`). Like `fixedSize()`, but capped.
+private struct IdealWidth: Layout {
+    let max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let width = min(content.sizeThatFits(.unspecified).width, max)
+        return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
+}
+
+/// "● Connected · 4 sessions" under the host's name.
 struct HostStatusLine: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let line = Line(model: model)
-        HStack(spacing: 6) {
-            Circle().fill(line.color).frame(width: 8, height: 8)
+        HStack(spacing: 5) {
+            Circle().fill(line.color).frame(width: 7, height: 7)
             Text(line.text)
-                .font(.subheadline)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -350,6 +455,97 @@ struct GroupHeader: View {
             .font(.footnote)
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// A workspace's name as the first row of its card. Expanded: small
+/// capitals above the sessions, a chevron pointing down. Collapsed: the
+/// sessions fold away and the name grows into a headline with a jump, over
+/// the session count and the most urgent status; the chevron turns to point
+/// right like the session rows. `toggle` is nil while searching: then there
+/// is no chevron and nothing to tap.
+struct WorkspaceRow: View {
+    let title: String
+    let sessions: [SessionInfo]
+    let collapsed: Bool
+    var toggle: (() -> Void)?
+
+    /// How far the name rises and how much it grows mid-jump.
+    private struct Jump {
+        var lift = 0.0
+        var scale = 1.0
+    }
+
+    var body: some View {
+        if let toggle {
+            Button(action: toggle) { content }
+                .buttonStyle(.plain)
+                .accessibilityValue(collapsed ? "Collapsed, \(summary)" : "Expanded")
+                .accessibilityHint(collapsed ? "Shows this project's sessions" : "Hides this project's sessions")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(collapsed ? .headline : .footnote)
+                    .textCase(collapsed ? nil : .uppercase)
+                    .foregroundStyle(collapsed ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .keyframeAnimator(initialValue: Jump(), trigger: collapsed) { name, jump in
+                        name
+                            .scaleEffect(jump.scale, anchor: .leading)
+                            .offset(y: -jump.lift)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.lift) {
+                            SpringKeyframe(6, duration: 0.14, spring: .snappy)
+                            SpringKeyframe(0, duration: 0.5, spring: .bouncy(extraBounce: 0.15))
+                        }
+                        KeyframeTrack(\.scale) {
+                            SpringKeyframe(1.06, duration: 0.14, spring: .snappy)
+                            SpringKeyframe(1, duration: 0.5, spring: .bouncy(extraBounce: 0.15))
+                        }
+                    }
+                if collapsed {
+                    HStack(spacing: 5) {
+                        SessionStatusMark(status: urgent)
+                        Text(summary)
+                            .font(.footnote)
+                            .foregroundStyle(urgent == .needsYou || urgent == .failed ? urgent.color : .secondary)
+                            .lineLimit(1)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if toggle != nil {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+            }
+        }
+        .padding(.vertical, collapsed ? 2 : -4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// The status that most needs attention among the workspace's sessions.
+    private var urgent: SessionStatus {
+        let all = sessions.map { SessionStatus(state: $0.state) }
+        let order: [SessionStatus] = [.needsYou, .failed, .working, .yourTurn]
+        return order.first { all.contains($0) } ?? .ended
+    }
+
+    /// "3 sessions · Needs approval"
+    private var summary: String {
+        let n = sessions.count
+        return "\(n) \(n == 1 ? "session" : "sessions") · \(urgent.label)"
     }
 }
 

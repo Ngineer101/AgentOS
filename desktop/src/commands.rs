@@ -254,8 +254,7 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
         }
         Cmd::Search => {
             s.close_overlays();
-            s.sidebar_open = true;
-            s.search.focused = true;
+            s.open_search();
         }
         Cmd::ToggleSidebar => s.sidebar_open = !s.sidebar_open,
         Cmd::Settings => s.open_settings(Tab::General),

@@ -12,8 +12,6 @@ use std::sync::Mutex;
 pub const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp@2.6.0";
 pub const CLAUDE_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp@0.107.0";
 pub const SANDBOX_RUNTIME_PACKAGE: &str = "@anthropic-ai/sandbox-runtime@0.0.83";
-/// Gemini CLI speaks ACP itself (`gemini --acp`).
-pub const GEMINI_CLI_PACKAGE: &str = "@google/gemini-cli@0.68.0";
 /// Oldest OpenCode with a working `opencode acp`.
 pub const OPENCODE_MIN_MAJOR: u32 = 2;
 
@@ -71,20 +69,6 @@ impl AgentSpec {
     }
 }
 
-/// Gemini system settings: they override your own `~/.gemini/settings.json`.
-/// Only the host's gateway as MCP server; no hooks, extensions, skills,
-/// auto-update or usage statistics.
-pub const GEMINI_SYSTEM_SETTINGS: &str = r#"{
-  "general": {"enableAutoUpdate": false, "enableAutoUpdateNotification": false, "enableNotifications": false},
-  "privacy": {"usageStatisticsEnabled": false},
-  "telemetry": {"enabled": false},
-  "mcp": {"allowed": ["agenthost"]},
-  "hooksConfig": {"enabled": false},
-  "skills": {"enabled": false},
-  "admin": {"extensions": {"enabled": false}, "skills": {"enabled": false}},
-  "security": {"folderTrust": {"enabled": false}}
-}"#;
-
 /// Every real agent's credential and state paths, so each sandbox can deny
 /// the other agents' credentials.
 pub fn all_credential_paths(home: &Path) -> Vec<(AgentKind, PathBuf)> {
@@ -97,8 +81,34 @@ pub fn all_credential_paths(home: &Path) -> Vec<(AgentKind, PathBuf)> {
         (AgentKind::Cursor, home.join(".config/cursor")),
         (AgentKind::Cursor, home.join(".cursor")),
         (AgentKind::Cursor, home.join(CURSOR_STATE)),
-        (AgentKind::Gemini, home.join(".gemini")),
+        (AgentKind::Antigravity, home.join(".gemini")),
     ]
+}
+
+/// Antigravity's own folders in `~/.gemini`: settings, logs and the login it
+/// saves when the keyring is out of reach (`antigravity-cli`), and its
+/// conversations (`antigravity`). The rest of `~/.gemini` is yours: plugins,
+/// MCP servers, hooks, skills and rules in `config`, and Gemini CLI's files.
+pub const ANTIGRAVITY_STATE: &[&str] = &[".gemini/antigravity-cli", ".gemini/antigravity"];
+
+/// Your Antigravity customizations, hidden from its sessions: they would add
+/// MCP servers that bypass the gateway, hooks and plugins.
+pub const ANTIGRAVITY_PERSONAL: &[&str] = &[
+    ".gemini/config",
+    ".gemini/skills",
+    ".gemini/extensions",
+    ".gemini/commands",
+];
+
+/// Signs Antigravity in from a terminal. On Linux the session's sandbox can't
+/// reach the keyring (D-Bus), so the login is made without it too, which
+/// makes Antigravity keep it in its own folder, where the session can read it.
+pub fn antigravity_login_fix(program: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("{program} acp --login")
+    } else {
+        format!("DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent {program} acp --login")
+    }
 }
 
 /// Cursor's config and data folder inside agenthost sessions (instead of
@@ -527,53 +537,53 @@ pub fn spec(kind: AgentKind, cfg: &HostConfig) -> AgentSpec {
                 other_logins: vec![],
             }
         }
-        AgentKind::Gemini => {
-            let pinned = bin.join("gemini");
-            let program = std::env::var_os("AGENTHOST_GEMINI_BIN")
-                .map(PathBuf::from)
-                .or_else(|| pinned.is_file().then(|| pinned.clone()))
-                .or_else(|| find_in_path("gemini").into_iter().next())
-                .unwrap_or(pinned);
-            let mut read_paths = vec![cfg.tools_dir.clone()];
-            read_paths.extend(install_root(&program));
-            let program_for_fix = program.clone();
+        AgentKind::Antigravity => {
+            let program = find_program("AGENTHOST_ANTIGRAVITY_BIN", &["agy"])
+                .or_else(|| {
+                    let p = home.join(".local/bin/agy");
+                    p.is_file().then_some(p)
+                })
+                .unwrap_or_else(|| PathBuf::from("agy"));
+            let on_path = find_in_path("agy").first() == Some(&program);
+            let login_fix = antigravity_login_fix(&if on_path {
+                "agy".to_string()
+            } else {
+                shell_quote(&program)
+            });
             AgentSpec {
                 kind,
+                read_paths: real_parent(&program),
                 program,
-                args: vec![
-                    "--acp".into(),
-                    "--allowed-mcp-server-names".into(),
-                    "agenthost".into(),
-                ],
-                env: vec![("GEMINI_CLI_NO_RELAUNCH".into(), "true".into())],
+                // Its own terminal sandbox stays off (it is opt-in with
+                // `--sandbox`): ours is the boundary.
+                args: vec!["acp".into(), "--disable-telemetry".into()],
+                env: vec![],
                 hosts: vec![
-                    "generativelanguage.googleapis.com".into(),
                     "cloudcode-pa.googleapis.com".into(),
+                    "daily-cloudcode-pa.googleapis.com".into(),
+                    "aicode.googleapis.com".into(),
+                    "businessaicode.googleapis.com".into(),
+                    "generativelanguage.googleapis.com".into(),
+                    "aiplatform.googleapis.com".into(),
                     "oauth2.googleapis.com".into(),
+                    "sts.googleapis.com".into(),
+                    "iamcredentials.googleapis.com".into(),
                     "www.googleapis.com".into(),
+                    "antigravity.google".into(),
                 ],
-                state_paths: vec![home.join(".gemini")],
-                read_paths,
-                credential_paths: vec![home.join(".gemini/oauth_creds.json")],
-                login_fix: format!(
-                    "{} (choose \"Sign in with Google\", then quit)",
-                    if find_in_path("gemini").first() == Some(&program_for_fix) {
-                        "gemini".to_string()
-                    } else {
-                        program_for_fix.display().to_string()
-                    }
-                ),
-                install_fix: "agenthostd install-tools".into(),
+                state_paths: ANTIGRAVITY_STATE.iter().map(|p| home.join(p)).collect(),
+                // The login is in the keyring or a file whose name Antigravity
+                // doesn't document; its folder appears once you have run it.
+                credential_paths: vec![home.join(ANTIGRAVITY_STATE[0])],
+                login_fix,
+                install_fix: "curl -fsSL https://antigravity.google/cli/install.sh | bash (or set AGENTHOST_ANTIGRAVITY_BIN)".into(),
                 session_mode: None,
                 session_meta: None,
-                deny_read: vec![],
+                deny_read: ANTIGRAVITY_PERSONAL.iter().map(|p| home.join(p)).collect(),
                 host_xdg_config: None,
-                host_config_file: Some((
-                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-                    "gemini/system-settings.json",
-                    GEMINI_SYSTEM_SETTINGS,
-                )),
-                auth_method: Some("oauth-personal"),
+                host_config_file: None,
+                auth_method: None,
+                // Its MCP client may not use HTTP_PROXY.
                 direct_gateway: true,
                 profile: None,
                 profile_problem: None,
@@ -626,11 +636,8 @@ pub fn spec_for(kind: AgentKind, profile: Option<&AgentProfile>, cfg: &HostConfi
             s.credential_paths = vec![dir.join("auth.json")];
             s.login_fix = with_env("codex login");
         }
-        AgentKind::Gemini => {
-            s.state_paths = vec![dir.clone()];
-            s.credential_paths = vec![dir.join(".gemini/oauth_creds.json")];
-            s.login_fix = with_env(&s.login_fix);
-        }
+        // No profiles (see `AgentKind::profile_env`).
+        AgentKind::Antigravity => {}
         AgentKind::Opencode => {
             let default = home.join(".local/share/opencode");
             s.state_paths.retain(|x| x != &default);
@@ -663,7 +670,7 @@ pub fn status_for(kind: AgentKind, profile: Option<&AgentProfile>, cfg: &HostCon
     let s = spec_for(kind, profile, cfg);
     let installed = s.program.is_file();
     let version = match kind {
-        AgentKind::Opencode | AgentKind::Cursor | AgentKind::Gemini | AgentKind::Fake
+        AgentKind::Opencode | AgentKind::Cursor | AgentKind::Antigravity | AgentKind::Fake
             if installed =>
         {
             program_version(&s.program)
