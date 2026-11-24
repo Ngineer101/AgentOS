@@ -113,11 +113,13 @@ struct SessionsView: View {
             .listStyle(.insetGrouped)
             .animation(.default, value: model.showsConnectionStatus)
             .animation(.bouncy, value: collapsedIds)
+            // An archived row fades out of the list straight away.
+            .animation(.default, value: model.archiving)
             .sensoryFeedback(.selection, trigger: collapsedIds)
             .environment(\.defaultMinListRowHeight, 20)
             .contentMargins(.top, 14, for: .scrollContent)
             .overlay {
-                if model.sessions.isEmpty {
+                if model.groupedSessions.isEmpty {
                     ContentUnavailableView {
                         Label("No Sessions", systemImage: "rectangle.stack")
                     } description: {

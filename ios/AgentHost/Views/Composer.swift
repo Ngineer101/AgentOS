@@ -334,9 +334,14 @@ private final class LevelBox: @unchecked Sendable {
 }
 
 /// iOS's own dictation (the Speech framework), with a level meter and the
-/// text so far while you talk. Recognition stays on the phone where the
-/// device supports it; the host's speech model is not used here. Stops by
-/// itself after five minutes or when the audio is interrupted (`onAutoStop`).
+/// text so far while you talk. On iOS 26 it uses `SpeechTranscriber`, the
+/// long-form model Notes and Voice Memos use, which is much more accurate
+/// and doesn't start over after a pause; before that, or until the model
+/// for the language is on the phone, `SFSpeechRecognizer`. Either way
+/// recognition stays on the phone where the device supports it; the host's
+/// speech model is not used here. Words from the workspaces and the session
+/// (`vocabulary`) are hints to both. Stops by itself after five minutes or
+/// when the audio is interrupted (`onAutoStop`).
 @MainActor
 final class SpeechDictation: ObservableObject {
     nonisolated static let maxDuration: TimeInterval = 5 * 60
@@ -350,6 +355,8 @@ final class SpeechDictation: ObservableObject {
     }
 
     @Published private(set) var isListening = false
+    /// Getting the recognizer ready, before listening.
+    @Published private(set) var isStarting = false
     /// Waiting for the final text after Stop.
     @Published private(set) var isFinishing = false
     @Published private(set) var elapsed: TimeInterval = 0
@@ -366,12 +373,16 @@ final class SpeechDictation: ObservableObject {
     private let level = LevelBox()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    /// The iOS 26 `Transcription`, when that is what's listening. (Stored
+    /// properties can't have a newer type than the app's minimum iOS.)
+    private var transcription: AnyObject?
     private var startedAt = Date()
     private var meterTask: Task<Void, Never>?
     private var finished: CheckedContinuation<Void, Never>?
     /// Recognition delivered its final result or ended with an error.
     private var recognitionDone = false
-    /// Counts dictations, so a timeout left from an earlier one is ignored.
+    /// Counts dictations, so a timeout or late result left from an earlier
+    /// one is ignored.
     private var generation = 0
     /// What was heard before the recognizer last started over. After a pause
     /// iOS begins a new transcription, and its results then hold only the
@@ -406,29 +417,60 @@ final class SpeechDictation: ObservableObject {
         }
     }
 
-    func start() throws {
-        guard !isListening, !isFinishing else { return }
-        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
-            throw ComposerError(message: "Dictation is not available right now.")
-        }
+    /// Start listening. `vocabulary`: names and terms the speaker is likely
+    /// to use (workspaces, the session, agents), as hints to the recognizer.
+    func start(vocabulary: [String] = []) async throws {
+        guard !isListening, !isFinishing, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+        let hints = Self.hints(vocabulary)
+
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
-
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        req.taskHint = .dictation
-        req.addsPunctuation = true
-        // Keep the audio on the phone when the device can recognize it there.
-        if recognizer.supportsOnDeviceRecognition {
-            req.requiresOnDeviceRecognition = true
-        }
-
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        text = ""
+        committed = ""
+        lastPartial = ""
+        recognitionDone = false
+        generation += 1
+        // Results from a dictation since ended don't touch this one.
+        let current = generation
+
         let box = level
+        let feed: @Sendable (AVAudioPCMBuffer) -> Void
+        do {
+            if #available(iOS 26, *),
+               let t = try await Transcription.make(
+                   inputFormat: format, vocabulary: hints,
+                   onText: { [weak self] heard in
+                       guard let self, self.generation == current, self.isListening || self.isFinishing else { return }
+                       self.text = heard
+                   },
+                   onEnd: { [weak self] in
+                       guard let self, self.generation == current else { return }
+                       self.handle(nil, done: true)
+                   }) {
+                transcription = t
+                feed = t.audioFeed
+            } else {
+                feed = try startRecognizer(hints: hints, generation: current)
+            }
+        } catch {
+            deactivateSession()
+            throw error
+        }
+        guard generation == current else {
+            // Cancelled while getting ready.
+            discardRecognition()
+            cleanUp()
+            deactivateSession()
+            return
+        }
+
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            req.append(buffer)
+            feed(buffer)
             box.set(Self.level(of: buffer))
         }
         engine.prepare()
@@ -436,20 +478,10 @@ final class SpeechDictation: ObservableObject {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
+            endRecognition()
+            cleanUp()
             deactivateSession()
             throw error
-        }
-
-        request = req
-        text = ""
-        committed = ""
-        lastPartial = ""
-        recognitionDone = false
-        generation += 1
-        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            let partial = result?.bestTranscription.formattedString
-            let done = (result?.isFinal ?? false) || error != nil
-            Task { @MainActor in self?.handle(partial, done: done) }
         }
         startedAt = Date()
         elapsed = 0
@@ -464,12 +496,80 @@ final class SpeechDictation: ObservableObject {
         }
     }
 
+    /// `SFSpeechRecognizer`, for iPhones before iOS 26 (or without the
+    /// newer model for this language yet). Returns what takes the audio.
+    private func startRecognizer(hints: [String], generation current: Int) throws -> @Sendable (AVAudioPCMBuffer) -> Void {
+        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
+            throw ComposerError(message: "Dictation is not available right now.")
+        }
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.taskHint = .dictation
+        req.addsPunctuation = true
+        req.contextualStrings = hints
+        // Keep the audio on the phone when the device can recognize it there.
+        if recognizer.supportsOnDeviceRecognition {
+            req.requiresOnDeviceRecognition = true
+        }
+        request = req
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            let partial = result?.bestTranscription.formattedString
+            let done = (result?.isFinal ?? false) || error != nil
+            Task { @MainActor in
+                guard let self, self.generation == current else { return }
+                self.handle(partial, done: done)
+            }
+        }
+        nonisolated(unsafe) let r = req
+        return { buffer in r.append(buffer) }
+    }
+
+    /// Terms dictated to a coding agent that general dictation tends to get
+    /// wrong, offered with the caller's own words.
+    nonisolated static let developerTerms = [
+        "Claude", "Codex", "Antigravity", "AgentHost", "repo", "PR", "pull request",
+        "commit", "rebase", "merge conflict", "branch", "diff", "refactor", "lint",
+        "README", "JSON", "YAML", "API", "CLI", "SDK", "npm", "cargo", "Rust",
+        "Swift", "SwiftUI", "TypeScript", "Xcode", "GitHub", "localhost", "async",
+        "endpoint", "stack trace", "regex", "env var", "TODO",
+    ]
+
+    /// The caller's words then `developerTerms`, each once, at most 100
+    /// (Apple's advice for contextual strings).
+    nonisolated static func hints(_ vocabulary: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for w in vocabulary + developerTerms {
+            let t = w.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty, t.count <= 60, seen.insert(t.lowercased()).inserted else { continue }
+            out.append(t)
+            if out.count == 100 { break }
+        }
+        return out
+    }
+
+    /// No more audio: the recognizer finishes what it heard.
+    private func endRecognition() {
+        request?.endAudio()
+        if #available(iOS 26, *), let t = transcription as? Transcription {
+            t.endAudio()
+        }
+    }
+
+    /// Throw away what the recognizer has.
+    private func discardRecognition() {
+        task?.cancel()
+        if #available(iOS 26, *), let t = transcription as? Transcription {
+            t.cancel()
+        }
+    }
+
     /// Stop listening and return the final text (empty if nothing was heard).
     func stop() async -> String {
         guard isListening else { return "" }
         stopAudio()
         isFinishing = true
-        request?.endAudio()
+        endRecognition()
         if !recognitionDone {
             // The final result normally follows within a moment; don't wait forever.
             let current = generation
@@ -500,9 +600,14 @@ final class SpeechDictation: ObservableObject {
 
     /// Stop and throw the text away.
     func cancel() {
+        if isStarting {
+            // `start` notices and doesn't begin.
+            generation += 1
+            return
+        }
         guard isListening || isFinishing else { return }
         stopAudio()
-        task?.cancel()
+        discardRecognition()
         finish()
         cleanUp()
         text = ""
@@ -572,6 +677,7 @@ final class SpeechDictation: ObservableObject {
     private func cleanUp() {
         task = nil
         request = nil
+        transcription = nil
         isFinishing = false
     }
 
@@ -603,6 +709,149 @@ final class SpeechDictation: ObservableObject {
         let rms = (sum / Float(n)).squareRoot()
         let db = 20 * log10(max(rms, 1e-7))
         return max(0, min(1, (db + 50) / 50))
+    }
+}
+
+/// One dictation with iOS 26's `SpeechAnalyzer` and `SpeechTranscriber`.
+/// The microphone's audio is converted to the model's format and streamed
+/// in; finished phrases stay and the one still being heard is revised as
+/// you talk. `make` gives nil when this iPhone or its language can't use
+/// the model, or its model isn't downloaded yet: the download then starts
+/// for next time and `SFSpeechRecognizer` takes this one.
+@available(iOS 26, *)
+@MainActor
+private final class Transcription {
+    private let analyzer: SpeechAnalyzer
+    private let input: AsyncStream<AnalyzerInput>.Continuation
+    private var results: Task<Void, Never>?
+    /// Phrases the model has settled on, and its guess at the one after.
+    private var settled = ""
+    private var heard = ""
+    /// Takes the microphone's buffers, on the audio thread.
+    let audioFeed: @Sendable (AVAudioPCMBuffer) -> Void
+
+    /// Starts one for the phone's language.
+    static func make(
+        inputFormat: AVAudioFormat,
+        vocabulary: [String],
+        onText: @escaping @MainActor (String) -> Void,
+        onEnd: @escaping @MainActor () -> Void
+    ) async throws -> Transcription? {
+        guard SpeechTranscriber.isAvailable,
+              let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) else { return nil }
+        let transcriber = SpeechTranscriber(
+            locale: locale, transcriptionOptions: [],
+            reportingOptions: [.volatileResults], attributeOptions: [])
+        let installed = await SpeechTranscriber.installedLocales
+        guard installed.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) else {
+            // iOS keeps these models for every app; fetch it for next time.
+            Task {
+                try? await AssetInventory.assetInstallationRequest(supporting: [transcriber])?.downloadAndInstall()
+            }
+            return nil
+        }
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]),
+              let feed = AudioFeed(from: inputFormat, to: format) else { return nil }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        if !vocabulary.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = vocabulary
+            // Only hints: dictation works without them.
+            try? await analyzer.setContext(context)
+        }
+        let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
+        try await analyzer.start(inputSequence: stream)
+        let t = Transcription(analyzer: analyzer, input: input, feed: feed)
+        t.results = Task { [weak t] in
+            do {
+                for try await result in transcriber.results {
+                    guard let t else { break }
+                    let piece = String(result.text.characters)
+                    if result.isFinal {
+                        t.settled = Transcription.appending(t.settled, piece)
+                        t.heard = ""
+                    } else {
+                        t.heard = piece
+                    }
+                    onText(Transcription.appending(t.settled, t.heard))
+                }
+            } catch {}
+            onEnd()
+        }
+        return t
+    }
+
+    private init(analyzer: SpeechAnalyzer, input: AsyncStream<AnalyzerInput>.Continuation, feed: AudioFeed) {
+        self.analyzer = analyzer
+        self.input = input
+        audioFeed = { buffer in
+            if let converted = feed.convert(buffer) {
+                input.yield(AnalyzerInput(buffer: converted))
+            }
+        }
+    }
+
+    /// No more audio: the last phrase is settled, then the results end.
+    func endAudio() {
+        input.finish()
+        let analyzer = analyzer
+        Task {
+            do {
+                try await analyzer.finalizeAndFinishThroughEndOfInput()
+            } catch {
+                await analyzer.cancelAndFinishNow()
+            }
+        }
+    }
+
+    func cancel() {
+        input.finish()
+        results?.cancel()
+        let analyzer = analyzer
+        Task { await analyzer.cancelAndFinishNow() }
+    }
+
+    /// Phrases come with their own leading space, or not; one between them.
+    nonisolated static func appending(_ a: String, _ b: String) -> String {
+        if a.isEmpty { return b.trimmingCharacters(in: .whitespaces) }
+        if b.isEmpty { return a }
+        if a.last?.isWhitespace == true || b.first?.isWhitespace == true { return a + b }
+        return a + " " + b
+    }
+}
+
+/// Converts the microphone's buffers (often 48 kHz float) to the format
+/// the speech model takes, on the audio thread.
+private final class AudioFeed: @unchecked Sendable {
+    private let converter: AVAudioConverter
+    private let format: AVAudioFormat
+
+    init?(from input: AVAudioFormat, to format: AVAudioFormat) {
+        guard let c = AVAudioConverter(from: input, to: format) else { return nil }
+        // No priming frames, so each buffer converts on its own.
+        c.primeMethod = .none
+        converter = c
+        self.format = format
+    }
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        if buffer.format == format { return buffer }
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up))
+        guard capacity > 0, let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+        var given = false
+        var error: NSError?
+        let status = converter.convert(to: out, error: &error) { _, inputStatus in
+            if given {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            given = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, error == nil, out.frameLength > 0 else { return nil }
+        return out
     }
 }
 
