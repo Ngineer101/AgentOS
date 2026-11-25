@@ -523,7 +523,10 @@ fn area(t: &Theme, edit: &TextEdit, key: &str, placeholder: &str, access: fn(&mu
         .color(t.text)
         .placeholder(placeholder.to_string(), t.text3)
         .caret(t.text, t.accent.alpha(0.35))
-        .on_edit(access);
+        .on_edit(access)
+        // Return starts a new line; ⌘↩ / Ctrl+Enter (a window shortcut) saves.
+        .on_submit(move |s: &mut App, _: &mut Tx| access(s).insert("\n"))
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx));
     boxed(t, edit.focused, rune::auto_grow(input, min, max), true)
 }
 

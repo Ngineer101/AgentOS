@@ -29,7 +29,9 @@ fn setup(s: &mut App, waker: Waker) {
     if std::env::var_os("AGENTHOST_DESKTOP_OFFLINE").is_none() {
         s.bridge = Some(bridge::start(waker));
         s.hostname = hostname();
-        s.collapsed = prefs::load().collapsed;
+        let p = prefs::load();
+        s.collapsed = p.collapsed;
+        s.sidebar_w = p.sidebar_w.map(|w| w.clamp(model::SIDEBAR_MIN_W, model::SIDEBAR_MAX_W));
         s.save_prefs = true;
     }
 }
