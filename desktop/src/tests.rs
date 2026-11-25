@@ -488,7 +488,7 @@ fn sidebar_groups_numbers_and_search() {
     scene(&mut app);
     let mut tx = rune::Tx::default();
     let names: Vec<&str> = app.sidebar_groups().iter().map(|(w, _)| w.name.as_str()).collect();
-    assert_eq!(names, ["Quick tasks", "relay", "notes"], "Quick tasks first; empty workspaces left out");
+    assert_eq!(names, ["Quick tasks", "notes", "relay"], "Quick tasks first, then by name; empty workspaces left out");
     // Ended and failed sessions get no number.
     assert_eq!(app.numbered(), ["ses_q", "ses_1", "ses_2", "ses_3"]);
     // One status vocabulary.

@@ -1093,13 +1093,13 @@ impl App {
         l
     }
 
-    /// Sessions as the sidebar lists them under Workspaces: workspaces in order with Quick
-    /// tasks first, newest first inside each, filtered by the search field. Pinned sessions
-    /// are in the Pinned section instead.
+    /// Sessions as the sidebar lists them under Workspaces: Quick tasks first, then the
+    /// rest by name so groups stay put while agents work, newest first inside each,
+    /// filtered by the search field. Pinned sessions are in the Pinned section instead.
     pub fn sidebar_groups(&self) -> Vec<(&Workspace, Vec<&Session>)> {
         let q = self.search_query();
         let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
-        ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
+        ws.sort_by_cached_key(|w| (w.kind != WorkspaceKind::Scratch, w.name.to_lowercase(), w.workspace_id.clone()));
         let mut out = vec![];
         for w in ws {
             let mut list: Vec<&Session> = self
