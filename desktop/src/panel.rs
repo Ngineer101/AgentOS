@@ -16,6 +16,8 @@ impl PanelTab {
     pub fn title(self) -> &'static str {
         match self {
             PanelTab::Terminal => "Terminal",
+            PanelTab::Changes => "Changes",
+            PanelTab::Files => "Files",
             PanelTab::Side => "Side Questions",
         }
     }
@@ -23,6 +25,8 @@ impl PanelTab {
     fn key(self) -> &'static str {
         match self {
             PanelTab::Terminal => "panel-tab-terminal",
+            PanelTab::Changes => "panel-tab-changes",
+            PanelTab::Files => "panel-tab-files",
             PanelTab::Side => "panel-tab-side",
         }
     }
@@ -30,15 +34,23 @@ impl PanelTab {
     fn glyph(self) -> &'static rune::Icon {
         match self {
             PanelTab::Terminal => &ic::TERMINAL,
+            PanelTab::Changes => &ic::DIFF,
+            PanelTab::Files => &ic::FOLDER,
             PanelTab::Side => &ic::BUBBLE,
         }
     }
 }
 
-/// The tabs the panel offers on this screen: the terminal anywhere, side questions in a
-/// session that has some.
+/// The tabs the panel offers on this screen: the terminal anywhere; in a session, its
+/// changes (when it has a branch of its own), its files, and side questions if it has some.
 pub fn tabs(s: &App) -> Vec<PanelTab> {
     let mut v = vec![PanelTab::Terminal];
+    if s.changes_available() {
+        v.push(PanelTab::Changes);
+    }
+    if s.files_available() {
+        v.push(PanelTab::Files);
+    }
     if matches!(&s.screen, Screen::Session(id) if s.has_side(id)) {
         v.push(PanelTab::Side);
     }
@@ -50,7 +62,8 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
     // The header band, level with the window's toolbar: the tabs, and a button to hide.
     let mut bar = row().key("panel-tabs").gap(if mac { 2.0 } else { 4.0 }).center_y().role("tablist").focus_group();
     for tab in tabs(s) {
-        bar = bar.child(tab_button(t, tab, tab == shown));
+        let count = if tab == PanelTab::Changes { s.changed_files().filter(|n| *n > 0) } else { None };
+        bar = bar.child(tab_button(t, tab, tab == shown, count));
     }
     let hide = t.icon_button(&ic::CLOSE, 10.0, &format!("Hide {}", shown.title()), |s: &mut App, _: &mut Tx| s.panel_open = false).key("panel-hide");
     let header = if mac {
@@ -63,6 +76,8 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
         (PanelTab::Side, Screen::Session(id)) => crate::side::content(s, id, t, k),
         (PanelTab::Side, _) => col(),
         (PanelTab::Terminal, _) => crate::terminal::body(s, t),
+        (PanelTab::Changes, _) => crate::files::changes(s, t, k),
+        (PanelTab::Files, _) => crate::files::files(s, t, k),
     };
     let mut pane = col()
         .key("panel")
@@ -74,15 +89,15 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
         .child(header)
         .child(body);
     pane = if mac { pane.fill(t.content).border_sides([0.0, 0.0, 0.0, 0.5], Color::BLACK.alpha(0.6)) } else { pane.fill(t.sidebar_top).border_sides([0.0, 0.0, 0.0, 1.0], Color::BLACK.alpha(0.35)) };
-    if shown == PanelTab::Terminal {
+    if shown != PanelTab::Side {
         pane = pane.child(grip(s.panel_width(t)));
     }
     pane
 }
 
-fn tab_button(t: &Theme, tab: PanelTab, on: bool) -> El {
+fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
     let mac = t.mac();
-    let r = row()
+    let mut r = row()
         .key(tab.key())
         .h(if mac { 26.0 } else { 32.0 })
         .gap(6.0)
@@ -101,6 +116,9 @@ fn tab_button(t: &Theme, tab: PanelTab, on: bool) -> El {
         })
         .child(icon(tab.glyph(), 12.0).color(if on { t.text } else { t.text2 }))
         .child(text(tab.title()).font(TextStyle::new(t.fs, if on { if mac { 600.0 } else { 700.0 } } else { 400.0 })).color(if on { t.text } else { t.text2 }));
+    if let Some(n) = count {
+        r = r.child(text(n.to_string()).key("count").font(TextStyle::new(t.fs, 400.0)).color(t.text2));
+    }
     if on { r.fill(Color::WHITE.alpha(0.10)) } else { r.hover(Color::WHITE.alpha(0.05)) }
 }
 

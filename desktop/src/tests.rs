@@ -2814,3 +2814,158 @@ fn a_real_shell_draws_in_the_terminal() {
     assert!(app.panel_shown().is_none(), "the last terminal closing hides the panel");
     assert!(host.terminals.list().is_empty());
 }
+
+/// Changes and Files belong to the open session: they show where it has them, fill from
+/// the host's answers and reload when the agent's turn ends.
+#[test]
+fn changes_and_files_follow_the_open_session() {
+    use crate::files::Load;
+    use model::PanelTab;
+    let mut app = demo("changes");
+    assert_eq!(app.panel_shown(), Some(PanelTab::Changes));
+    assert_eq!(crate::panel::tabs(&app), vec![PanelTab::Terminal, PanelTab::Changes, PanelTab::Files]);
+    assert_eq!(app.changed_files(), Some(3));
+    let f = app.browse.diff.files();
+    assert_eq!(f.iter().map(|f| (f.path(), f.additions(), f.deletions())).collect::<Vec<_>>(), [("src/net/backoff.rs", 2, 1), ("src/net/mod.rs", 2, 1), ("tests/backoff.rs", 3, 0)]);
+    // The tree carries the diff's counts, folders first.
+    let node = |app: &model::App, id: &str| app.browse.tree.get(id).and_then(|n| n.data).unwrap();
+    assert_eq!((node(&app, "src/net/backoff.rs").added, node(&app, "src/net/backoff.rs").removed), (2, 1));
+    assert!(node(&app, "tests/backoff.rs").new);
+    assert_eq!(node(&app, "README.md"), crate::files::Change::default());
+    assert!(app.browse.tree.get("src/net").is_some_and(|n| n.dir));
+
+    // Answers for another session are dropped.
+    app.changes_loaded("ses_2", Ok(SessionChanges { branch: "x".into(), base: "0".into(), patch: String::new(), truncated: false }));
+    assert_eq!(app.changed_files(), Some(3));
+
+    // A file opens in the Files tab: tabs become four-column stops, lines are counted.
+    app.open_file("src/net");
+    assert!(app.browse.open.is_none(), "a folder isn't a file to open");
+    app.open_file("src/net/backoff.rs");
+    assert_eq!(app.panel_shown(), Some(PanelTab::Files));
+    assert_eq!(app.browse.open.as_ref().map(|f| &f.load), Some(&Load::Loading));
+    app.file_read("ses_1", "src/net/mod.rs", Ok(SessionFile { path: "src/net/mod.rs".into(), size: 1, text: Some("x".into()), truncated: false }));
+    assert_eq!(app.browse.open.as_ref().map(|f| &f.load), Some(&Load::Loading), "an answer for another file is dropped");
+    app.file_read("ses_1", "src/net/backoff.rs", Ok(SessionFile { path: "src/net/backoff.rs".into(), size: 140, text: Some(crate::demo::SAMPLE_FILE.into()), truncated: false }));
+    let open = app.browse.open.as_ref().unwrap();
+    assert_eq!((open.lines.len(), open.lang, open.binary), (8, Some("rust"), false));
+    let (a, b) = open.lines[4];
+    assert_eq!(&open.text[a as usize..b as usize], "    base: Duration,");
+    assert!(!open.highlights.is_empty(), "Rust is coloured");
+    // A file that isn't text says so instead.
+    app.open_file("Cargo.lock");
+    app.file_read("ses_1", "Cargo.lock", Ok(SessionFile { path: "Cargo.lock".into(), size: 2048, text: None, truncated: false }));
+    assert!(app.browse.open.as_ref().unwrap().binary);
+    app.close_file();
+
+    // Filtering keeps the folders that lead to a match.
+    app.browse.filter.replace_text("retry");
+    app.apply_file_filter();
+    assert!(app.browse.tree.is_filtering() && app.browse.tree.is_match("src/net/retry.rs") && !app.browse.tree.is_match("README.md"));
+    app.browse.filter.replace_text("");
+    app.apply_file_filter();
+    assert!(!app.browse.tree.is_filtering());
+
+    // Another session: its own state. One without a branch of its own has no Changes.
+    app.screen = Screen::Session("ses_2".into());
+    app.files_sync();
+    assert_eq!((app.browse.session.as_deref(), app.changed_files()), (Some("ses_2"), None));
+    if let Some(x) = app.sessions.iter_mut().find(|x| x.session_id == "ses_2") {
+        x.worktree = None;
+    }
+    assert_eq!(crate::panel::tabs(&app), vec![PanelTab::Terminal, PanelTab::Files]);
+    app.panel_tab = PanelTab::Changes;
+    assert_eq!(app.panel_shown(), None);
+    // Elsewhere, and on a host from before protocol 11, neither tab shows.
+    app.screen = Screen::Home;
+    assert_eq!(crate::panel::tabs(&app), vec![PanelTab::Terminal]);
+    app.screen = Screen::Session("ses_1".into());
+    if let Some(i) = app.info.as_mut() {
+        i.protocol_version = 10;
+    }
+    assert!(!app.files_available() && !app.changes_available());
+
+    assert_eq!(crate::files::expand_tabs("a\tb\n\t\tc"), "a   b\n        c");
+}
+
+/// The Changes and Files tabs lay out in both looks, and a click goes from the diff to a
+/// file and back to the tree.
+#[test]
+fn changes_and_files_lay_out() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str], &[&str]); 4] = [
+        ("changes", &["panel", "panel-tab-terminal", "panel-tab-changes", "panel-tab-files", "panel-grip", "changes-bar", "changes-summary", "changes-unified", "changes-split", "files-refresh", "changes-diff", "changes-open-0", "toggle-changes"], &["changes-note", "files-body", "panel-tab-side"]),
+        ("changes-split", &["changes-diff", "changes-split"], &["changes-note"]),
+        ("files", &["files-bar", "files-filter", "files-tree", "src/net/backoff.rs", "README.md"], &["changes-body", "file-view", "files-note"]),
+        ("file-open", &["file-bar", "file-back", "file-path", "file-meta", "file-show-changes", "file-view", "file-rows", "L0", "L7"], &["files-tree", "file-note", "L8"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, there, absent) in scenes {
+            let ui = open(scene, look);
+            for k in there {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+            for k in absent {
+                assert!(ui.find(k).is_none(), "{look:?} {scene}: {k} should not be on screen");
+            }
+        }
+    }
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = open("changes", look);
+        let rect = |ui: &rune::Runtime<model::App>, key: &str| ui.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key} is not on screen")).rect;
+        // The diff fills the panel under its bar.
+        let (panel, bar, diff) = (rect(&ui, "panel"), rect(&ui, "changes-bar"), rect(&ui, "changes-diff"));
+        assert_eq!((diff[0], diff[2]), (panel[0], panel[2]), "{look:?}: {diff:?} in {panel:?}");
+        assert!(diff[1] >= bar[1] + bar[3] && (diff[1] + diff[3] - 800.0).abs() < 1.0 && diff[3] > 500.0, "{look:?}: {diff:?} under {bar:?}");
+        click(&mut ui, "changes-split");
+        assert!(read(&mut ui, &|s| s.browse.diff.mode() == rune_kit::diff::DiffMode::Split), "{look:?}");
+        // From a file's header in the diff to the file itself.
+        click(&mut ui, "changes-open-0");
+        assert!(read(&mut ui, &|s| s.panel_shown() == Some(model::PanelTab::Files) && s.browse.open.as_ref().is_some_and(|f| f.path == "src/net/backoff.rs")), "{look:?}");
+        assert!(ui.find("file-note").is_some(), "{look:?}: it says it is loading");
+        ui.update(|s, _| s.file_read("ses_1", "src/net/backoff.rs", Ok(SessionFile { path: "src/net/backoff.rs".into(), size: 140, text: Some(crate::demo::SAMPLE_FILE.into()), truncated: false })));
+        ui.frame(0.016);
+        ui.frame(0.016);
+        // Line numbers sit left of the code, one line under the other.
+        let (l0, l1, view) = (rect(&ui, "L0"), rect(&ui, "L1"), rect(&ui, "file-view"));
+        assert!(l0[0] >= view[0] && l1[1] > l0[1] && l1[1] - l0[1] < 30.0, "{look:?}: {l0:?} {l1:?} in {view:?}");
+        // Back to where it changed, then to the tree.
+        click(&mut ui, "file-show-changes");
+        assert!(read(&mut ui, &|s| s.panel_shown() == Some(model::PanelTab::Changes)), "{look:?}");
+        click(&mut ui, "panel-tab-files");
+        click(&mut ui, "file-back");
+        assert!(ui.find("files-tree").is_some() && ui.find("file-view").is_none(), "{look:?}");
+        click(&mut ui, "toggle-changes");
+        click(&mut ui, "toggle-changes");
+        assert!(ui.find("panel").is_none(), "{look:?}: the toolbar's button hides the panel from Changes");
+    }
+}

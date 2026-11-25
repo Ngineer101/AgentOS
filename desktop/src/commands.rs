@@ -32,6 +32,10 @@ pub enum Cmd {
     ToggleSide,
     /// Show or hide the terminal (the right panel's Terminal tab).
     ToggleTerminal,
+    /// Show or hide what the open session changed (the right panel's Changes tab).
+    ToggleChanges,
+    /// Show or hide the open session's files (the right panel's Files tab).
+    ToggleFiles,
     ShowFolder,
     /// Rename Session…: the header's title becomes a field.
     RenameSession,
@@ -46,7 +50,7 @@ pub enum Cmd {
     Quit,
 }
 
-const KEYED: [Cmd; 24] = [
+const KEYED: [Cmd; 26] = [
     Cmd::Archive,
     Cmd::NewSession,
     Cmd::QuickTask,
@@ -63,6 +67,8 @@ const KEYED: [Cmd; 24] = [
     Cmd::Settings,
     Cmd::ToggleSide,
     Cmd::ToggleTerminal,
+    Cmd::ToggleChanges,
+    Cmd::ToggleFiles,
     Cmd::ShowFolder,
     Cmd::Shortcuts,
     Cmd::MainMenu,
@@ -95,6 +101,9 @@ pub fn chord(look: Look, cmd: Cmd) -> Option<String> {
         Cmd::ToggleSide => if mac { "super+alt+i" } else { "shift+f9" }.into(),
         // Where editors keep it: Control and the key under Escape, on both.
         Cmd::ToggleTerminal => "ctrl+`".into(),
+        // Where editors keep source control and the explorer.
+        Cmd::ToggleChanges => if mac { "super+shift+g" } else { "ctrl+shift+g" }.into(),
+        Cmd::ToggleFiles => if mac { "super+shift+e" } else { "ctrl+shift+e" }.into(),
         // ⌘⌫ would be "delete to the line's start" in the composer; ⌃⌘A is Mail's Archive.
         Cmd::Archive => if mac { "ctrl+super+a" } else { "ctrl+alt+a" }.into(),
         Cmd::ShowFolder if mac => "super+alt+r".into(),
@@ -126,6 +135,8 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::Settings => if mac { "⌘," } else { "Ctrl+," },
         Cmd::ToggleSide => if mac { "⌥⌘I" } else { "Shift+F9" },
         Cmd::ToggleTerminal => if mac { "⌃`" } else { "Ctrl+`" },
+        Cmd::ToggleChanges => if mac { "⇧⌘G" } else { "Ctrl+Shift+G" },
+        Cmd::ToggleFiles => if mac { "⇧⌘E" } else { "Ctrl+Shift+E" },
         Cmd::Archive => if mac { "⌃⌘A" } else { "Ctrl+Alt+A" },
         Cmd::ShowFolder => if mac { "⌥⌘R" } else { "" },
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
@@ -288,6 +299,20 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
                 }
             }
         }
+        Cmd::ToggleChanges | Cmd::ToggleFiles => {
+            let (tab, ok) = if cmd == Cmd::ToggleChanges { (PanelTab::Changes, s.changes_available()) } else { (PanelTab::Files, s.files_available()) };
+            if ok {
+                if s.toggle_files_tab(tab) {
+                    s.close_overlays();
+                }
+            } else if !matches!(s.screen, Screen::Session(_)) {
+                s.notice = Some("Open a session to see its changes and files.".into());
+            } else if s.info.as_ref().is_some_and(|i| i.protocol_version < 11) {
+                s.notice = Some("This host is too old to show a session's changes and files.".into());
+            } else if tab == PanelTab::Changes {
+                s.notice = Some("This session has no branch of its own to compare.".into());
+            }
+        }
         Cmd::ToggleTerminal => {
             if !s.terminal_allowed() {
                 s.notice = Some(if s.admin { "This host is too old for terminals." } else { "A terminal opens in the app on the host's own computer." }.into());
@@ -401,6 +426,8 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
         (Some("Toggle Side Questions"), Some("View"), Some("alt+cmd+i"), |s, tx| run(s, Cmd::ToggleSide, tx)),
         (Some("Toggle Terminal"), Some("View"), Some("ctrl+`"), |s, tx| run(s, Cmd::ToggleTerminal, tx)),
+        (Some("Toggle Changes"), Some("View"), Some("shift+cmd+g"), |s, tx| run(s, Cmd::ToggleChanges, tx)),
+        (Some("Toggle Files"), Some("View"), Some("shift+cmd+e"), |s, tx| run(s, Cmd::ToggleFiles, tx)),
         (Some("Find Session"), Some("View"), Some("cmd+f"), |s, tx| run(s, Cmd::Search, tx)),
     ]
 }

@@ -569,6 +569,57 @@ fn terminal(s: &mut App) {
     s.show_panel(crate::model::PanelTab::Terminal);
 }
 
+/// What ses_1 changed, as the host would send it.
+pub const SAMPLE_PATCH: &str = "diff --git a/src/net/backoff.rs b/src/net/backoff.rs
+index 3f1c2aa..9d0e4b1 100644
+--- a/src/net/backoff.rs
++++ b/src/net/backoff.rs
+@@ -1,8 +1,9 @@
+ use std::time::Duration;
+ 
+-/// How long to wait before trying again.
++/// How long to wait before trying again, with jitter.
+ pub struct Backoff {
+     base: Duration,
+     attempt: u32,
++    jitter: f32,
+ }
+ 
+diff --git a/src/net/mod.rs b/src/net/mod.rs
+index 11aa2bb..77cc8dd 100644
+--- a/src/net/mod.rs
++++ b/src/net/mod.rs
+@@ -1,2 +1,3 @@
+ mod client;
+-mod retry;
++pub mod retry;
++pub mod backoff;
+diff --git a/tests/backoff.rs b/tests/backoff.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/backoff.rs
+@@ -0,0 +1,3 @@
++#[test]
++fn waits_grow() {
++}
+";
+
+pub const SAMPLE_FILE: &str = "use std::time::Duration;\n\n/// How long to wait before trying again, with jitter.\npub struct Backoff {\n\tbase: Duration,\n\tattempt: u32,\n\tjitter: f32,\n}\n";
+
+/// The right panel on ses_1's changes, with its files listed too.
+fn changes(s: &mut App) {
+    session(s);
+    s.approvals.clear();
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 11;
+    }
+    s.show_panel(crate::model::PanelTab::Changes);
+    s.changes_loaded("ses_1", Ok(agenthost_proto::SessionChanges { branch: "agenthost/fix-flaky-resume".into(), base: "3f1c2aa".into(), patch: SAMPLE_PATCH.into(), truncated: false }));
+    let files = ["Cargo.lock", "Cargo.toml", "README.md", "src/lib.rs", "src/main.rs", "src/net/backoff.rs", "src/net/client.rs", "src/net/mod.rs", "src/net/retry.rs", "src/store/db.rs", "tests/backoff.rs"];
+    s.files_listed("ses_1", Ok(agenthost_proto::SessionFiles { files: files.iter().map(|f| f.to_string()).collect(), truncated: false }));
+    s.browse.tree.expand_all();
+}
+
 fn sent_images(s: &mut App) {
     session(s);
     s.approvals.clear();
@@ -1063,6 +1114,21 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         side(s);
     }),
     ("terminal", terminal),
+    ("changes", changes),
+    ("changes-split", |s| {
+        changes(s);
+        s.browse.diff.set_mode(rune_kit::diff::DiffMode::Split);
+        s.panel_w = Some(900.0);
+    }),
+    ("files", |s| {
+        changes(s);
+        s.show_panel(crate::model::PanelTab::Files);
+    }),
+    ("file-open", |s| {
+        changes(s);
+        s.open_file("src/net/backoff.rs");
+        s.file_read("ses_1", "src/net/backoff.rs", Ok(agenthost_proto::SessionFile { path: "src/net/backoff.rs".into(), size: 140, text: Some(SAMPLE_FILE.into()), truncated: false }));
+    }),
     // The terminal stays beside whatever screen is open.
     ("terminal-home", |s| {
         terminal(s);

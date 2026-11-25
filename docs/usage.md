@@ -127,6 +127,22 @@ and archiving one of them marks the note done. Otherwise only you mark a note
 done. Notes live on the host, so the desktop, the CLI and every paired phone
 see the same ones; a note never runs anything by itself.
 
+## Changes and files
+
+In a session, the desktop app's right panel has two more tabs. **Changes**
+(the toolbar's button, ⇧⌘G or Ctrl+Shift+G) shows everything the session
+changed since its branch left your workspace's own: commits, work it hasn't
+committed and new files, the same as a pull request from it would show.
+Switch between unified and split, fold a file by its header, and open a file
+from the button in its header. **Files** (⇧⌘E or Ctrl+Shift+E) is the
+session's whole folder: filter by name, double-click or press Return to read
+a file with its language's colours. Nothing here edits anything.
+
+Both reload when the agent finishes a turn; Refresh asks again. A diff over
+4 MB leaves whole files out and says so, a file over 1 MB shows its first
+megabyte, and a binary file shows only its size. A session that isn't in a
+git repository (a quick task) has Files but no Changes.
+
 ## Terminal
 
 The desktop app has a terminal in its right panel, for the commands you'd

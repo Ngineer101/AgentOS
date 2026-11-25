@@ -870,6 +870,8 @@ fn toolbar(s: &App, t: &Theme) -> El {
 
     // The terminal's toggle, on every screen, where this connection may have one.
     let terminal = s.terminal_allowed().then(|| crate::terminal::toggle_button(s, t));
+    // The open session's changes (and, a tab over, its files).
+    let changes = (sess.is_some() && s.changes_available()).then(|| crate::files::toggle_button(s, t));
 
     if mac {
         let mut bar = row()
@@ -900,6 +902,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if let Some(b) = side {
             group = group.child(b.w(32.0));
         }
+        if let Some(b) = changes {
+            group = group.child(b.w(32.0));
+        }
         if let Some(b) = terminal {
             group = group.child(b.w(32.0));
         }
@@ -925,6 +930,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if sess.is_some() {
             bar = bar.child(stop).child(more);
             if let Some(b) = side {
+                bar = bar.child(b);
+            }
+            if let Some(b) = changes {
                 bar = bar.child(b);
             }
         } else {
@@ -1254,6 +1262,8 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
                 Some(Item::new("Notes", String::new(), |s, _| s.open_notes()).enabled(s.host_has_notes())),
                 Some(Item::new("Terminal", keys(look, Cmd::ToggleTerminal), |s, tx| run(s, Cmd::ToggleTerminal, tx)).enabled(s.terminal_allowed())),
+                Some(Item::new("Changes", keys(look, Cmd::ToggleChanges), |s, tx| run(s, Cmd::ToggleChanges, tx)).enabled(s.changes_available())),
+                Some(Item::new("Files", keys(look, Cmd::ToggleFiles), |s, tx| run(s, Cmd::ToggleFiles, tx)).enabled(s.files_available())),
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),

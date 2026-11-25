@@ -34,6 +34,12 @@ pub const SESSION_SET_CONFIG: &str = "session.set_config";
 /// Ask a side question (`/btw`) in a fork of the conversation.
 pub const SESSION_SIDE_ASK: &str = "session.side_ask";
 /// The login new sessions in a workspace start with.
+/// What a session changed (protocol 11): a `SessionRef`, returns `SessionChanges`.
+pub const SESSION_CHANGES: &str = "session.changes";
+/// The files in a session's folder: a `SessionRef`, returns `SessionFiles`.
+pub const SESSION_FILES: &str = "session.files";
+/// One file of a session's folder: `SessionFileReadParams`, returns a `SessionFile`.
+pub const SESSION_FILE_READ: &str = "session.file_read";
 pub const WORKSPACE_SET_DEFAULT_AGENT: &str = "workspace.set_default_agent";
 
 pub const EVENTS_SUBSCRIBE: &str = "events.subscribe";
@@ -245,6 +251,8 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         SESSION_CREATE | SESSION_PROMPT | SESSION_CANCEL | SESSION_END | SESSION_ARCHIVE
         | SESSION_UNARCHIVE | SESSION_RENAME | SESSION_PIN | SESSION_SET_CONFIG | SESSION_SIDE_ASK | WORKSPACE_SET_DEFAULT_AGENT | EVENTS_SUBSCRIBE
         | EVENTS_UNSUBSCRIBE | UPLOAD_BEGIN | UPLOAD_APPEND | UPLOAD_FINISH | ATTACHMENT_READ | VOICE_DOWNLOAD
+        // What the session's agent can already read out in the conversation.
+        | SESSION_CHANGES | SESSION_FILES | SESSION_FILE_READ
         | VOICE_TRANSCRIBE | VOICE_STREAM_BEGIN | VOICE_STREAM_APPEND | VOICE_STREAM_FINISH
         // Bounded by the project folders, which only an admin sets.
         | PROJECT_BROWSE | PROJECT_CREATE

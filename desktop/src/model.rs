@@ -648,6 +648,8 @@ pub struct App {
     pub panel_w: Option<f32>,
     /// The host's terminals (the panel's Terminal tab).
     pub terms: crate::terminal::Terms,
+    /// The open session's changes and files (the panel's Changes and Files tabs).
+    pub browse: crate::files::FilesState,
     /// Side conversations whose tab was closed here.
     pub side_closed: HashSet<String>,
     /// The selected side conversation, by session.
@@ -735,6 +737,10 @@ pub const GROUP_SHOWN: usize = 8;
 pub enum PanelTab {
     /// Shells the host runs for you.
     Terminal,
+    /// What the open session changed, as a diff.
+    Changes,
+    /// The open session's folder, to read.
+    Files,
     /// The open session's side questions (`/btw`).
     Side,
 }
@@ -830,6 +836,7 @@ pub fn init() -> App {
         panel_tab: PanelTab::Terminal,
         panel_w: None,
         terms: Default::default(),
+        browse: Default::default(),
         side_closed: HashSet::new(),
         side_tab: HashMap::new(),
         side_pending: HashMap::new(),
@@ -1579,6 +1586,7 @@ impl App {
             self.agent_open = None;
         }
         self.ensure_subscribed(id);
+        self.files_sync();
     }
 
     /// Put the composer's text away with its session and bring back `id`'s.
@@ -2242,6 +2250,18 @@ impl App {
                 }
                 // An older host without notes: the screen says to update it.
                 (Tag::Notes, Err(_)) => self.notes.clear(),
+                (Tag::Changes(id), r) => {
+                    let r = r.map_err(|e| e.message).and_then(|v| parse(v).ok_or_else(|| "the host's answer made no sense".to_string()));
+                    self.changes_loaded(&id, r);
+                }
+                (Tag::Files(id), r) => {
+                    let r = r.map_err(|e| e.message).and_then(|v| parse(v).ok_or_else(|| "the host's answer made no sense".to_string()));
+                    self.files_listed(&id, r);
+                }
+                (Tag::FileRead { session, path }, r) => {
+                    let r = r.map_err(|e| e.message).and_then(|v| parse(v).ok_or_else(|| "the host's answer made no sense".to_string()));
+                    self.file_read(&session, &path, r);
+                }
                 (Tag::Terminals, Ok(v)) => self.terminals_listed(parse::<TerminalList>(v).map(|l| l.terminals).unwrap_or_default()),
                 // An older host without terminals: the tab says so when it is opened.
                 (Tag::Terminals, Err(_)) => {}
@@ -3012,6 +3032,7 @@ impl App {
                 if matches!(kind, EventType::AgentMessage | EventType::TurnEnd) {
                     t.live.clear();
                 }
+
                 if kind == EventType::Prompt {
                     let pid = e.payload["prompt_id"].as_str().unwrap_or("");
                     t.pending.retain(|p| p.prompt_id != pid);
@@ -3021,7 +3042,11 @@ impl App {
                         t.side_live.remove(sid);
                     }
                 }
+                let session = (kind == EventType::TurnEnd).then(|| e.session_id.clone());
                 t.events.push(e);
+                if let Some(id) = session {
+                    self.files_turn_ended(&id);
+                }
                 if matches!(kind, EventType::ApprovalRequested | EventType::ApprovalResolved | EventType::NetDenied) {
                     self.refresh(Refresh::Approvals);
                 }

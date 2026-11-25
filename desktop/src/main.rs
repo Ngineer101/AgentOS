@@ -6,6 +6,7 @@ mod brand;
 mod bridge;
 mod commands;
 mod demo;
+mod files;
 mod icons;
 mod look;
 mod model;

@@ -406,6 +406,8 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
                 ("Dictate", l(Cmd::Dictate)),
                 ("Edit your last message", "↑".into()),
                 ("Show or hide side questions", l(Cmd::ToggleSide)),
+                ("Show or hide the session's changes", l(Cmd::ToggleChanges)),
+                ("Show or hide the session's files", l(Cmd::ToggleFiles)),
             ],
         ),
         (
