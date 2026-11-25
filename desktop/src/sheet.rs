@@ -157,7 +157,7 @@ fn agent_rows(s: &App, t: &Theme) -> Vec<El> {
         r = r.child(names);
         let is_default = s.new_ws.as_ref().and_then(|w| s.default_login(w)).as_deref() == Some(key.as_str());
         if is_default {
-            r = r.child(row().key("default-tag").h(16.0).px(6.0).center_y().radius(4.0).fill(Color::WHITE.alpha(0.1)).child(text("Default").font(TextStyle::new(10.5, 600.0)).color(t.text2)));
+            r = r.child(row().key("default-tag").h(16.0).px(6.0).center_y().radius(8.0).fill(Color::WHITE.alpha(0.1)).child(text("Default").font(TextStyle::new(10.5, 600.0)).color(t.text2)));
         }
         if a.available {
             let k2 = key.clone();
@@ -282,7 +282,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         .px(14.0)
         .gap(12.0)
         .center_y()
-        .radius(12.0)
+        .radius(t.box_radius)
         .fill(t.card)
         .role("combobox")
         .label("Login")
@@ -352,7 +352,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         .w(520.0)
         .shrink()
         .min_h(0.0)
-        .radius(14.0)
+        .radius(t.dialog_radius)
         .fill(t.sheet)
         .border(1.0, Color::BLACK.alpha(0.6))
         .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
@@ -426,7 +426,7 @@ fn caps(t: &Theme, spec: &str) -> El {
     let mut r = row().gap(4.0).center_y();
     let parts: Vec<String> = spec.split('+').map(|p| p.trim().to_string()).collect();
     for p in parts.into_iter().filter(|p| !p.is_empty()) {
-        r = r.child(row().h(24.0).px(7.0).center().radius(5.0).fill(Color::WHITE.alpha(0.10)).child(text(p).font(TextStyle::new(12.5, 400.0)).color(t.text)));
+        r = r.child(row().h(24.0).px(7.0).center().radius(t.btn_radius).fill(Color::WHITE.alpha(0.10)).child(text(p).font(TextStyle::new(12.5, 400.0)).color(t.text)));
     }
     r
 }
@@ -447,7 +447,7 @@ pub fn shortcuts(s: &App, t: &Theme) -> El {
         .w(920.0)
         .max_w(920.0)
         .shrink()
-        .radius(14.0)
+        .radius(t.dialog_radius)
         .fill(rune::color::hex("#222226").unwrap_or(Color::BLACK))
         .border(1.0, Color::BLACK.alpha(0.6))
         .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
@@ -501,6 +501,6 @@ pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
         .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
         .child(t.small("The agent stops and the session moves to Archived.").wrap())
         .child(buttons);
-    panel = if mac { panel.radius(12.0).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     scrim("archive-layer", 0.32, |s| s.confirm_archive = None).center().child(panel)
 }

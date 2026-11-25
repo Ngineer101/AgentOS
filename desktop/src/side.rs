@@ -117,7 +117,7 @@ fn tab(t: &Theme, session: &str, side_id: &str, title: &str, on: bool, busy: boo
         .pl(if mac { 8.0 } else { 10.0 })
         .pr(if mac { 4.0 } else { 4.0 })
         .center_y()
-        .radius(if mac { 6.0 } else { 7.0 })
+        .radius(t.btn_radius)
         .role("tab")
         .label(title.to_string())
         .help(title.to_string())
@@ -136,7 +136,7 @@ fn tab(t: &Theme, session: &str, side_id: &str, title: &str, on: bool, busy: boo
                 .key(format!("side-close-{side_id}"))
                 .size(18.0, 18.0)
                 .center()
-                .radius(if mac { 4.0 } else { 9.0 })
+                .radius(t.btn_radius)
                 .role("button")
                 .label(format!("Close {}", clip(title, 40)))
                 .help("Close Tab")
@@ -166,7 +166,7 @@ fn conversation(t: &Theme, k: &Kit, th: &SideThread) -> El {
                     .items_start()
                     .px(11.0)
                     .py(8.0)
-                    .radius(if mac { 10.0 } else { 12.0 })
+                    .radius(t.box_radius)
                     .fill(Color::WHITE.alpha(0.08))
                     .child(icon(&ic::BUBBLE, 13.0).color(t.text2).mt(2.0))
                     .child(text(turn.question.clone()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.4).round())).color(t.text).wrap().selectable(true).shrink().min_w(0.0)),
@@ -214,7 +214,7 @@ fn follow_up(s: &App, t: &Theme, busy: bool) -> El {
         .disabled(!ready)
         .on_press(|s: &mut App| s.side_follow_up())
         .child(icon(&ic::SEND, 10.0).color(Color::WHITE));
-    let mut field = row().w_full().gap(8.0).items_end().pl(12.0).pr(6.0).py(6.0).radius(if mac { 10.0 } else { 12.0 }).child(col().grow(1.0).min_w(0.0).py(2.0).child(rune::auto_grow(input, 1, 4))).child(send);
+    let mut field = row().w_full().gap(8.0).items_end().pl(12.0).pr(6.0).py(6.0).radius(t.box_radius).child(col().grow(1.0).min_w(0.0).py(2.0).child(rune::auto_grow(input, 1, 4))).child(send);
     field = if mac { field.fill(Color::WHITE.alpha(0.06)).border(0.5, Color::WHITE.alpha(0.16)) } else { field.fill(t.card) };
     if s.side_prompt.focused {
         field = field.box_shadow(rune::Shadow { spread: 3.0, color: t.focus, ..Default::default() });

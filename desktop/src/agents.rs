@@ -265,7 +265,7 @@ fn detail(s: &App, session: &str, a: &Subagent, t: &Theme, k: &Kit) -> El {
             .gap(4.0)
             .px(10.0)
             .py(8.0)
-            .radius(if mac { 7.0 } else { 9.0 })
+            .radius(t.box_radius)
             .fill(Color::WHITE.alpha(if mac { 0.06 } else { 0.07 }))
             .child(heading(t, "Task"))
             .child(text(shown).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0).lh(if mac { 17.0 } else { 19.0 })).color(t.text).wrap().selectable(true));
@@ -330,7 +330,7 @@ fn step_row(s: &App, e: &Event, res: Option<&Event>, live: bool, t: &Theme) -> E
         .px(6.0)
         .py(if mac { 4.0 } else { 6.0 })
         .center_y()
-        .radius(if mac { 5.0 } else { 6.0 })
+        .radius(t.row_radius)
         .role("button")
         .label(format!("{title}, {}", status_word(&status)))
         .focusable(true)
@@ -356,7 +356,7 @@ fn step_row(s: &App, e: &Event, res: Option<&Event>, live: bool, t: &Theme) -> E
             v => serde_json::to_string_pretty(v).unwrap_or_default(),
         };
         let output = res.map(|r| str_of(&r.payload["output"])).unwrap_or_default();
-        let mut body = col().w_full().gap(8.0).px(10.0).py(8.0).radius(6.0).fill(t.code_bg);
+        let mut body = col().w_full().gap(8.0).px(10.0).py(8.0).radius(t.box_radius).fill(t.code_bg);
         if !args.is_empty() && !(p["kind"] == "execute" && !output.is_empty()) {
             body = body.child(pre(t, clip(&args, 3000)));
         }

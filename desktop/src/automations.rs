@@ -532,7 +532,7 @@ fn area(t: &Theme, edit: &TextEdit, key: &str, placeholder: &str, access: fn(&mu
 
 fn boxed(t: &Theme, focused: bool, input: El, multi: bool) -> El {
     let mac = t.mac();
-    let mut b = row().w_full().px(if mac { 7.0 } else { 10.0 }).radius(if mac { 5.0 } else { 7.0 }).fill(t.field).child(input);
+    let mut b = row().w_full().px(if mac { 7.0 } else { 10.0 }).radius(if multi { t.box_radius } else { t.btn_radius }).fill(t.field).child(input);
     b = if multi { b.py(if mac { 5.0 } else { 8.0 }).items_start() } else { b.h(if mac { 22.0 } else { 34.0 }).center_y() };
     if mac {
         b = b.border(0.5, t.field_border);
@@ -842,7 +842,7 @@ pub fn editor(s: &App, t: &Theme) -> El {
         .w(600.0)
         .shrink()
         .min_h(0.0)
-        .radius(14.0)
+        .radius(t.dialog_radius)
         .fill(t.sheet)
         .border(1.0, Color::BLACK.alpha(0.6))
         .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
@@ -891,6 +891,6 @@ pub fn confirm(s: &App, t: &Theme) -> Option<El> {
         .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
         .child(t.small(msg).wrap())
         .child(buttons);
-    panel = if mac { panel.radius(12.0).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     Some(scrim("confirm-automation-layer", 0.32, cancel).center().child(panel))
 }

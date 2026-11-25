@@ -305,7 +305,7 @@ fn slash_menu(s: &App, sess: &Session, t: &Theme) -> Option<El> {
         return None;
     }
     let mac = t.mac();
-    let mut c = col().key("slash-menu").w(if mac { 360.0 } else { 400.0 }).padding(if mac { 5.0 } else { 6.0 }).radius(if mac { 8.0 } else { 12.0 }).role("listbox").label("Commands");
+    let mut c = col().key("slash-menu").w(if mac { 360.0 } else { 400.0 }).padding(if mac { 5.0 } else { 6.0 }).radius(t.box_radius).role("listbox").label("Commands");
     c = if mac { c.fill(rune::color::hex("#2c2c2e").unwrap_or(Color::BLACK)).border(0.5, Color::WHITE.alpha(0.12)).shadow(6.0, 20.0, Color::BLACK.alpha(0.4)) } else { c.fill(rune::color::hex("#36363a").unwrap_or(Color::BLACK)).shadow(6.0, 20.0, Color::BLACK.alpha(0.4)) };
     for (i, (cmd, what)) in list.iter().enumerate() {
         let cmd = *cmd;
@@ -317,7 +317,7 @@ fn slash_menu(s: &App, sess: &Session, t: &Theme) -> Option<El> {
                 .px(if mac { 8.0 } else { 10.0 })
                 .gap(10.0)
                 .center_y()
-                .radius(if mac { 5.0 } else { 7.0 })
+                .radius(t.row_radius)
                 .role("option")
                 .checked(i == 0)
                 .label(format!("{cmd}: {what}"))
@@ -397,7 +397,7 @@ fn model_chip(s: &App, sess: &Session, t: &Theme) -> Option<El> {
         .mr(if mac { 6.0 } else { 8.0 })
         .gap(if mac { 5.0 } else { 6.0 })
         .center_y()
-        .radius(if mac { 13.0 } else { 16.0 })
+        .radius(t.btn_radius)
         .role("button")
         .label(format!("Model: {}", what.join(", ")))
         .help("Model, Effort and Fast Mode")
@@ -454,7 +454,7 @@ pub fn model_popover(s: &App, sess: &Session, t: &Theme) -> Vec<El> {
                 .py(if mac { 4.0 } else { 5.0 })
                 .gap(10.0)
                 .center_y()
-                .radius(if mac { 6.0 } else { 7.0 })
+                .radius(t.row_radius)
                 .role("option")
                 .checked(on)
                 .label(v.name.clone())
@@ -497,7 +497,7 @@ pub fn model_popover(s: &App, sess: &Session, t: &Theme) -> Vec<El> {
         .key("model-popover")
         .w(w)
         .padding(pad)
-        .radius(12.0)
+        .radius(t.box_radius)
         .fill(if mac { rune::color::hex("#2f2f31").unwrap_or(Color::BLACK) } else { rune::color::hex("#36363a").unwrap_or(Color::BLACK) })
         .border(if mac { 0.5 } else { 1.0 }, Color::WHITE.alpha(if mac { 0.13 } else { 0.12 }))
         .shadow(10.0, 30.0, Color::BLACK.alpha(0.5))
@@ -688,7 +688,7 @@ fn file_chips(s: &App, id: &str, t: &Theme) -> Option<El> {
                 .center_y()
                 .pl(8.0)
                 .pr(6.0)
-                .radius(8.0)
+                .radius(t.btn_radius)
                 .fill(Color::WHITE.alpha(0.08))
                 .child(icon(&ic::FILE_SM, 13.0).color(t.text2))
                 .child(text(clip(&f.name, 40)).font(TextStyle::new(12.0, 400.0)).color(t.text))
@@ -985,7 +985,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
         }
         EventType::SessionState => {
             let st = str_of(&p["state"]);
-            if !matches!(st.as_str(), "failed" | "ended" | "starting") || (st == "starting" && p["reason"] != "resuming") {
+            // Only an end or a failure is news; the host starting or resuming the agent isn't.
+            if !matches!(st.as_str(), "failed" | "ended") {
                 return None;
             }
             let mut c = col().w_full().items_center().gap(4.0).child(t.faint(format!("Session {st}{}", p["reason"].as_str().map(|r| format!(": {r}")).unwrap_or_default())));
@@ -1218,7 +1219,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
     let (a1, a2) = (aid.clone(), aid);
     let deny = t.button("Deny", Btn::Default, Some(&keys(s.look, Cmd::Deny)), move |s| s.respond(&a2, false)).key("deny");
     let approve = t.button(&approve_label, Btn::Primary, Some(&keys(s.look, Cmd::Approve)), move |s| s.respond(&a1, true)).key("approve");
-    let (deny, approve) = if mac { (deny, approve) } else { (deny.radius(17.0).px(18.0), approve.radius(17.0).px(18.0)) };
+    let (deny, approve) = if mac { (deny, approve) } else { (deny.px(18.0), approve.px(18.0)) };
     let mut head = row().w_full().gap(10.0).center_y();
     if mac {
         head = head.child(row().size(28.0, 28.0).radius(7.0).center().fill(t.warn.alpha(0.18)).child(icon(&ic::TERMINAL, 15.0).color(t.warn)));
@@ -1235,7 +1236,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
         .key("approval-card")
         .w_full()
         .gap(if mac { 10.0 } else { 12.0 })
-        .radius(12.0)
+        .radius(t.card_radius)
         .padding(if mac { 14.0 } else { 16.0 })
         .label(format!("{agent} asks to run {command} on this computer"))
         .child(head);
@@ -1254,12 +1255,12 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
                 .w_full()
                 .px(11.0)
                 .py(9.0)
-                .radius(if mac { 7.0 } else { 8.0 })
+                .radius(t.box_radius)
                 .border(0.5, t.text2.alpha(0.3))
                 .child(text(details.to_string()).font(t.font()).color(t.text).wrap()),
         );
     }
-    card = card.child(col().w_full().px(11.0).py(9.0).radius(if mac { 7.0 } else { 8.0 }).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
+    card = card.child(col().w_full().px(11.0).py(9.0).radius(t.box_radius).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
     card = card.child(
         text(note)
             .font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0))
@@ -1291,7 +1292,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
                 .h(34.0)
                 .px(14.0)
                 .center_y()
-                .radius(17.0)
+                .radius(t.btn_radius)
                 .role("button")
                 .label(label)
                 .focusable(true)
@@ -1335,7 +1336,7 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
     let (a1, a2) = (aid.clone(), aid.clone());
     let deny = t.button("Deny", Btn::Default, Some(&keys(s.look, Cmd::Deny)), move |s| s.respond(&a2, false)).key("deny");
     let approve = t.button("Approve", Btn::Primary, Some(&keys(s.look, Cmd::Approve)), move |s| s.respond(&a1, true)).key("approve");
-    let (deny, approve) = if mac { (deny, approve) } else { (deny.radius(17.0).px(18.0), approve.radius(17.0).px(18.0)) };
+    let (deny, approve) = if mac { (deny, approve) } else { (deny.px(18.0), approve.px(18.0)) };
     let title = if mac { format!("{agent_short} wants to {} on {conn}", humanize(&tool)) } else {
         let h = humanize(&tool);
         let mut cs = h.chars();
@@ -1363,7 +1364,7 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
         .key("approval-card")
         .w_full()
         .gap(if mac { 10.0 } else { 12.0 })
-        .radius(12.0)
+        .radius(t.card_radius)
         .padding(if mac { 14.0 } else { 16.0 })
         .label(format!("{agent} asks to use {conn} {tool}"))
         .child(head);
@@ -1373,7 +1374,7 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
         card.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, inset: true, color: t.warn.alpha(0.6), ..Default::default() })
     };
     if !args.is_empty() {
-        card = card.child(col().w_full().px(11.0).py(9.0).radius(if mac { 7.0 } else { 8.0 }).fill(Color::BLACK.alpha(0.25)).child(pre(t, clip(&args, 3000))));
+        card = card.child(col().w_full().px(11.0).py(9.0).radius(t.box_radius).fill(Color::BLACK.alpha(0.25)).child(pre(t, clip(&args, 3000))));
     }
     Some(card.child(row().w_full().gap(if mac { 8.0 } else { 10.0 }).child(el().grow(1.0)).child(deny).child(approve)))
 }

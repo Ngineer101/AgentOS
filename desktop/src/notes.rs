@@ -151,7 +151,7 @@ fn group_head(s: &App, t: &Theme, ws: &str) -> El {
                 .key(format!("note-new-{ws}"))
                 .size(size, size)
                 .center()
-                .radius(if mac { 5.0 } else { size / 2.0 })
+                .radius(t.btn_radius)
                 .role("button")
                 .label(format!("New Note in {name}"))
                 .help(format!("New Note in {name}"))
@@ -290,7 +290,7 @@ fn editor(s: &App, t: &Theme) -> El {
         .on_submit(|s: &mut App, _: &mut Tx| s.note_edit.insert("\n"))
         // ⌘↩ / Ctrl+Enter saves; the window's other shortcuts still work here.
         .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx));
-    let mut field = row().w_full().px(if mac { 10.0 } else { 12.0 }).py(if mac { 8.0 } else { 10.0 }).items_start().radius(if mac { 6.0 } else { 8.0 }).fill(t.field).child(rune::auto_grow(input, 10, 40));
+    let mut field = row().w_full().px(if mac { 10.0 } else { 12.0 }).py(if mac { 8.0 } else { 10.0 }).items_start().radius(t.box_radius).fill(t.field).child(rune::auto_grow(input, 10, 40));
     if mac {
         field = field.border(0.5, t.field_border);
     }
@@ -381,6 +381,6 @@ pub fn confirm(s: &App, t: &Theme) -> Option<El> {
         .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
         .child(t.small("The note is gone for good. Sessions started from it stay.").wrap())
         .child(buttons);
-    panel = if mac { panel.radius(12.0).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     Some(scrim("confirm-note-layer", 0.32, cancel).center().child(panel))
 }

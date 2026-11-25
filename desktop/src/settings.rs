@@ -73,7 +73,7 @@ fn mac_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
             .size(76.0, 48.0)
             .center()
             .gap(3.0)
-            .radius(7.0)
+            .radius(t.btn_radius)
             .role("tab")
             .label(tb.title())
             .checked(on)
@@ -96,7 +96,7 @@ fn mac_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
         .max_w(760.0)
         .shrink()
         .min_h(0.0)
-        .radius(12.0)
+        .radius(t.dialog_radius)
         .fill(t.panel)
         .border(0.5, Color::WHITE.alpha(0.18))
         .shadow(30.0, 80.0, Color::BLACK.alpha(0.55))
@@ -128,7 +128,7 @@ fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
             .px(14.0)
             .gap(8.0)
             .center_y()
-            .radius(7.0)
+            .radius(t.btn_radius)
             .role("tab")
             .label(tb.title())
             .checked(on)
@@ -163,7 +163,7 @@ fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
         .max_w(880.0)
         .shrink()
         .min_h(0.0)
-        .radius(14.0)
+        .radius(t.dialog_radius)
         .fill(t.panel)
         .border(1.0, Color::BLACK.alpha(0.6))
         .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
@@ -285,7 +285,7 @@ pub(crate) fn popup_button(t: &Theme, key: String, label: &str) -> El {
         .pr(if mac { 6.0 } else { 10.0 })
         .gap(8.0)
         .center_y()
-        .radius(if mac { 5.0 } else { 7.0 })
+        .radius(t.btn_radius)
         .fill(t.control)
         .role("combobox")
         .label(label.to_string())
@@ -305,7 +305,7 @@ fn source_row(t: &Theme, key: String, selected: bool, glyph: El, name: &str, det
         .px(8.0)
         .py(if mac { 6.0 } else { 10.0 })
         .center_y()
-        .radius(if mac { 6.0 } else { 8.0 })
+        .radius(t.row_radius)
         .role("listitem")
         .label(name.to_string())
         .focusable(true)
@@ -766,7 +766,7 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
             if let Some(d) = &a.config_dir {
                 let trailing = if s.admin {
                     let dir = d.clone();
-                    row().size(34.0, 34.0).center().radius(7.0).role("button").label("Open the folder").hover(Color::WHITE.alpha(0.08)).on_press(move |s: &mut App| s.reveal(&dir)).child(icon(&ic::FOLDER, 16.0).color(t.text))
+                    row().size(34.0, 34.0).center().radius(t.btn_radius).role("button").label("Open the folder").hover(Color::WHITE.alpha(0.08)).on_press(move |s: &mut App| s.reveal(&dir)).child(icon(&ic::FOLDER, 16.0).color(t.text))
                 } else {
                     el()
                 };
@@ -802,7 +802,7 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
         .px(12.0)
         .gap(6.0)
         .center_y()
-        .radius(7.0)
+        .radius(t.btn_radius)
         .fill(t.control)
         .role("button")
         .label("Add Profile")
@@ -1359,7 +1359,7 @@ fn add_connector(s: &App, t: &Theme) -> El {
         .px(if mac { 8.0 } else { 10.0 })
         .gap(if mac { 6.0 } else { 8.0 })
         .center_y()
-        .radius(if mac { 7.0 } else { 7.0 })
+        .radius(t.btn_radius)
         .fill(t.field)
         .child(icon(&ic::SEARCH, if mac { 12.0 } else { 14.0 }).color(t.text2))
         .child(input);
@@ -1523,7 +1523,7 @@ fn rename_field(s: &App, c: &Connector, t: &Theme) -> El {
             false
         });
     let failed = s.rename_error.as_ref().is_some_and(|(cid, _)| *cid == c.connector_id);
-    let mut f = row().h(if mac { 24.0 } else { 34.0 }).w(if mac { 220.0 } else { 240.0 }).px(if mac { 7.0 } else { 10.0 }).center_y().radius(if mac { 5.0 } else { 7.0 }).fill(t.field).child(input);
+    let mut f = row().h(if mac { 24.0 } else { 34.0 }).w(if mac { 220.0 } else { 240.0 }).px(if mac { 7.0 } else { 10.0 }).center_y().radius(t.btn_radius).fill(t.field).child(input);
     if mac {
         f = f.border(0.5, if failed { t.danger } else { t.field_border });
     }
@@ -1914,7 +1914,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
                         .gap(6.0)
                         .items_center()
                         .padding(14.0)
-                        .radius(10.0)
+                        .radius(t.box_radius)
                         .fill(Color::WHITE.alpha(0.05))
                         .child(center(&format!("\u{201c}{}\u{201d} wants to pair. Check it shows the same code:", pend.device_name)))
                         .child(text(pend.short_code.clone()).font(TextStyle::new(26.0, 600.0).mono().tracking(2.0)).color(t.text).key("short-code"));
@@ -1952,7 +1952,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
         .modal(true, |s: &mut App| s.pairing = None)
         .child(c)
         .child(buttons);
-    sheet = if mac { sheet.corners([0.0, 0.0, 12.0, 12.0]).border_sides([0.0, 0.5, 0.5, 0.5], Color::WHITE.alpha(0.14)) } else { sheet.radius(14.0).border(1.0, Color::BLACK.alpha(0.6)) };
+    sheet = if mac { sheet.corners([0.0, 0.0, t.dialog_radius, t.dialog_radius]).border_sides([0.0, 0.5, 0.5, 0.5], Color::WHITE.alpha(0.14)) } else { sheet.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     sheet
 }
 
