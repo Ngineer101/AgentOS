@@ -1,0 +1,29 @@
+desktop/src/main.rs
+  s_85e973df840de4::t_8b115731d0ab5e 32-34
+desktop/src/model.rs
+  s_85e973df840de4::t_94cb45f3cc38a5 719,721-722,727-729,857,990-992,995-1009,1133-1142
+desktop/src/notes.rs
+  s_85e973df840de4::t_2cc21efe598844 104,145-147,159
+desktop/src/prefs.rs
+  s_85e973df840de4::t_6f2928a9028009 2,22-24,71,75
+desktop/src/tests.rs
+  s_85e973df840de4::t_d075345dc9c1b2 2133-2154,2209,2211-2228
+desktop/src/view.rs
+  s_85e973df840de4::t_df95ed3e8f9407 12-15,244-245,250-258,261,363-390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a45c1f765ae0b806c840d4b7b81c068d4df2dca9",
+  "prompts": {},
+  "sessions": {
+    "s_85e973df840de4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_85e973df840de4",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
