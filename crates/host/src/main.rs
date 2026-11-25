@@ -129,6 +129,8 @@ async fn run(cfg: HostConfig) -> Result<()> {
     }
     tracing::info!("shutting down");
     host.terminals.close_all();
+    // Browsers save their cookies (your sign-ins) as they quit.
+    host.browsers.close_all().await;
     host.sessions
         .shutdown_and_wait(std::time::Duration::from_secs(10))
         .await;

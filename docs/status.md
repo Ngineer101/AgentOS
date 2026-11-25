@@ -246,6 +246,34 @@ is refused. The host listened on no TCP port throughout.
   mouse reporting to programs, no input methods (IME), box-drawing characters
   drawn from the font (rows may show seams), and no inline images.
 
+- **A browser per workspace, for agents and you** (25 Nov 2026, protocol 12).
+  `agenthostd` runs a headless Chromium (the one installed, or
+  `$AGENTHOST_BROWSER`) per workspace, with its own profile in
+  `<data>/browser/<workspace>`, so a sign-in lasts and every session of that
+  workspace finds it. The host drives it over `--remote-debugging-pipe` (no
+  port), sends its traffic through an egress proxy that allows what the
+  workspace's network settings allow and nothing on this computer (localhost
+  included), denies downloads, only opens http(s), and stops it after 10
+  minutes unused (the profile stays; quitting saves the cookies). Agents get
+  `agenthost__browser_*` tools (navigate, an accessibility snapshot with refs,
+  click, type, keys, select, screenshot, console, evaluate, wait, tabs), one
+  tab per session plus its popups; a session asks the user once ("Use the
+  browser" in Settings can make it not ask). The desktop's Browser tab (⇧⌘B /
+  Ctrl+Shift+B) shows the workspace's tabs as JPEG frames decoded off the UI
+  thread into a Rune `NativeSurface` (at most two frames ahead of the app's
+  acknowledgement, newer ones replacing older), and sends clicks, wheel, keys
+  and paste back. Every `browser.*` method is admin only. Tested: protocol and
+  host units here (URL rules, snapshot outline, keys, frame flow control),
+  the panel laid out and clicked/typed headless in both looks, and the app
+  joined to a real in-process host (start failure shown in the panel, phone
+  refused). `tests/browser_core.rs` drives a real Chromium (an agent fills a
+  form, the panel gets frames and typing, localhost refused, sign-ins outlive
+  a restart and clearing forgets them, example.com through the proxy) but only
+  runs with `AGENTHOST_TEST_BROWSER=1` outside an agent sandbox (Chromium
+  can't start inside one), and **has not been run yet**. Not seen as pixels,
+  not run on macOS. Not built: reaching a dev server in a session's sandbox
+  (it has its own network namespace), iOS, file uploads, cursor shapes, IME.
+
 ## Known issues
 
 - `agenthost-cli::remote::connect` reports why a tunnel closed only as text; the FFI parses the code out of it.

@@ -106,6 +106,8 @@ struct Conn {
     watchers: Vec<JoinHandle<()>>,
     /// Terminals this connection gets the output of, by terminal id.
     terminals: HashMap<String, crate::terminal::Attachment>,
+    /// Browser tabs this connection gets the picture of, by tab id.
+    browser_tabs: HashMap<String, crate::browser::Attachment>,
     greeted: bool,
     pending_after: Option<After>,
 }
@@ -137,6 +139,7 @@ pub async fn serve_connection(
         subs: HashMap::new(),
         watchers: vec![],
         terminals: HashMap::new(),
+        browser_tabs: HashMap::new(),
         greeted: false,
         pending_after: None,
     };
@@ -197,6 +200,11 @@ pub async fn serve_connection(
                         }
                         conn.notify(m::N_TERMINAL_CHANGED, serde_json::to_value(t).unwrap()).await;
                     }
+                    Ok(BusMsg::BrowserChanged(b)) if conn.principal.capabilities.contains(&Capability::Admin) && conn.greeted => {
+                        // A tab that closed sends no more pictures.
+                        conn.browser_tabs.retain(|id, a| a.workspace_id != b.browser.workspace_id || b.browser.tabs.iter().any(|t| t.tab_id == *id));
+                        conn.notify(m::N_BROWSER_CHANGED, serde_json::to_value(b).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -227,7 +235,10 @@ enum After {
     },
     /// Start sending an attached terminal's output, from `offset`.
     Terminal { terminal_id: String, offset: u64 },
+    /// Start sending an attached browser tab's pictures.
+    Browser { tab_id: String },
 }
+
 
 impl Conn {
     async fn notify(&self, method: &str, params: Value) {
@@ -613,6 +624,56 @@ impl Conn {
                 Ok(json!({"removed": true}))
             }
 
+            m::BROWSER_LIST => to_value(h.browsers.list()),
+            m::BROWSER_OPEN => to_value(h.browsers.open(params(p)?).await?),
+            m::BROWSER_NAVIGATE => to_value(h.browsers.navigate(params(p)?).await?),
+            m::BROWSER_RESIZE => to_value(h.browsers.resize(params(p)?).await?),
+            m::BROWSER_ATTACH => {
+                let ap: BrowserAttachParams = params(p)?;
+                // Attaching again starts over: the old attachment goes first.
+                self.browser_tabs.remove(&ap.tab_id);
+                let a = h.browsers.attach(&ap.tab_id).await?;
+                self.browser_tabs.insert(ap.tab_id.clone(), a);
+                // Pictures follow the response, never overtake it.
+                self.pending_after = Some(After::Browser { tab_id: ap.tab_id });
+                Ok(json!({"ok": true}))
+            }
+            m::BROWSER_DETACH => {
+                let r: BrowserTabRef = params(p)?;
+                self.browser_tabs.remove(&r.tab_id);
+                Ok(json!({"ok": true}))
+            }
+            m::BROWSER_ACK => {
+                let ap: BrowserAckParams = params(p)?;
+                let a = self.browser_tabs.get(&ap.tab_id).ok_or_else(|| RpcError::invalid_state("not attached to this tab"))?;
+                a.ack(ap.frame_id);
+                Ok(json!({"ok": true}))
+            }
+            m::BROWSER_INPUT => {
+                h.browsers.input(params(p)?).await?;
+                Ok(json!({"ok": true}))
+            }
+            m::BROWSER_SELECTION => {
+                let r: BrowserTabRef = params(p)?;
+                to_value(h.browsers.selection(&r.tab_id).await?)
+            }
+            m::BROWSER_CLOSE_TAB => {
+                let r: BrowserTabRef = params(p)?;
+                self.browser_tabs.remove(&r.tab_id);
+                h.browsers.close_tab(&r.tab_id).await?;
+                Ok(json!({"removed": true}))
+            }
+            m::BROWSER_STOP => {
+                let r: BrowserWorkspaceRef = params(p)?;
+                h.browsers.stop(&r.workspace_id).await;
+                Ok(json!({"ok": true}))
+            }
+            m::BROWSER_CLEAR => {
+                let r: BrowserWorkspaceRef = params(p)?;
+                h.browsers.clear(&r.workspace_id).await?;
+                Ok(json!({"ok": true}))
+            }
+
             m::DEVICE_LIST
             | m::DEVICE_PAIR_START
             | m::DEVICE_PAIR_CONFIRM
@@ -639,6 +700,18 @@ impl Conn {
                         let out = out.clone();
                         async move {
                             let n = Notification::new(m::N_TERMINAL_OUTPUT, serde_json::to_value(o).unwrap());
+                            out.send(Message::Notification(n).to_json()).await.is_ok()
+                        }
+                    });
+                }
+            }
+            Some(After::Browser { tab_id }) => {
+                let out = self.out.clone();
+                if let Some(a) = self.browser_tabs.get_mut(&tab_id) {
+                    a.start(move |f| {
+                        let out = out.clone();
+                        async move {
+                            let n = Notification::new(m::N_BROWSER_FRAME, serde_json::to_value(f).unwrap());
                             out.send(Message::Notification(n).to_json()).await.is_ok()
                         }
                     });

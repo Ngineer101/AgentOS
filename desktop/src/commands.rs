@@ -32,6 +32,8 @@ pub enum Cmd {
     ToggleSide,
     /// Show or hide the terminal (the right panel's Terminal tab).
     ToggleTerminal,
+    /// Show or hide the workspace's browser (the right panel's Browser tab).
+    ToggleBrowser,
     /// Show or hide what the open session changed (the right panel's Changes tab).
     ToggleChanges,
     /// Show or hide the open session's files (the right panel's Files tab).
@@ -50,7 +52,7 @@ pub enum Cmd {
     Quit,
 }
 
-const KEYED: [Cmd; 26] = [
+const KEYED: [Cmd; 27] = [
     Cmd::Archive,
     Cmd::NewSession,
     Cmd::QuickTask,
@@ -67,6 +69,7 @@ const KEYED: [Cmd; 26] = [
     Cmd::Settings,
     Cmd::ToggleSide,
     Cmd::ToggleTerminal,
+    Cmd::ToggleBrowser,
     Cmd::ToggleChanges,
     Cmd::ToggleFiles,
     Cmd::ShowFolder,
@@ -101,6 +104,7 @@ pub fn chord(look: Look, cmd: Cmd) -> Option<String> {
         Cmd::ToggleSide => if mac { "super+alt+i" } else { "shift+f9" }.into(),
         // Where editors keep it: Control and the key under Escape, on both.
         Cmd::ToggleTerminal => "ctrl+`".into(),
+        Cmd::ToggleBrowser => if mac { "super+shift+b" } else { "ctrl+shift+b" }.into(),
         // Where editors keep source control and the explorer.
         Cmd::ToggleChanges => if mac { "super+shift+g" } else { "ctrl+shift+g" }.into(),
         Cmd::ToggleFiles => if mac { "super+shift+e" } else { "ctrl+shift+e" }.into(),
@@ -135,6 +139,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::Settings => if mac { "⌘," } else { "Ctrl+," },
         Cmd::ToggleSide => if mac { "⌥⌘I" } else { "Shift+F9" },
         Cmd::ToggleTerminal => if mac { "⌃`" } else { "Ctrl+`" },
+        Cmd::ToggleBrowser => if mac { "⇧⌘B" } else { "Ctrl+Shift+B" },
         Cmd::ToggleChanges => if mac { "⇧⌘G" } else { "Ctrl+Shift+G" },
         Cmd::ToggleFiles => if mac { "⇧⌘E" } else { "Ctrl+Shift+E" },
         Cmd::Archive => if mac { "⌃⌘A" } else { "Ctrl+Alt+A" },
@@ -325,6 +330,14 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
                 s.terms.focus_wanted = false;
             }
         }
+        Cmd::ToggleBrowser => {
+            if !s.browser_allowed() {
+                s.notice = Some(if s.admin { "This host is too old for the browser." } else { "The browser opens in the app on the host's own computer." }.into());
+            } else if s.toggle_browser() {
+                s.close_overlays();
+                tx.focus("browser-view", false);
+            }
+        }
         Cmd::Archive => {
             if let Some(x) = session.filter(|x| x.archived_at.is_none()) {
                 s.archive(&x.session_id);
@@ -426,6 +439,7 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
         (Some("Toggle Side Questions"), Some("View"), Some("alt+cmd+i"), |s, tx| run(s, Cmd::ToggleSide, tx)),
         (Some("Toggle Terminal"), Some("View"), Some("ctrl+`"), |s, tx| run(s, Cmd::ToggleTerminal, tx)),
+        (Some("Toggle Browser"), Some("View"), Some("shift+cmd+b"), |s, tx| run(s, Cmd::ToggleBrowser, tx)),
         (Some("Toggle Changes"), Some("View"), Some("shift+cmd+g"), |s, tx| run(s, Cmd::ToggleChanges, tx)),
         (Some("Toggle Files"), Some("View"), Some("shift+cmd+e"), |s, tx| run(s, Cmd::ToggleFiles, tx)),
         (Some("Find Session"), Some("View"), Some("cmd+f"), |s, tx| run(s, Cmd::Search, tx)),

@@ -171,6 +171,29 @@ pub const TERMINAL_ACK: &str = "terminal.ack";
 /// End the shell (hang up) and forget the terminal.
 pub const TERMINAL_CLOSE: &str = "terminal.close";
 
+/// The browser: a Chromium per workspace, signed in to what you signed in to
+/// there (protocol 12; see [`crate::browser`]). Admin only: it can act as you.
+/// Whether this host can run one, and each workspace's browser: a `BrowserList`.
+pub const BROWSER_LIST: &str = "browser.list";
+/// A new tab: `BrowserOpenParams`, returns the `BrowserTab`.
+pub const BROWSER_OPEN: &str = "browser.open";
+pub const BROWSER_NAVIGATE: &str = "browser.navigate";
+pub const BROWSER_RESIZE: &str = "browser.resize";
+/// Get a tab's picture on this connection, as `browser.frame` notifications.
+pub const BROWSER_ATTACH: &str = "browser.attach";
+pub const BROWSER_DETACH: &str = "browser.detach";
+/// This connection drew a tab's frames up to one, so the host sends more.
+pub const BROWSER_ACK: &str = "browser.ack";
+/// A click, key or paste for a tab.
+pub const BROWSER_INPUT: &str = "browser.input";
+/// The text selected in a tab, to copy: a `BrowserSelection`.
+pub const BROWSER_SELECTION: &str = "browser.selection";
+pub const BROWSER_CLOSE_TAB: &str = "browser.close_tab";
+/// Quit a workspace's browser. Its profile (your sign-ins) stays.
+pub const BROWSER_STOP: &str = "browser.stop";
+/// Quit a workspace's browser and delete its profile: signed out everywhere.
+pub const BROWSER_CLEAR: &str = "browser.clear";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -205,6 +228,12 @@ pub const N_TERMINAL_OUTPUT: &str = "terminal.output";
 /// A terminal opened, was resized, ended or was closed. Params are a
 /// [`crate::TerminalChanged`]. Sent to admin connections.
 pub const N_TERMINAL_CHANGED: &str = "terminal.changed";
+/// The latest picture of a tab this connection attached to. Params are a
+/// [`crate::BrowserFrame`].
+pub const N_BROWSER_FRAME: &str = "browser.frame";
+/// A workspace's browser or one of its tabs changed. Params are a
+/// [`crate::BrowserChanged`]. Sent to admin connections.
+pub const N_BROWSER_CHANGED: &str = "browser.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -277,6 +306,10 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         // A shell as you, outside the sandbox, with your logins.
         | TERMINAL_LIST | TERMINAL_OPEN | TERMINAL_ATTACH | TERMINAL_DETACH | TERMINAL_INPUT
         | TERMINAL_RESIZE | TERMINAL_ACK | TERMINAL_CLOSE
+        // A browser signed in to your accounts, outside the sandbox.
+        | BROWSER_LIST | BROWSER_OPEN | BROWSER_NAVIGATE | BROWSER_RESIZE | BROWSER_ATTACH
+        | BROWSER_DETACH | BROWSER_ACK | BROWSER_INPUT | BROWSER_SELECTION | BROWSER_CLOSE_TAB
+        | BROWSER_STOP | BROWSER_CLEAR
         | PUSH_CLEAR_KEY => Admin,
         _ => return None,
     })
@@ -312,6 +345,18 @@ mod tests {
             TERMINAL_RESIZE,
             TERMINAL_ACK,
             TERMINAL_CLOSE,
+            BROWSER_LIST,
+            BROWSER_OPEN,
+            BROWSER_NAVIGATE,
+            BROWSER_RESIZE,
+            BROWSER_ATTACH,
+            BROWSER_DETACH,
+            BROWSER_ACK,
+            BROWSER_INPUT,
+            BROWSER_SELECTION,
+            BROWSER_CLOSE_TAB,
+            BROWSER_STOP,
+            BROWSER_CLEAR,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }

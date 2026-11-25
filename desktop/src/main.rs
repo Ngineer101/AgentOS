@@ -4,6 +4,7 @@ mod audio;
 mod automations;
 mod brand;
 mod bridge;
+mod browser;
 mod commands;
 mod demo;
 mod files;
@@ -31,7 +32,8 @@ use rune::{AppSpec, Chrome, KeyEvent, Tx, Waker};
 fn setup(s: &mut App, waker: Waker) {
     s.image_cache = Some(rune::ImageCache::new(waker.clone()));
     if std::env::var_os("AGENTHOST_DESKTOP_OFFLINE").is_none() {
-        s.bridge = Some(bridge::start(waker));
+        s.web.shown.surface.set_waker(waker.clone());
+        s.bridge = Some(bridge::start(waker, s.web.shown.clone()));
         s.hostname = hostname();
         let p = prefs::load();
         s.collapsed = p.collapsed;
@@ -53,6 +55,10 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
         tx.focus("term-view", false);
     }
     s.fetch_images();
+    s.browser_tick();
+    if let Some(text) = s.web.copy_out.take() {
+        tx.copy(text);
+    }
     if s.catch_up() {
         tx.wake_after(std::time::Duration::from_millis(500));
     }

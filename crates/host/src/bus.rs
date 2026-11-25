@@ -4,7 +4,7 @@
 //! A subscriber that falls behind re-reads from SQLite, so a slow client never
 //! loses events.
 
-use agenthost_proto::{AutomationChanged, Event, NoteChanged, PairingPending, ScreenStatus, Session, SessionDelta, TerminalChanged, VoiceStatus};
+use agenthost_proto::{AutomationChanged, BrowserChanged, Event, NoteChanged, PairingPending, ScreenStatus, Session, SessionDelta, TerminalChanged, VoiceStatus};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
@@ -32,6 +32,7 @@ pub enum BusMsg {
     NoteChanged(NoteChanged),
     /// A terminal opened, was resized, ended or was closed.
     TerminalChanged(TerminalChanged),
+    BrowserChanged(BrowserChanged),
 }
 
 #[derive(Clone)]
