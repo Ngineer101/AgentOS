@@ -1893,7 +1893,8 @@ async fn device_cmd(
                 print_json(&serde_json::to_value(&r)?);
             } else {
                 print_qr(&r.qr_payload);
-                println!("Scan this with the app. It expires in 2 minutes.\n");
+                println!("Scan this with the app, or paste this into the desktop app:\n\n  {}\n", r.qr_payload);
+                println!("It expires in 2 minutes.\n");
             }
             loop {
                 let Some(n) = notes.recv().await else {
