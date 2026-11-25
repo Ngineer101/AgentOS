@@ -85,13 +85,24 @@ pub struct Theme {
     pub w_bold: f32,
     // Metrics.
     pub btn_h: f32,
-    pub btn_radius: f32,
     pub toolbar_h: f32,
     pub sidebar_w: f32,
     pub column: f32,
+    // Corner radii: every rounded thing uses one, by what it is, never a number of its own.
+    // Only things round by nature are circles or pills (`h / 2`): switches, radio buttons,
+    // dots, avatars, the composer's send button, window buttons and status badges.
+    /// Every control: buttons, icon buttons (the small hover ones too), one-line fields,
+    /// chips you press, tabs.
+    pub btn_radius: f32,
+    /// A row in a list or a menu.
     pub row_radius: f32,
+    /// A box inside a view: grouped settings, menus and popovers, code and detail blocks,
+    /// multi-line fields.
     pub box_radius: f32,
+    /// A card that stands on its own: approvals, toasts.
     pub card_radius: f32,
+    /// Sheets, dialogs and the Settings window.
+    pub dialog_radius: f32,
 }
 
 impl Theme {
@@ -144,6 +155,7 @@ impl Theme {
                 row_radius: 6.0,
                 box_radius: 8.0,
                 card_radius: 10.0,
+                dialog_radius: 12.0,
             },
             Look::Gnome => Theme {
                 look,
@@ -191,6 +203,7 @@ impl Theme {
                 row_radius: 7.0,
                 box_radius: 12.0,
                 card_radius: 12.0,
+                dialog_radius: 14.0,
             },
         }
     }
@@ -323,7 +336,7 @@ impl Theme {
             .h(22.0)
             .px(10.0)
             .center_y()
-            .radius(5.0)
+            .radius(self.btn_radius)
             .fill(self.control)
             .box_shadow(rune::Shadow { y: 0.5, color: white(0.15), inset: true, ..Default::default() })
             .role("button")
@@ -344,7 +357,7 @@ impl Theme {
         row()
             .size(w, h)
             .center()
-            .radius(if self.mac() { 6.0 } else { 7.0 })
+            .radius(self.btn_radius)
             .role("button")
             .label(label.to_string())
             .help(label.to_string())
@@ -532,7 +545,7 @@ impl Theme {
             None => input,
         };
         let h = if self.mac() { 22.0 } else { 34.0 };
-        let mut b = row().h(h).w_full().px(if self.mac() { 7.0 } else { 10.0 }).center_y().radius(if self.mac() { 5.0 } else { 7.0 }).fill(self.field).child(input);
+        let mut b = row().h(h).w_full().px(if self.mac() { 7.0 } else { 10.0 }).center_y().radius(self.btn_radius).fill(self.field).child(input);
         if self.mac() {
             b = b.border(0.5, self.field_border);
         }
