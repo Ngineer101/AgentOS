@@ -63,6 +63,8 @@ pub struct FilesState {
     pub diff: DiffState,
     pub changes: Load,
     pub branch: String,
+    /// What the changes are measured against ("origin/main"), when the host says.
+    pub against: Option<String>,
     /// The patch was too long: some files are missing from it.
     pub changes_truncated: bool,
     /// Lines added and removed per path, from the diff, for the tree's rows.
@@ -84,6 +86,7 @@ impl Default for FilesState {
             diff: DiffState::default(),
             changes: Load::Idle,
             branch: String::new(),
+            against: None,
             changes_truncated: false,
             counts: HashMap::new(),
             tree: TreeModel::default(),
@@ -287,6 +290,7 @@ impl App {
                     .collect();
                 self.browse.diff.set_files(files);
                 self.browse.branch = c.branch;
+                self.browse.against = c.against;
                 self.browse.changes_truncated = c.truncated;
                 self.browse.changes = Load::Ready;
                 if self.browse.listing == Load::Ready {
@@ -459,7 +463,10 @@ pub fn changes(s: &App, t: &Theme, k: &Kit) -> El {
                 .child(text(n).font(t.font_small()).color(t.text))
                 .child(text(format!("+{a}")).font(t.font_mono()).color(t.ok))
                 .child(text(format!("\u{2212}{d}")).font(t.font_mono()).color(t.danger))
-                .child(text(format!("on {}", f.branch)).font(t.font_small()).color(t.text2).truncate().shrink().min_w(0.0))
+                .child(text(match &f.against {
+                    Some(a) => format!("against {a}"),
+                    None => format!("on {}", f.branch),
+                }).key("changes-against").font(t.font_small()).color(t.text2).truncate().shrink().min_w(0.0))
         }
         _ => row().key("changes-summary").child(text("Changes").font(t.font_small()).color(t.text2)),
     };
@@ -479,7 +486,10 @@ pub fn changes(s: &App, t: &Theme, k: &Kit) -> El {
     let content = match &f.changes {
         Load::Idle | Load::Loading => note(t, "changes-note", "Loading changes…"),
         Load::Failed(e) => note(t, "changes-note", format!("Could not load the changes: {e}")),
-        Load::Ready if files.is_empty() => note(t, "changes-note", format!("No changes yet on {}.", f.branch)),
+        Load::Ready if files.is_empty() => note(t, "changes-note", match &f.against {
+            Some(a) => format!("No changes yet on {} against {a}.", f.branch),
+            None => format!("No changes yet on {}.", f.branch),
+        }),
         Load::Ready => {
             let t2 = t.clone();
             DiffView::new(|s: &App| &s.browse.diff, |s: &mut App| &mut s.browse.diff)

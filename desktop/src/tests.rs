@@ -2835,7 +2835,7 @@ fn changes_and_files_follow_the_open_session() {
     assert!(app.browse.tree.get("src/net").is_some_and(|n| n.dir));
 
     // Answers for another session are dropped.
-    app.changes_loaded("ses_2", Ok(SessionChanges { branch: "x".into(), base: "0".into(), patch: String::new(), truncated: false }));
+    app.changes_loaded("ses_2", Ok(SessionChanges { branch: "x".into(), base: "0".into(), against: None, patch: String::new(), truncated: false }));
     assert_eq!(app.changed_files(), Some(3));
 
     // A file opens in the Files tab: tabs become four-column stops, lines are counted.

@@ -10,7 +10,10 @@
 use crate::ctx::Ctx;
 use crate::worktree;
 use agenthost_proto::*;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e.to_string())
@@ -71,15 +74,59 @@ pub async fn changes(ctx: &Ctx, session_id: &str) -> Result<SessionChanges, RpcE
     changes_of(Path::new(&w.path), live.then_some(dir.as_path()), &wt.branch).await.map_err(RpcError::invalid_state)
 }
 
-/// What `branch` changed since it left the branch `repo` has checked out.
-/// With its `worktree`, uncommitted work and untracked files count too.
+/// How long a fetch of the remote's main branch may take before the changes
+/// are measured from what was fetched last.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// A repository's remote is asked at most this often.
+const FETCH_EVERY: Duration = Duration::from_secs(60);
+
+/// The remote's main branch as this repository tracks it
+/// (`refs/remotes/origin/main`), brought up to date first when the remote
+/// answers in time. `None` for a repository without an `origin`.
+async fn remote_main(repo: &Path) -> Option<String> {
+    let mut found = git_line(repo, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).await.ok().filter(|r| r.starts_with("refs/remotes/origin/"));
+    for name in ["main", "master"] {
+        if found.is_none() {
+            let r = format!("refs/remotes/origin/{name}");
+            if git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).await.is_ok() {
+                found = Some(r);
+            }
+        }
+    }
+    let r = found?;
+    let name = r.trim_start_matches("refs/remotes/origin/").to_string();
+    static FETCHED: Mutex<Option<HashMap<PathBuf, Instant>>> = Mutex::new(None);
+    let due = {
+        let mut g = FETCHED.lock().unwrap_or_else(|e| e.into_inner());
+        let map = g.get_or_insert_with(HashMap::new);
+        let due = map.get(repo).is_none_or(|t| t.elapsed() >= FETCH_EVERY);
+        if due {
+            map.insert(repo.to_path_buf(), Instant::now());
+        }
+        due
+    };
+    if due {
+        // Offline, or a remote that wants a password: what was fetched last stands.
+        let refspec = format!("+refs/heads/{name}:{r}");
+        let _ = tokio::time::timeout(FETCH_TIMEOUT, worktree::git_command(repo, &["fetch", "--quiet", "--no-tags", "origin", &refspec]).output()).await;
+    }
+    git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).await.ok().map(|_| r)
+}
+
+/// What `branch` changed since it left the remote's main branch (fetched
+/// first, so a stale local `main` doesn't matter), which is what a pull
+/// request from it shows. A repository without a remote compares with the
+/// branch `repo` has checked out. With its `worktree`, uncommitted work and
+/// untracked files count too.
 pub async fn changes_of(repo: &Path, worktree: Option<&Path>, branch: &str) -> Result<SessionChanges, String> {
-    let theirs = git_line(repo, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).await.map_err(|_| "the workspace has no commit to compare with".to_string())?;
+    let against = remote_main(repo).await;
+    let theirs = git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", against.as_deref().unwrap_or("HEAD"))]).await.map_err(|_| "the workspace has no commit to compare with".to_string())?;
+    let against = against.map(|r| r.trim_start_matches("refs/remotes/").to_string());
     let (dir, head) = match worktree {
         Some(d) => (d, "HEAD".to_string()),
         None => (repo, format!("refs/heads/{branch}")),
     };
-    let base = git_line(dir, &["merge-base", &head, &theirs]).await.map_err(|_| format!("{branch} shares no history with the workspace's branch"))?;
+    let base = git_line(dir, &["merge-base", &head, &theirs]).await.map_err(|_| format!("{branch} shares no history with {}", against.as_deref().unwrap_or("the workspace's branch")))?;
     let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", &base];
     if worktree.is_none() {
         args.push(&head);
@@ -109,7 +156,7 @@ pub async fn changes_of(repo: &Path, worktree: Option<&Path>, branch: &str) -> R
             patch.push_str(&one);
         }
     }
-    Ok(SessionChanges { branch: branch.to_string(), base, patch, truncated })
+    Ok(SessionChanges { branch: branch.to_string(), base, against, patch, truncated })
 }
 
 /// A path as `git diff` writes it in a header: quoted when it must be.

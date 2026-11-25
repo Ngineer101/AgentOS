@@ -208,9 +208,14 @@ is refused. The host listened on no TCP port throughout.
   and resumed.
 
 - **A session's changes and files, read only** (25 Nov 2026, protocol 11).
-  `session.changes` is `git diff` from where the session's branch meets the
-  workspace's checked-out one (`merge-base`), in its worktree, so uncommitted
-  work counts, plus each untracked file as an added one; an archived session
+  `session.changes` is `git diff` from where the session's branch left the
+  remote's main branch (`merge-base` with `origin/HEAD`, else `origin/main`
+  or `origin/master`), in its worktree, so uncommitted work counts. The host
+  fetches that branch first (at most once a minute per repository, 15 s at
+  most; offline, what was fetched last stands), so a local `main` that is
+  behind doesn't matter; a repository without a remote compares with the
+  branch the workspace has checked out. Each untracked file
+  is added to the patch as an added one; an archived session
   whose worktree is gone gets its branch's commits. `session.files` is what
   git tracks plus what it doesn't ignore (every file for a folder outside
   git), `session.file_read` one file's first megabyte. Git runs as it does

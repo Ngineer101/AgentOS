@@ -124,3 +124,40 @@ async fn reads_stay_inside_the_folder() {
     let f = read_of(Source::Branch { repo, branch: "s".into() }, "README.md").await.unwrap();
     assert_eq!(f.text.as_deref(), Some("# Hi\n"));
 }
+
+/// With a remote, changes are measured against its main branch as it is now,
+/// not the local one, which may be behind.
+#[tokio::test]
+async fn changes_compare_with_the_remotes_main_branch() {
+    let t = tempdir();
+    let (repo, wt) = repo(t.path());
+    let origin = t.path().join("origin.git");
+    git(t.path(), &["clone", "-q", "--bare", repo.to_str().unwrap(), origin.to_str().unwrap()]);
+    git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(&repo, &["fetch", "-q", "origin"]);
+
+    // Someone else's commit lands on the remote; the local main never hears of it.
+    let other = t.path().join("other");
+    git(t.path(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    std::fs::write(other.join("upstream.txt"), "theirs\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "upstream"]);
+    git(&other, &["push", "-q", "origin", "HEAD"]);
+    // The session brings its branch up to date with the remote, then changes a file.
+    git(&wt, &["pull", "-q", "--no-rebase", origin.to_str().unwrap(), "HEAD"]);
+    std::fs::write(wt.join("README.md"), "# Hello\n").unwrap();
+    // The local branch wanders off; it isn't what the session is compared with.
+    std::fs::write(repo.join("local.txt"), "mine\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "local only"]);
+
+    let c = changes_of(&repo, Some(&wt), "s").await.unwrap();
+    assert_eq!(c.against.as_deref(), Some("origin/main"));
+    assert!(c.patch.contains("+# Hello"), "{}", c.patch);
+    assert!(!c.patch.contains("upstream.txt") && !c.patch.contains("local.txt"), "{}", c.patch);
+
+    // No remote: the branch the workspace has checked out.
+    let t2 = tempdir();
+    let (repo2, wt2) = self::repo(t2.path());
+    assert_eq!(changes_of(&repo2, Some(&wt2), "s").await.unwrap().against, None);
+}

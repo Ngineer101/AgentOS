@@ -131,8 +131,11 @@ see the same ones; a note never runs anything by itself.
 
 In a session, the desktop app's right panel has two more tabs. **Changes**
 (the toolbar's button, ⇧⌘G or Ctrl+Shift+G) shows everything the session
-changed since its branch left your workspace's own: commits, work it hasn't
-committed and new files, the same as a pull request from it would show.
+changed since its branch left the remote's main branch (`origin/main`,
+fetched first, so it doesn't matter if your local `main` is behind): commits,
+work it hasn't committed and new files, the same as a pull request from it
+would show. A repository without a remote compares with the branch your
+workspace has checked out.
 Switch between unified and split, fold a file by its header, and open a file
 from the button in its header. **Files** (⇧⌘E or Ctrl+Shift+E) is the
 session's whole folder: filter by name, double-click or press Return to read

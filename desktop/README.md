@@ -54,7 +54,8 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
 - **Changes** (⇧⌘G / Ctrl+Shift+G, the toolbar's button in a session with a
   branch of its own) and **Files** (⇧⌘E / Ctrl+Shift+E), in `files.rs`, for
   hosts on protocol 11. Changes is everything the session's branch changed
-  since it left the workspace's own, uncommitted work and new files included
+  since it left the remote's main branch (fetched by the host first),
+  uncommitted work and new files included
   (what a pull request would show), as one scrolling diff, unified or split;
   a file header's document button opens that file. Files is the session's
   whole folder as a tree with a filter; double-click or Return opens a file

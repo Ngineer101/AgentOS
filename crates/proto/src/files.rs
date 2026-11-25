@@ -1,7 +1,7 @@
 //! A session's files and what it changed (protocol 11), read only.
 //!
 //! `session.changes` is what the session's branch changed since it left the
-//! workspace's own branch, uncommitted work and new files included: what a
+//! remote's main branch, uncommitted work and new files included: what a
 //! pull request from it would show. `session.files` lists the session's
 //! folder and `session.file_read` reads one file of it.
 //!
@@ -23,8 +23,13 @@ pub struct SessionChanges {
     /// The session's branch.
     pub branch: String,
     /// The commit the changes are measured from: where the session's branch
-    /// and the workspace's own meet.
+    /// left the one in `against`.
     pub base: String,
+    /// The branch the changes are measured against: the remote's main one
+    /// ("origin/main"), fetched just before. `None` for a repository without
+    /// a remote, which compares with the branch the workspace has checked out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub against: Option<String>,
     /// `git diff` output (unified, three lines of context, renames found),
     /// then each new file git doesn't track yet as an added file.
     pub patch: String,

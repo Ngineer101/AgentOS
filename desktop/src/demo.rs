@@ -614,7 +614,7 @@ fn changes(s: &mut App) {
         i.protocol_version = 11;
     }
     s.show_panel(crate::model::PanelTab::Changes);
-    s.changes_loaded("ses_1", Ok(agenthost_proto::SessionChanges { branch: "agenthost/fix-flaky-resume".into(), base: "3f1c2aa".into(), patch: SAMPLE_PATCH.into(), truncated: false }));
+    s.changes_loaded("ses_1", Ok(agenthost_proto::SessionChanges { branch: "agenthost/fix-flaky-resume".into(), base: "3f1c2aa".into(), against: Some("origin/main".into()), patch: SAMPLE_PATCH.into(), truncated: false }));
     let files = ["Cargo.lock", "Cargo.toml", "README.md", "src/lib.rs", "src/main.rs", "src/net/backoff.rs", "src/net/client.rs", "src/net/mod.rs", "src/net/retry.rs", "src/store/db.rs", "tests/backoff.rs"];
     s.files_listed("ses_1", Ok(agenthost_proto::SessionFiles { files: files.iter().map(|f| f.to_string()).collect(), truncated: false }));
     s.browse.tree.expand_all();
