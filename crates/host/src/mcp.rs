@@ -1505,18 +1505,16 @@ impl Gateway {
         // The resource metadata URL from WWW-Authenticate, else the well-known path.
         let init = json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":MCP_PROTOCOL,"capabilities":{},"clientInfo":{"name":"agenthost","version":"0"}}});
         let (_, _, _, headers) = self.post(c, &init, None, None).await?;
-        let mut prm_url = headers
+        let challenge = headers
             .get("www-authenticate")
             .and_then(|v| v.to_str().ok())
-            .and_then(|h| h.split("resource_metadata=").nth(1))
-            .map(|r| {
-                r.trim_start_matches('"')
-                    .split('"')
-                    .next()
-                    .unwrap_or("")
-                    .to_string()
-            })
-            .filter(|s| !s.is_empty());
+            .unwrap_or("");
+        let mut prm_url = auth_param(challenge, "resource_metadata");
+        // The scopes to ask for, by the MCP spec's order: the challenge's
+        // `scope`, else the protected resource's `scopes_supported`, else none.
+        // Never the authorization server's list: that is every scope the
+        // server knows (hundreds, for Cloudflare), not what this resource needs.
+        let mut scope = auth_param(challenge, "scope");
         if prm_url.is_none() {
             let mut u = server.clone();
             u.set_path(&format!(
@@ -1534,6 +1532,12 @@ impl Gateway {
                         as_url = v["authorization_servers"][0].as_str().map(str::to_string);
                         if let Some(res) = v["resource"].as_str() {
                             resource = res.to_string();
+                        }
+                        if scope.is_none() {
+                            scope = v["scopes_supported"].as_array().and_then(|a| {
+                                let s: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
+                                (!s.is_empty()).then(|| s.join(" "))
+                            });
                         }
                     }
                 }
@@ -1559,6 +1563,7 @@ impl Gateway {
         let mut meta = meta
             .ok_or_else(|| anyhow!("no OAuth authorization server metadata found for {}", c.url))?;
         meta["resource"] = json!(resource);
+        meta["scope"] = json!(scope);
         Ok(meta)
     }
 
@@ -1619,11 +1624,8 @@ impl Gateway {
                 .append_pair("code_challenge_method", "S256")
                 .append_pair("state", &state)
                 .append_pair("resource", &resource);
-            if let Some(scopes) = meta["scopes_supported"].as_array() {
-                let s: Vec<&str> = scopes.iter().filter_map(Value::as_str).collect();
-                if !s.is_empty() {
-                    q.append_pair("scope", &s.join(" "));
-                }
+            if let Some(scope) = meta["scope"].as_str() {
+                q.append_pair("scope", scope);
             }
         }
         let gw = self.clone();
@@ -2154,6 +2156,28 @@ impl ConnectorAdmin for Arc<Gateway> {
     }
 }
 
+/// One parameter of a `WWW-Authenticate` challenge (`Bearer realm="x",
+/// scope="a b"`), quoted or bare; None when absent or empty.
+fn auth_param(challenge: &str, name: &str) -> Option<String> {
+    let mut rest = challenge;
+    while let Some(i) = rest.find(name) {
+        let before = rest[..i].chars().next_back();
+        let after = &rest[i + name.len()..];
+        rest = after;
+        if !matches!(before, None | Some(' ' | ',' | '\t')) {
+            continue;
+        }
+        let Some(v) = after.trim_start().strip_prefix('=') else { continue };
+        let v = v.trim_start();
+        let v = match v.strip_prefix('"') {
+            Some(q) => q.split('"').next().unwrap_or(""),
+            None => v.split([',', ' ']).next().unwrap_or(""),
+        };
+        return (!v.is_empty()).then(|| v.to_string());
+    }
+    None
+}
+
 /// The JSON body of an OAuth response, or an error carrying the server's own
 /// explanation (`error_description` / `error`) rather than a bare status.
 async fn oauth_json(r: reqwest::Response, what: &str) -> Result<Value> {
@@ -2177,6 +2201,19 @@ async fn oauth_json(r: reqwest::Response, what: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_parameters_from_a_bearer_challenge() {
+        let h = r#"Bearer realm="OAuth", error="invalid_token", resource_metadata="https://x.dev/.well-known/oauth-protected-resource/mcp", scope="read write""#;
+        assert_eq!(auth_param(h, "resource_metadata").as_deref(), Some("https://x.dev/.well-known/oauth-protected-resource/mcp"));
+        assert_eq!(auth_param(h, "scope").as_deref(), Some("read write"));
+        assert_eq!(auth_param(h, "realm").as_deref(), Some("OAuth"));
+        // A name inside another name doesn't count.
+        assert_eq!(auth_param(r#"Bearer xscope="nope""#, "scope"), None);
+        assert_eq!(auth_param("Bearer scope=bare, realm=x", "scope").as_deref(), Some("bare"));
+        assert_eq!(auth_param(r#"Bearer scope="""#, "scope"), None);
+        assert_eq!(auth_param("", "scope"), None);
+    }
 
     #[test]
     fn slugs_and_classification() {

@@ -1605,7 +1605,21 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
         .gap(if mac { 6.0 } else { 10.0 })
         .child(row().w_full().gap(10.0).items_start().child(col().grow(1.0).min_w(0.0).gap(4.0).child(title).child(t.mono(clip(c.url.trim_start_matches("https://"), 60)).color(t.text2))).child(if renaming { el() } else { actions.flex_wrap().max_w(240.0).justify_end() }));
     if let Some(link) = signing.filter(|l| !l.is_empty()) {
-        d = d.child(footnote(t, "Finish signing in in your browser. This updates by itself when you're done. If no browser opened, open this link:")).child(t.mono_small(link.clone()));
+        // Sign-in links can run to kilobytes; show the start and copy the rest.
+        let l = link.clone();
+        d = d
+            .child(footnote(t, "Finish signing in in your browser. This updates by itself when you're done. If no browser opened, copy this link into one:"))
+            .child(
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .center_y()
+                    .child(t.mono_small(clip(link, 80)).grow(1.0).min_w(0.0))
+                    .child(t.small_button_tx("Copy Link", move |s, tx| {
+                        tx.copy(l.clone());
+                        s.notice = Some("Copied sign-in link".into());
+                    })),
+            );
     } else if c.status == "error" {
         if let Some(det) = &c.status_detail {
             d = d.child(text(det.clone()).font(t.font_small()).color(t.danger).wrap());
