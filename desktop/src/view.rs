@@ -9,7 +9,10 @@ use agenthost_proto::*;
 use rune::{col, el, icon, row, text, Color, Cx, El, ScrollSpec, TextStyle, Tx};
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    let t = Theme::new(s.look);
+    let mut t = Theme::new(s.look);
+    if let Some(w) = s.sidebar_w {
+        t.sidebar_w = w;
+    }
     let k = t.kit();
     let mut body = row().key("body").w_full().h_full().min_h(0.0).fill(t.window);
     if s.sidebar_open {
@@ -238,14 +241,24 @@ fn sidebar(s: &App, t: &Theme) -> El {
         search_btn = search_btn.fill(t.control);
     }
     // Both looks: the sidebar's buttons sit at its trailing edge, as macOS has them beside
-    // the traffic lights. GNOME keeps its main menu (F10) there too.
+    // the traffic lights. GNOME keeps its main menu (F10) there too, and the app's mark and
+    // name at the leading edge, where macOS has the traffic lights.
     let mut header = row().key("sidebar-top").w_full().h(t.toolbar_h).gap(if mac { 4.0 } else { 2.0 }).center_y().window_drag();
     header = if mac {
         header.pl(20.0).pr(12.0).child(el().w(54.0)).child(el().grow(1.0)).child(toggle).child(search_btn)
     } else {
+        let brand = row()
+            .key("sidebar-brand")
+            .gap(8.0)
+            .pl(8.0)
+            .center_y()
+            .grow(1.0)
+            .min_w(0.0)
+            .child(el().size(22.0, 22.0).pixels(crate::brand::logo()))
+            .child(text("AgentOS").font(TextStyle::new(t.fs, t.w_bold)).color(t.text).truncate().min_w(0.0));
         header
             .px(6.0)
-            .child(el().grow(1.0))
+            .child(brand)
             .child(toggle)
             .child(search_btn)
             .child(t.icon_button(&ic::MENU, 16.0, &format!("Main Menu ({})", keys(s.look, Cmd::MainMenu)), |s, tx| run(s, Cmd::MainMenu, tx)).key("main-menu"))
@@ -347,7 +360,34 @@ fn sidebar(s: &App, t: &Theme) -> El {
         .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
         .child(host);
     sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
-    sb
+    sb.child(sidebar_grip(t))
+}
+
+/// The sidebar's trailing edge: drag it to resize the sidebar (kept between launches),
+/// double-press it for the look's own width.
+fn sidebar_grip(t: &Theme) -> El {
+    use crate::model::{SIDEBAR_MAX_W, SIDEBAR_MIN_W};
+    const GRIP: f32 = 6.0;
+    let w = t.sidebar_w;
+    el().key("sidebar-grip")
+        .role("separator")
+        .label("Resize Sidebar")
+        .range_value(f64::from(w), f64::from(SIDEBAR_MIN_W), f64::from(SIDEBAR_MAX_W))
+        .range_step(16.0)
+        .pin(None, Some(0.0), Some(-GRIP / 2.0), Some(0.0))
+        .w(GRIP)
+        .cursor(rune::Cursor::ResizeColumn)
+        .fill(Color::TRANSPARENT)
+        .raise()
+        .on_drag(move |s: &mut App, d: &mut rune::Drag, _: &mut Tx| match d.phase {
+            rune::Phase::Down if d.clicks == 2 => s.sidebar_w = None,
+            rune::Phase::Down => d.data = w,
+            rune::Phase::Move if d.clicks < 2 => s.resize_sidebar(d.data + d.dx, false),
+            rune::Phase::Up if d.cancelled() && d.clicks < 2 => s.resize_sidebar(d.data, true),
+            rune::Phase::Up if d.clicks < 2 => s.resize_sidebar(d.data + d.dx, true),
+            _ => {}
+        })
+        .on_step(move |s: &mut App, delta: i32, _: &mut Tx| s.resize_sidebar(w + delta as f32 * 16.0, true))
 }
 
 /// A session's place among the numbered ones (⌘1…⌘9), if it has one.

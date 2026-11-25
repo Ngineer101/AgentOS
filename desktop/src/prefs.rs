@@ -1,5 +1,5 @@
 //! What the app remembers between launches on this computer: which sidebar
-//! groups are collapsed, and which host to connect to when one was paired.
+//! groups are collapsed, how wide the sidebar is, and which host to connect to when one was paired.
 //! A small JSON file in the platform's config folder; a missing or unreadable
 //! one is the defaults. Pins live on the host (`session.pin`), so every
 //! device sees them.
@@ -19,6 +19,9 @@ pub struct Prefs {
     /// normal state. "Use this computer" clears it.
     #[serde(default)]
     pub prefer_remote: bool,
+    /// The sidebar's width, once its edge has been dragged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_w: Option<f32>,
 }
 
 /// `~/Library/Application Support/AgentHost/` on macOS,
@@ -65,10 +68,10 @@ mod tests {
 
     #[test]
     fn prefs_read_back_and_tolerate_old_files() {
-        let p = Prefs { collapsed: ["ws_1".to_string()].into(), prefer_remote: true };
+        let p = Prefs { collapsed: ["ws_1".to_string()].into(), prefer_remote: true, sidebar_w: Some(320.0) };
         let back: Prefs = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         let empty: Prefs = serde_json::from_str("{}").unwrap();
-        assert!(empty.collapsed.is_empty() && !empty.prefer_remote, "a file from before either field is fine");
+        assert!(empty.collapsed.is_empty() && !empty.prefer_remote && empty.sidebar_w.is_none(), "a file from before these fields is fine");
     }
 }

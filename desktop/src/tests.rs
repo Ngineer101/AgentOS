@@ -2130,6 +2130,28 @@ fn compact_sidebar_pins_collapses_and_shows_more() {
     assert!(!app.has_pins());
 }
 
+/// A workspace's "+" starts at once as the workspace's default login; with no login to use,
+/// it opens the sheet instead.
+#[test]
+fn a_workspaces_plus_starts_without_the_sheet() {
+    let mut app = demo("sidebar");
+    app.new_agent = Some("codex".into());
+    app.open_new_session_in("ws_relay");
+    assert!(!app.new_open);
+    assert_eq!(app.new_ws.as_deref(), Some("ws_relay"));
+    assert_eq!(app.new_agent.as_deref(), Some("prof_work"), "the workspace's default");
+    app.new_agent = Some("codex".into());
+    app.open_new_session_in("ws_notes");
+    assert!(!app.new_open);
+    assert_eq!(app.new_agent.as_deref(), Some("codex"), "no default: the login picked last");
+    for a in &mut app.info.as_mut().unwrap().agents {
+        a.available = false;
+    }
+    app.open_new_session_in("ws_notes");
+    assert!(app.new_open, "nothing to start as: the sheet asks");
+    assert_eq!(app.new_ws.as_deref(), Some("ws_notes"));
+}
+
 /// The compact sidebar lays out in both looks and its buttons do what they say: search,
 /// collapse, "Show N more", a workspace's "+", and a hovered row's Pin and Archive.
 #[test]
@@ -2184,9 +2206,26 @@ fn compact_sidebar_lays_out_and_clicks_through() {
         click(&mut ui, "group-ws_relay");
         assert!(state(&mut ui, &|s| s.collapsed.contains("ws_relay")));
         assert!(ui.find("ses_1").is_none() && ui.find("ses_3").is_some(), "{look:?}: the pinned one stays");
-        // A workspace's "+" opens the sheet on it.
+        // A workspace's "+" starts a session there without the sheet.
         click(&mut ui, "group-new-ws_notes");
-        assert!(state(&mut ui, &|s| s.new_open && s.new_ws.as_deref() == Some("ws_notes")));
+        assert!(state(&mut ui, &|s| !s.new_open && s.new_ws.as_deref() == Some("ws_notes") && s.new_agent.is_some()), "{look:?}");
+
+        // The sidebar's edge drags it wider, within limits; a double press puts it back.
+        let mut ui = open("sidebar", look);
+        let (x, y) = ui.find("sidebar-grip").expect("the sidebar's edge");
+        ui.pointer_down(x, y);
+        ui.pointer_move(x + 60.0, y);
+        ui.frame(0.016);
+        ui.pointer_up(x + 60.0, y);
+        ui.frame(0.016);
+        let wide = crate::look::Theme::new(look).sidebar_w + 60.0;
+        assert!(state(&mut ui, &|s| s.sidebar_w.is_some_and(|w| (w - wide).abs() < 1.0)), "{look:?}: dragged 60 pt wider");
+        let (x, y) = ui.find("sidebar-grip").unwrap();
+        ui.pointer_down(x, y);
+        ui.pointer_move(x + 1000.0, y);
+        ui.pointer_up(x + 1000.0, y);
+        ui.frame(0.016);
+        assert!(state(&mut ui, &|s| s.sidebar_w == Some(model::SIDEBAR_MAX_W)), "{look:?}: no wider than the most");
 
         // Hovered: Pin and Archive in place of the age; pressing one doesn't open the row.
         let mut ui = open("sidebar-hover", look);

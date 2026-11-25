@@ -716,12 +716,17 @@ pub struct App {
     /// The jump keys' modifier is held (⌘ on macOS, Alt on GNOME): the sidebar shows
     /// ⌘1…9 / Alt+1…9 in place of the ages.
     pub jump_held: bool,
-    /// Save `collapsed` to the prefs file (off in tests and offline snapshots).
+    /// Save `collapsed` and `sidebar_w` to the prefs file (off in tests and offline snapshots).
     pub save_prefs: bool,
+    /// The sidebar's width as dragged by its edge; `None` is the look's own.
+    pub sidebar_w: Option<f32>,
 }
 
 /// A sidebar group shows this many sessions until "Show N more".
 pub const GROUP_SHOWN: usize = 8;
+/// How narrow and wide the sidebar's edge drags it.
+pub const SIDEBAR_MIN_W: f32 = 220.0;
+pub const SIDEBAR_MAX_W: f32 = 480.0;
 
 /// One login of an agent: its profile id, or (hosts before profiles) its name.
 pub fn login_key(a: &AgentStatus) -> String {
@@ -849,6 +854,7 @@ pub fn init() -> App {
         hover_row: None,
         jump_held: false,
         save_prefs: false,
+        sidebar_w: None,
     }
 }
 
@@ -981,10 +987,26 @@ impl App {
         self.new_open = true;
     }
 
-    /// A workspace's "+" in the sidebar: the New session sheet with that workspace picked.
+    /// A workspace's "+" in the sidebar (and "New Session Here"): start a session there at
+    /// once, as the login the sheet would preselect (the workspace's default, else the last
+    /// one picked, else the first available). With no login to use, the sheet opens instead.
     pub fn open_new_session_in(&mut self, ws: &str) {
         self.new_ws = Some(ws.to_string());
-        self.open_new_session(false);
+        let Some(key) = self.quick_login(ws) else {
+            self.open_new_session(false);
+            return;
+        };
+        self.close_overlays();
+        self.start_note = None;
+        self.new_agent = Some(key);
+        self.start_session();
+    }
+
+    /// The login a session started without the sheet uses in `ws`.
+    fn quick_login(&self, ws: &str) -> Option<String> {
+        let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();
+        let usable = |k: &String| agents.iter().any(|a| a.available && &login_key(a) == k);
+        self.default_login(ws).or_else(|| self.new_agent.clone().filter(usable)).or_else(|| agents.iter().find(|a| a.available).map(login_key))
     }
 
     pub fn open_settings(&mut self, tab: Tab) {
@@ -1104,6 +1126,16 @@ impl App {
             // connect to) survive this one.
             let mut p = crate::prefs::load();
             p.collapsed = self.collapsed.clone();
+            crate::prefs::save(&p);
+        }
+    }
+
+    /// Drag the sidebar's edge to `w` (clamped); `save` on release keeps it between launches.
+    pub fn resize_sidebar(&mut self, w: f32, save: bool) {
+        self.sidebar_w = Some(w.clamp(SIDEBAR_MIN_W, SIDEBAR_MAX_W));
+        if save && self.save_prefs {
+            let mut p = crate::prefs::load();
+            p.sidebar_w = self.sidebar_w;
             crate::prefs::save(&p);
         }
     }

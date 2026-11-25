@@ -101,7 +101,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
 }
 
 /// The notes by workspace (in the sidebar's order), each workspace under its name with a
-/// "+" for a new note there.
+/// "+" for a new note there, shown on hover.
 fn list(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let now = now_ms();
@@ -142,6 +142,9 @@ fn group_head(s: &App, t: &Theme, ws: &str) -> El {
         .pr(if mac { 4.0 } else { 3.0 })
         .pt(6.0)
         .center_y()
+        // The "+" shows while the pointer is on the heading: the pane's own "+" is the one
+        // always in view.
+        .hover_group()
         .child(text(name.clone()).font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) }).color(if mac { t.text3 } else { t.text2 }).truncate().grow(1.0).min_w(0.0))
         .child(
             row()
@@ -153,6 +156,7 @@ fn group_head(s: &App, t: &Theme, ws: &str) -> El {
                 .label(format!("New Note in {name}"))
                 .help(format!("New Note in {name}"))
                 .hover(Color::WHITE.alpha(0.10))
+                .group_opacity(0.0, 1.0)
                 .on_press(move |s: &mut App| s.new_note(Some(&id)))
                 .child(icon(&ic::PLUS_SMALL, if mac { 11.0 } else { 12.0 }).color(if mac { t.text2 } else { t.text })),
         )
