@@ -119,6 +119,8 @@ impl App {
         }
         match self.panel_tab {
             PanelTab::Terminal => Some(PanelTab::Terminal),
+            PanelTab::Changes => self.changes_available().then_some(PanelTab::Changes),
+            PanelTab::Files => self.files_available().then_some(PanelTab::Files),
             PanelTab::Side => matches!(&self.screen, Screen::Session(id) if self.has_side(id)).then_some(PanelTab::Side),
         }
     }
@@ -126,15 +128,17 @@ impl App {
     pub fn show_panel(&mut self, tab: PanelTab) {
         self.panel_open = true;
         self.panel_tab = tab;
-        if tab == PanelTab::Terminal {
-            self.terminal_shown();
+        match tab {
+            PanelTab::Terminal => self.terminal_shown(),
+            PanelTab::Changes | PanelTab::Files => self.files_sync(),
+            PanelTab::Side => {}
         }
     }
 
     /// The panel's width: the side questions' own, or the terminal's (which drags).
     pub fn panel_width(&self, t: &Theme) -> f32 {
         match self.panel_shown() {
-            Some(PanelTab::Terminal) => self.panel_w.unwrap_or(if t.mac() { 520.0 } else { 560.0 }).clamp(PANEL_MIN_W, PANEL_MAX_W),
+            Some(PanelTab::Terminal | PanelTab::Changes | PanelTab::Files) => self.panel_w.unwrap_or(if t.mac() { 520.0 } else { 560.0 }).clamp(PANEL_MIN_W, PANEL_MAX_W),
             _ => crate::side::width(t),
         }
     }

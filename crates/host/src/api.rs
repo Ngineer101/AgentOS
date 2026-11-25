@@ -391,6 +391,15 @@ impl Conn {
                 let r: agenthost_proto::SessionRenameParams = params(p)?;
                 to_value(h.sessions.rename(&r.session_id, r.title.as_deref())?)
             }
+            m::SESSION_CHANGES => {
+                let r: SessionRef = params(p)?;
+                to_value(crate::files::changes(&h.ctx, &r.session_id).await?)
+            }
+            m::SESSION_FILES => {
+                let r: SessionRef = params(p)?;
+                to_value(crate::files::list(&h.ctx, &r.session_id).await?)
+            }
+            m::SESSION_FILE_READ => to_value(crate::files::read(&h.ctx, params(p)?).await?),
             m::SESSION_PIN => {
                 let r: agenthost_proto::SessionPinParams = params(p)?;
                 to_value(h.sessions.set_pinned(&r.session_id, r.pinned)?)

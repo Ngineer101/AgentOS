@@ -207,6 +207,29 @@ is refused. The host listened on no TCP port throughout.
   turn cancels the turn; an agent that ignores cancel for 3 s is restarted
   and resumed.
 
+- **A session's changes and files, read only** (25 Nov 2026, protocol 11).
+  `session.changes` is `git diff` from where the session's branch left the
+  remote's main branch (`merge-base` with `origin/HEAD`, else `origin/main`
+  or `origin/master`), in its worktree, so uncommitted work counts. The host
+  fetches that branch first (at most once a minute per repository, 15 s at
+  most; offline, what was fetched last stands), so a local `main` that is
+  behind doesn't matter; a repository without a remote compares with the
+  branch the workspace has checked out. Each untracked file
+  is added to the patch as an added one; an archived session
+  whose worktree is gone gets its branch's commits. `session.files` is what
+  git tracks plus what it doesn't ignore (every file for a folder outside
+  git), `session.file_read` one file's first megabyte. Git runs as it does
+  for worktrees (no hooks) with external diff and textconv off; a path or a
+  link that leaves the session's folder is refused. All three need only the
+  sessions capability, so paired devices can use them: the agent can already
+  print any of this in the conversation. The desktop draws them with
+  rune-kit's diff view, tree and highlighter. Tested on Linux in process
+  (`tests/files_core.rs` against a real repository; the desktop's model and
+  both tabs laid out and clicked through headless in both looks). Not yet
+  seen as pixels, not run on macOS, and not joined end to end to a live host
+  session. Not built: review comments on diff lines, images, search inside a
+  file, the iOS app.
+
 - **Terminals are the host's, and local only** (25 Nov 2026, protocol 10).
   The desktop's terminal is a shell `agenthostd` runs in a pseudo-terminal it
   owns; the app is only the emulator (`alacritty_terminal` drawn with Rune's

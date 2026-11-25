@@ -34,7 +34,8 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   or the microphone) writes the words into the composer as you talk; ↩ stops
   and sends, Esc throws the dictation away.
 - **Right panel** (`panel.rs`): one trailing pane with a tab per thing it
-  shows; today the terminal and the open session's side questions (`/btw`). A
+  shows; today the terminal, the open session's changes and files, and its
+  side questions (`/btw`). A
   new feature for the panel is a `PanelTab`, its entry in `panel::tabs` and
   its body in `panel::pane`. A subagent's pane takes its place while open.
 - **Terminal** (⌃` / Ctrl+`, the toolbar's terminal button, GNOME's main
@@ -50,6 +51,19 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   the focus. Only on the host's own computer: a paired connection has no
   terminal button, and the host would refuse it. `term.rs` is the emulator
   (`alacritty_terminal`, drawn with Rune's `grid`), `terminal.rs` the tab.
+- **Changes** (⇧⌘G / Ctrl+Shift+G, the toolbar's button in a session with a
+  branch of its own) and **Files** (⇧⌘E / Ctrl+Shift+E), in `files.rs`, for
+  hosts on protocol 11. Changes is everything the session's branch changed
+  since it left the remote's main branch (fetched by the host first),
+  uncommitted work and new files included
+  (what a pull request would show), as one scrolling diff, unified or split;
+  a file header's document button opens that file. Files is the session's
+  whole folder as a tree with a filter; double-click or Return opens a file
+  read only, coloured by language, and "Show Changes" goes back to its part
+  of the diff. Both load when shown, when the agent's turn ends, and on
+  Refresh. The diff, the tree and the colours are rune-kit's (`diff`,
+  `Tree`, `syntax`, 80 languages), which the app already linked for
+  Markdown: no new dependency. They work on a paired connection too.
 - **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):
   workspace and login ("Claude Code · Work"); ⌘↩ starts, and you type the
   first message in the session. Picking a workspace picks its default login
@@ -112,6 +126,7 @@ AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.p
 #           automation-new-webhook automation-edit automation-edit-webhook automation-picker
 #           automation-confirm-delete automation-confirm-rotate
 #           terminal terminal-home terminal-side terminal-ended terminal-remote
+#           changes changes-split files file-open
 cargo test      # drives a real in-process host through the app's model and bridge
 ```
 

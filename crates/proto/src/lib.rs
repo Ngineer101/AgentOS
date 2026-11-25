@@ -10,6 +10,7 @@ pub mod jsonrpc;
 pub mod methods;
 pub mod note;
 pub mod screen;
+pub mod files;
 pub mod terminal;
 pub mod tunnel;
 pub mod types;
@@ -17,6 +18,7 @@ pub mod types;
 pub use jsonrpc::{Message, Notification, Request, Response, RpcError};
 pub use automation::*;
 pub use note::*;
+pub use files::*;
 pub use terminal::*;
 pub use types::*;
 
@@ -33,7 +35,9 @@ pub use types::*;
 /// 8: pinned sessions (`session.pin`, `Session.pinned_at`).
 /// 9: notes (`note.*`, `session.create` `note_id`).
 /// 10: terminals (`terminal.*`), admin only.
-pub const PROTOCOL_VERSION: u32 = 10;
+/// 11: a session's changes and files (`session.changes`, `session.files`,
+/// `session.file_read`).
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

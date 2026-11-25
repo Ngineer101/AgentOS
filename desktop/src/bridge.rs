@@ -85,6 +85,12 @@ pub enum Tag {
     SessionFromNote(String),
     /// `terminal.list`.
     Terminals,
+    /// `session.changes` of this session.
+    Changes(String),
+    /// `session.files` of this session.
+    Files(String),
+    /// `session.file_read` of this path in this session.
+    FileRead { session: String, path: String },
     /// `terminal.open`: answered with the new terminal.
     TerminalOpened,
     /// `terminal.attach` to this terminal: its output follows as notifications.

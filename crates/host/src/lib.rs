@@ -12,6 +12,7 @@ pub mod config;
 pub mod automations;
 pub mod cron;
 pub mod ctx;
+pub mod files;
 pub mod host;
 pub mod gitremote;
 pub mod hostcmd;
