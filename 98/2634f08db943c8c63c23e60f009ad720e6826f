@@ -1,0 +1,27 @@
+desktop/src/tests.rs
+  s_95201ef31298e6::t_c5d3f442fb9ff3 2402-2408
+desktop/src/automations.rs
+  s_95201ef31298e6::t_1d0fc39bf9be11 526-529
+desktop/src/icons.rs
+  s_95201ef31298e6::t_c82783a79550c7 76-77
+desktop/src/look.rs
+  s_95201ef31298e6::t_b5f72e7b4d0713 338-342,355
+desktop/src/notes.rs
+  s_95201ef31298e6::t_d1285c1e4f7192 267-270,289-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "982634f08db943c8c63c23e60f009ad720e6826f",
+  "prompts": {},
+  "sessions": {
+    "s_95201ef31298e6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5003363-ce93-47bd-9818-fcaca4376dac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
