@@ -264,9 +264,10 @@ fn editor(s: &App, t: &Theme) -> El {
                 .gap(8.0)
                 .center_y()
                 .child(t.small(format!("{} · {when}", ws_name(s, &n.workspace_id))).truncate().grow(1.0).min_w(0.0))
-                .child(t.small_button(if done { "Reopen" } else { "Mark Done" }, move |s| s.set_note_done(&idd, !done)).key("note-toggle-done"))
-                .child(t.small_button_danger("Delete…", move |s| s.delete_note(&idx)).key("delete-note"))
-                .child(t.button("Start Session", Btn::Primary, None, move |s| s.start_from_note(&idg)).key("note-start").help("Start a session with this note as its first message"))
+                .gap(if mac { 2.0 } else { 4.0 })
+                .child(t.icon_button(if done { &ic::REOPEN } else { &ic::CHECK }, if mac { 14.0 } else { 16.0 }, if done { "Reopen" } else { "Mark Done" }, move |s: &mut App, _: &mut Tx| s.set_note_done(&idd, !done)).key("note-toggle-done"))
+                .child(t.icon_button_tinted(&ic::TRASH, if mac { 14.0 } else { 16.0 }, "Delete…", t.danger, move |s: &mut App, _: &mut Tx| s.delete_note(&idx)).key("delete-note"))
+                .child(t.icon_button_tinted(&ic::PLAY, if mac { 13.0 } else { 15.0 }, "Start Session: this note becomes its first message", t.accent_text, move |s: &mut App, _: &mut Tx| s.start_from_note(&idg)).key("note-start"))
         }
         (None, Some(ws)) => row()
             .w_full()
@@ -285,6 +286,8 @@ fn editor(s: &App, t: &Theme) -> El {
         .placeholder("What's the idea? The first line is the title.", t.text3)
         .caret(t.text, t.accent.alpha(0.35))
         .on_edit(|s: &mut App| &mut s.note_edit)
+        // Return starts a new line, as in any editor (a field submits on it by default).
+        .on_submit(|s: &mut App, _: &mut Tx| s.note_edit.insert("\n"))
         // ⌘↩ / Ctrl+Enter saves; the window's other shortcuts still work here.
         .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| (ev.mods.alt || ev.mods.cmd || ev.mods.ctrl) && crate::commands::on_key(s, ev, tx));
     let mut field = row().w_full().px(if mac { 10.0 } else { 12.0 }).py(if mac { 8.0 } else { 10.0 }).items_start().radius(if mac { 6.0 } else { 8.0 }).fill(t.field).child(rune::auto_grow(input, 10, 40));

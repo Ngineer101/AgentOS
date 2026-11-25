@@ -335,6 +335,11 @@ impl Theme {
     }
     /// A borderless icon button (toolbar, composer).
     pub fn icon_button(&self, i: &'static Icon, size: f32, label: &str, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
+        self.icon_button_tinted(i, size, label, if self.mac() { self.text2 } else { self.text }, f)
+    }
+    /// [`Self::icon_button`] with its icon in `ink` (the accent for the main action, red for
+    /// one that can't be undone).
+    pub fn icon_button_tinted(&self, i: &'static Icon, size: f32, label: &str, ink: Color, f: impl Fn(&mut App, &mut Tx) + 'static) -> El {
         let (w, h) = if self.mac() { (30.0, 28.0) } else { (34.0, 34.0) };
         row()
             .size(w, h)
@@ -347,7 +352,7 @@ impl Theme {
             .hover(white(0.08))
             .press(white(0.14))
             .on_press_tx(f)
-            .child(icon(i, size).color(if self.mac() { self.text2 } else { self.text }))
+            .child(icon(i, size).color(ink))
     }
 
     /// An on/off switch.

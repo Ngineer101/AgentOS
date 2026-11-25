@@ -2399,6 +2399,13 @@ fn note_screens_lay_out_and_click_through() {
     click(&mut ui, "note-new-ws_relay");
     assert!(state(&mut ui, &|s| s.new_note_ws.as_deref() == Some("ws_relay") && s.note_edit.text.is_empty()));
     assert!(ui.find("note-row-new").is_some());
+    // Return in the note starts a new line.
+    click(&mut ui, "note-text");
+    ui.update(|s, _| s.note_edit.replace_text("Idea"));
+    ui.frame(0.016);
+    ui.key(rune::KeyEvent { key: rune::Key::Enter, mods: rune::Mods::default() });
+    ui.frame(0.016);
+    assert!(state(&mut ui, &|s| s.note_edit.text == "Idea\n"), "Return breaks the line");
     click(&mut ui, "note-note_rate");
     click(&mut ui, "note-start");
     assert!(state(&mut ui, &|s| s.new_open && s.start_note.as_ref().is_some_and(|(id, _, _)| id == "note_rate")));
