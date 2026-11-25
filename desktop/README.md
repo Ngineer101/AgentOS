@@ -101,7 +101,8 @@ The keys land in `remote.json` in the config folder (`$AGENTHOST_REMOTE` picks
 the file, the same one `agenthost remote pair --state` writes), and a laptop
 with no host of its own connects there at every launch — a tiny `desktop.json`
 in the same folder remembers that choice, and "Use this computer" in the same
-place undoes it.
+place undoes it. `scripts/install.sh --desktop-only` installs just the app for
+such a laptop (no host, CLI or service); `--uninstall` removes it again.
 
 A paired connection gets sessions and approvals, never policy: workspaces,
 connectors, devices, webhook automations and built-in tool policies render
