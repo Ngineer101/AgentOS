@@ -29,6 +29,7 @@ pub mod screen;
 pub mod secrets;
 pub mod session;
 pub mod store;
+pub mod terminal;
 pub mod title;
 pub mod uploads;
 pub mod util;

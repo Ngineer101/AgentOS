@@ -1,14 +1,12 @@
-//! Side questions (`/btw`): a trailing pane beside the session, with a tab per side
-//! conversation. macOS draws it as an inspector (a hairline-separated trailing pane under its
-//! own toolbar band); GNOME as the end pane of an AdwOverlaySplitView with a tab bar.
-//! Closing a tab hides it here only: the conversation stays in the session's events.
+//! Side questions (`/btw`): the right panel's Side Questions tab ([`crate::panel`]), with a
+//! tab per side conversation. Closing a tab hides it here only: the conversation stays in
+//! the session's events.
 
-use crate::commands::{label as keys, Cmd};
 use crate::icons as ic;
 use crate::look::Theme;
 use crate::model::{App, SideThread};
 use crate::view::clip;
-use rune::{col, el, icon, row, text, Color, El, ScrollSpec, TextStyle, Tx};
+use rune::{col, icon, row, text, Color, El, ScrollSpec, TextStyle, Tx};
 use rune_kit::Kit;
 
 /// The pending tab (a new question waiting for its id) uses this key.
@@ -22,43 +20,13 @@ pub fn width(t: &Theme) -> f32 {
     }
 }
 
-pub fn pane(s: &App, session: &str, t: &Theme, k: &Kit) -> El {
+/// The panel's Side Questions tab for `session`: a tab per conversation, the selected one,
+/// and the follow-up field.
+pub fn content(s: &App, session: &str, t: &Theme, k: &Kit) -> El {
     let mac = t.mac();
     let tabs = s.side_tabs(session);
     let pending = s.side_pending.get(session);
     let selected = if pending.is_some() { Some(PENDING.to_string()) } else { s.side_selected(session) };
-
-    // The header band, level with the window's toolbar.
-    let title = text(if mac { "Side Questions" } else { "Side Questions" }).font(TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 })).color(t.text);
-    let hide = t
-        .icon_button(&ic::CLOSE, 10.0, &format!("Hide Side Questions ({})", keys(s.look, Cmd::ToggleSide)), |s: &mut App, _: &mut Tx| s.side_open = false)
-        .key("side-hide");
-    let header = if mac {
-        row()
-            .key("side-header")
-            .w_full()
-            .h(t.toolbar_h)
-            .pl(16.0)
-            .pr(10.0)
-            .center_y()
-            .fill(t.toolbar)
-            .border_sides([0.0, 0.0, 0.5, 0.0], Color::BLACK.alpha(0.6))
-            .window_drag()
-            .child(title)
-            .child(el().grow(1.0))
-            .child(hide)
-    } else {
-        row()
-            .key("side-header")
-            .w_full()
-            .h(t.toolbar_h)
-            .px(6.0)
-            .center_y()
-            .window_drag()
-            .child(el().w(34.0))
-            .child(row().grow(1.0).justify_center().child(title))
-            .child(hide)
-    };
 
     // Tabs.
     let mut bar = row().key("side-tabs").w_full().gap(if mac { 4.0 } else { 6.0 }).px(if mac { 8.0 } else { 8.0 }).py(if mac { 6.0 } else { 6.0 }).role("tablist").focus_group();
@@ -83,19 +51,7 @@ pub fn pane(s: &App, session: &str, t: &Theme, k: &Kit) -> El {
     let streaming = pending.is_some() || thread.is_some_and(|th| th.streaming());
     let content = col().key("side-content").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: true }).child(body.w_full().px(16.0).py(14.0));
 
-    let mut pane = col()
-        .key("side-pane")
-        .w(width(t))
-        .h_full()
-        .min_h(0.0)
-        .role("complementary")
-        .label("Side questions")
-        .child(header)
-        .child(bar)
-        .child(content)
-        .child(follow_up(s, t, streaming || thread.is_none()));
-    pane = if mac { pane.fill(t.content).border_sides([0.0, 0.0, 0.0, 0.5], Color::BLACK.alpha(0.6)) } else { pane.fill(t.sidebar_top).border_sides([0.0, 0.0, 0.0, 1.0], Color::BLACK.alpha(0.35)) };
-    pane
+    col().key("side-pane").w_full().grow(1.0).min_h(0.0).child(bar).child(content).child(follow_up(s, t, streaming || thread.is_none()))
 }
 
 fn tab(t: &Theme, session: &str, side_id: &str, title: &str, on: bool, busy: bool) -> El {

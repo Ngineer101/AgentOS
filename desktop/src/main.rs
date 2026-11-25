@@ -10,12 +10,15 @@ mod icons;
 mod look;
 mod model;
 mod notes;
+mod panel;
 mod prefs;
 mod session;
 mod settings;
 mod sheet;
 mod side;
 mod agents;
+mod term;
+mod terminal;
 mod toast;
 mod view;
 #[cfg(test)]
@@ -32,6 +35,7 @@ fn setup(s: &mut App, waker: Waker) {
         let p = prefs::load();
         s.collapsed = p.collapsed;
         s.sidebar_w = p.sidebar_w.map(|w| w.clamp(model::SIDEBAR_MIN_W, model::SIDEBAR_MAX_W));
+        s.panel_w = p.panel_w;
         s.save_prefs = true;
     }
 }
@@ -44,6 +48,9 @@ fn hostname() -> String {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    if s.take_terminal_focus() {
+        tx.focus("term-view", false);
+    }
     s.fetch_images();
     if s.catch_up() {
         tx.wake_after(std::time::Duration::from_millis(500));

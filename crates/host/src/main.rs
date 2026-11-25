@@ -128,6 +128,7 @@ async fn run(cfg: HostConfig) -> Result<()> {
         _ = sigterm() => {}
     }
     tracing::info!("shutting down");
+    host.terminals.close_all();
     host.sessions
         .shutdown_and_wait(std::time::Duration::from_secs(10))
         .await;

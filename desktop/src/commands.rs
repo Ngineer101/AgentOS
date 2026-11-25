@@ -3,7 +3,7 @@
 
 use crate::bridge::{Refresh, Tag};
 use crate::look::Look;
-use crate::model::{App, Menu, Screen, Tab};
+use crate::model::{App, Menu, PanelTab, Screen, Tab};
 use agenthost_proto::methods as m;
 use rune::{Chord, KeyEvent, MenuItem, Tx};
 use serde_json::json;
@@ -30,6 +30,8 @@ pub enum Cmd {
     Archive,
     /// Show or hide the side-question pane.
     ToggleSide,
+    /// Show or hide the terminal (the right panel's Terminal tab).
+    ToggleTerminal,
     ShowFolder,
     /// Rename Session…: the header's title becomes a field.
     RenameSession,
@@ -44,7 +46,7 @@ pub enum Cmd {
     Quit,
 }
 
-const KEYED: [Cmd; 23] = [
+const KEYED: [Cmd; 24] = [
     Cmd::Archive,
     Cmd::NewSession,
     Cmd::QuickTask,
@@ -60,6 +62,7 @@ const KEYED: [Cmd; 23] = [
     Cmd::ToggleSidebar,
     Cmd::Settings,
     Cmd::ToggleSide,
+    Cmd::ToggleTerminal,
     Cmd::ShowFolder,
     Cmd::Shortcuts,
     Cmd::MainMenu,
@@ -90,6 +93,8 @@ pub fn chord(look: Look, cmd: Cmd) -> Option<String> {
         Cmd::Settings => if mac { "super+," } else { "ctrl+," }.into(),
         // Pages, Keynote and Numbers show their inspector with ⌥⌘I; GNOME pairs it with F9.
         Cmd::ToggleSide => if mac { "super+alt+i" } else { "shift+f9" }.into(),
+        // Where editors keep it: Control and the key under Escape, on both.
+        Cmd::ToggleTerminal => "ctrl+`".into(),
         // ⌘⌫ would be "delete to the line's start" in the composer; ⌃⌘A is Mail's Archive.
         Cmd::Archive => if mac { "ctrl+super+a" } else { "ctrl+alt+a" }.into(),
         Cmd::ShowFolder if mac => "super+alt+r".into(),
@@ -120,6 +125,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
         Cmd::ToggleSidebar => if mac { "⌃⌘S" } else { "F9" },
         Cmd::Settings => if mac { "⌘," } else { "Ctrl+," },
         Cmd::ToggleSide => if mac { "⌥⌘I" } else { "Shift+F9" },
+        Cmd::ToggleTerminal => if mac { "⌃`" } else { "Ctrl+`" },
         Cmd::Archive => if mac { "⌃⌘A" } else { "Ctrl+Alt+A" },
         Cmd::ShowFolder => if mac { "⌥⌘R" } else { "" },
         Cmd::Shortcuts => if mac { "" } else { "Ctrl+?" },
@@ -130,7 +136,7 @@ pub fn label(look: Look, cmd: Cmd) -> String {
     s.to_string()
 }
 
-fn matches(look: Look, cmd: Cmd, ev: &KeyEvent, tx: &Tx) -> bool {
+pub(crate) fn matches(look: Look, cmd: Cmd, ev: &KeyEvent, tx: &Tx) -> bool {
     let Some(spec) = chord(look, cmd) else { return false };
     let Ok(ch) = Chord::parse(&spec) else { return false };
     if ch.matches_tx(ev, tx) {
@@ -271,13 +277,27 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
         Cmd::Settings => s.open_settings(Tab::General),
         Cmd::ToggleSide => {
             if session.is_some_and(|x| s.has_side(&x.session_id)) {
-                // The agent panel stands in for the side pane: the toggle brings the side back.
+                // The agent panel stands in for the right panel: the toggle brings the side back.
                 if s.agent_visible() {
                     s.close_agent();
-                    s.side_open = true;
+                    s.show_panel(PanelTab::Side);
+                } else if s.side_visible() {
+                    s.panel_open = false;
                 } else {
-                    s.side_open = !s.side_open;
+                    s.show_panel(PanelTab::Side);
                 }
+            }
+        }
+        Cmd::ToggleTerminal => {
+            if !s.terminal_allowed() {
+                s.notice = Some(if s.admin { "This host is too old for terminals." } else { "A terminal opens in the app on the host's own computer." }.into());
+            } else if s.toggle_terminal() {
+                s.close_overlays();
+                // Now if a terminal is there; else when its shell has started.
+                s.terms.focus_wanted = true;
+                tx.focus("term-view", false);
+            } else {
+                s.terms.focus_wanted = false;
             }
         }
         Cmd::Archive => {
@@ -380,6 +400,7 @@ pub fn menu_table() -> Vec<(Option<&'static str>, Option<&'static str>, Option<&
         (Some("Archived Sessions…"), Some("View"), None, |s, _| s.open_settings(Tab::Archived)),
         (Some("Toggle Sidebar"), Some("View"), Some("ctrl+cmd+s"), |s, tx| run(s, Cmd::ToggleSidebar, tx)),
         (Some("Toggle Side Questions"), Some("View"), Some("alt+cmd+i"), |s, tx| run(s, Cmd::ToggleSide, tx)),
+        (Some("Toggle Terminal"), Some("View"), Some("ctrl+`"), |s, tx| run(s, Cmd::ToggleTerminal, tx)),
         (Some("Find Session"), Some("View"), Some("cmd+f"), |s, tx| run(s, Cmd::Search, tx)),
     ]
 }

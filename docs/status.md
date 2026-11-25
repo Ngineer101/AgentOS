@@ -207,6 +207,22 @@ is refused. The host listened on no TCP port throughout.
   turn cancels the turn; an agent that ignores cancel for 3 s is restarted
   and resumed.
 
+- **Terminals are the host's, and local only** (25 Nov 2026, protocol 10).
+  The desktop's terminal is a shell `agenthostd` runs in a pseudo-terminal it
+  owns; the app is only the emulator (`alacritty_terminal` drawn with Rune's
+  `grid`). The host keeps the last megabyte of output to replay, and stops
+  reading the shell while an attached client is 512 KB behind its last
+  acknowledgement (a client quiet for 2 s no longer holds it up). Every
+  `terminal.*` method is admin only, so paired devices get none; letting a
+  phone in would need a policy like screen sharing's. Tested on Linux in
+  process: the host's API against a real `sh` (`tests/terminal_core.rs`:
+  run, resize, replay after reconnecting, a 3 MB flood, refusal for a phone),
+  the app's emulator and keys, the panel laid out and typed into headless in
+  both looks, and the app's model joined to a real host and shell. Not yet
+  seen as pixels or typed into by hand, and not run on macOS. Known gaps: no
+  mouse reporting to programs, no input methods (IME), box-drawing characters
+  drawn from the font (rows may show seams), and no inline images.
+
 ## Known issues
 
 - `agenthost-cli::remote::connect` reports why a tunnel closed only as text; the FFI parses the code out of it.

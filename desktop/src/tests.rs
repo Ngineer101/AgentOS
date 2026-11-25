@@ -601,7 +601,7 @@ fn btw_asks_on_the_side_and_opens_the_pane() {
     app.send_prompt();
     assert!(app.prompt.text.is_empty());
     assert_eq!(app.side_pending.get("ses_1").map(String::as_str), Some("which tests touch the relay?"));
-    assert!(app.side_open && app.side_visible());
+    assert!(app.panel_open && app.side_visible());
     // An empty side question asks for one instead of sending.
     app.prompt.replace_text("/btw");
     app.send_prompt();
@@ -692,7 +692,7 @@ fn side_threads_come_from_events_and_deltas() {
     app.close_side_tab("ses_1", "side_b");
     assert_eq!(app.side_selected("ses_1").as_deref(), Some("side_a"));
     app.close_side_tab("ses_1", "side_a");
-    assert!(!app.side_visible() && !app.side_open);
+    assert!(!app.side_visible() && !app.panel_open);
     assert_eq!(app.side_threads("ses_1").len(), 2, "the conversations stay");
 }
 
@@ -1115,7 +1115,7 @@ fn agent_panel_opens_closes_and_follows_events() {
     app.open_agent("ses_6", "ag2");
     assert!(app.agent_visible() && app.trailing_visible());
     // It stands in for the side pane while it's open.
-    app.side_open = true;
+    app.show_panel(model::PanelTab::Side);
     assert!(!app.side_visible());
     // A new step and the result arrive: the panel's agent has them.
     let note = |params: serde_json::Value| bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: agenthost_proto::methods::N_EVENT.into(), params });
@@ -2410,4 +2410,407 @@ fn note_screens_lay_out_and_click_through() {
     click(&mut ui, "note-start");
     assert!(state(&mut ui, &|s| s.new_open && s.start_note.as_ref().is_some_and(|(id, _, _)| id == "note_rate")));
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
+
+/// The terminals follow what the host says: output lands on the right screen, a shell you
+/// left closes its tab, and the last tab closing hides the panel.
+#[test]
+fn terminals_follow_the_host() {
+    use crate::bridge::TermCmd;
+    use base64::Engine as _;
+    let mut app = demo("terminal");
+    assert_eq!(app.panel_shown(), Some(model::PanelTab::Terminal));
+    assert_eq!(app.terms.tabs.len(), 2);
+    let screen = app.terms.current().unwrap().emu.screen_text();
+    assert!(screen.contains("test resume_twice ... FAILED") && screen.contains("日本語 ✓"), "{screen}");
+    assert_eq!(app.terms.tabs[0].title(), "ses_1", "a terminal is named for its folder");
+    assert_eq!(app.terms.tabs[1].title(), "npm run dev", "or for what its shell calls itself");
+
+    let note = |method: &str, params: serde_json::Value| bridge::FromHost::Note(agenthost_proto::jsonrpc::Notification { jsonrpc: "2.0".into(), method: method.into(), params });
+    let output = |id: &str, offset: u64, text: &str, replay: bool| {
+        let data = base64::engine::general_purpose::STANDARD.encode(text);
+        note(m::N_TERMINAL_OUTPUT, json!({"terminal_id": id, "offset": offset, "data": data, "replay": replay}))
+    };
+    // Output for the terminal that isn't showing goes to its own screen.
+    app.apply(output("term_2", 500, "second line\r\n", false));
+    assert!(app.terms.tabs[1].emu.screen_text().ends_with("second line"));
+    assert!(!app.terms.current().unwrap().emu.screen_text().contains("second line"));
+
+    // A program asking where the cursor is gets its answer as input; one asked in a
+    // replay of old output does not get a second.
+    app.terms.sent.clear();
+    app.apply(output("term_1", 2000, "\x1b[6n", true));
+    assert!(app.terms.sent.is_empty(), "{:?}", app.terms.sent);
+    app.apply(output("term_1", 2004, "\x1b[6n", false));
+    assert!(matches!(&app.terms.sent[..], [TermCmd::Input { id, data }] if id == "term_1" && data.starts_with(b"\x1b[") && data.ends_with(b"R")), "{:?}", app.terms.sent);
+
+    // What has been drawn is acknowledged now and then, so the host sends more.
+    app.terms.sent.clear();
+    let big = "x".repeat(40_000);
+    app.apply(output("term_1", 3000, &big, false));
+    assert!(app.terms.sent.is_empty(), "not for every piece");
+    app.apply(output("term_1", 43_000, &big, false));
+    assert_eq!(app.terms.sent, vec![TermCmd::Ack { id: "term_1".into(), offset: 83_000 }]);
+
+    // Typing goes to the terminal that shows, and brings its view back to the prompt.
+    app.terms.sent.clear();
+    app.terminal_wheel(1000.0, 17.0);
+    assert!(app.terms.current().unwrap().emu.scrolled() > 0);
+    app.terminal_input(b"ls\r".to_vec());
+    assert_eq!(app.terms.sent, vec![TermCmd::Input { id: "term_1".into(), data: b"ls\r".to_vec() }]);
+    assert_eq!(app.terms.current().unwrap().emu.scrolled(), 0);
+
+    // The second terminal's shell ends (you typed `exit`): its tab goes when the host
+    // says the terminal is closed.
+    let info = |id: &str, exited: bool, removed: bool| {
+        let mut t = json!({"terminal_id": id, "cwd": "/home/nico/Code/relay", "shell": "/bin/zsh", "cols": 80, "rows": 24, "created_at": 1000});
+        if exited {
+            t["exited"] = json!({"code": 0});
+        }
+        note(m::N_TERMINAL_CHANGED, json!({"terminal": t, "removed": removed}))
+    };
+    app.apply(info("term_2", true, false));
+    assert_eq!(app.terms.tabs.len(), 2, "until the host confirms");
+    app.apply(info("term_2", true, true));
+    assert_eq!(app.terms.tabs.len(), 1);
+    assert_eq!(app.terms.selected.as_deref(), Some("term_1"));
+    assert!(app.panel_open);
+    // The selected one closing selects a neighbour; the last one closing hides the panel.
+    app.apply(info("term_1", false, true));
+    assert!(app.terms.tabs.is_empty() && app.terms.selected.is_none());
+    assert!(!app.panel_open && app.panel_shown().is_none());
+
+    // A terminal opened from another window shows up as a tab without stealing the view.
+    app.apply(info("term_9", false, false));
+    assert_eq!(app.terms.tabs.len(), 1);
+    assert!(!app.panel_open);
+
+    // A new connection starts from the host's list again.
+    app.apply(bridge::FromHost::Connected { admin: true, remote: None });
+    assert!(app.terms.tabs.is_empty());
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::Terminals, result: Ok(json!({"terminals": [{"terminal_id": "term_9", "cwd": "/srv", "shell": "/bin/sh", "cols": 80, "rows": 24, "created_at": 1}]})) });
+    assert_eq!(app.terms.tabs.len(), 1);
+    assert_eq!(app.terms.selected.as_deref(), Some("term_9"));
+}
+
+/// The panel is the side questions' and the terminal's: each shows where it belongs.
+#[test]
+fn the_right_panel_shows_one_tab_at_a_time() {
+    use model::PanelTab;
+    let mut app = demo("terminal-side");
+    assert_eq!(app.panel_shown(), Some(PanelTab::Terminal));
+    assert_eq!(crate::panel::tabs(&app), vec![PanelTab::Terminal, PanelTab::Side]);
+    assert!(app.trailing_visible() && !app.side_visible());
+    app.show_panel(PanelTab::Side);
+    assert!(app.side_visible());
+    // Side questions belong to their session: elsewhere the panel waits, and comes back.
+    app.screen = Screen::Home;
+    assert_eq!(app.panel_shown(), None);
+    assert_eq!(crate::panel::tabs(&app), vec![PanelTab::Terminal]);
+    app.screen = Screen::Session("ses_1".into());
+    assert!(app.side_visible());
+    // The terminal is the computer's: it stays beside any screen.
+    assert!(app.toggle_terminal());
+    app.screen = Screen::Home;
+    assert_eq!(app.panel_shown(), Some(PanelTab::Terminal));
+    assert!(!app.toggle_terminal());
+    assert_eq!(app.panel_shown(), None);
+    // The terminal's width drags; the side questions keep their own.
+    let t = crate::look::Theme::new(crate::look::Look::Gnome);
+    app.toggle_terminal();
+    app.resize_panel(10_000.0, false);
+    assert_eq!(app.panel_width(&t), crate::terminal::PANEL_MAX_W);
+    app.resize_panel(700.0, false);
+    assert_eq!((app.panel_width(&t), app.trailing_width(&t)), (700.0, 700.0));
+    app.screen = Screen::Session("ses_1".into());
+    app.show_panel(PanelTab::Side);
+    assert_eq!(app.panel_width(&t), crate::side::width(&t));
+
+    // A new terminal starts in the open session's own folder (its worktree).
+    let mut app = demo("terminal");
+    if let Some(x) = app.sessions.iter_mut().find(|x| x.session_id == "ses_1") {
+        x.worktree = Some(SessionWorktree { path: "/wt/ses_1".into(), branch: "b".into() });
+    }
+    // A paired device gets no terminal: the host would refuse it.
+    app.admin = false;
+    assert!(!app.terminal_allowed());
+    app.admin = true;
+    assert!(app.terminal_allowed());
+    if let Some(i) = app.info.as_mut() {
+        i.protocol_version = 9;
+    }
+    assert!(!app.terminal_allowed(), "nor does a host from before terminals");
+}
+
+/// The Terminal tab lays out in both looks, and the keyboard is the shell's while it has
+/// the focus: every key in order, Tab and Escape included.
+#[test]
+fn the_terminal_lays_out_and_takes_the_keyboard() {
+    use crate::bridge::TermCmd;
+    use crate::look::Look;
+    use rune::{Key, KeyEvent, Mods};
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str], &[&str]); 5] = [
+        ("terminal", &["panel", "panel-tabs", "panel-tab-terminal", "panel-hide", "panel-grip", "term-tabs", "term-tab-term_1", "term-tab-term_2", "term-close-term_2", "term-new", "term-view", "term-grid", "toggle-terminal"], &["panel-tab-side", "term-ended", "term-note"]),
+        ("terminal-home", &["panel", "term-view", "term-grid", "toggle-terminal"], &["panel-tab-side"]),
+        ("terminal-side", &["panel-tab-terminal", "panel-tab-side", "term-view", "toggle-side"], &["side-pane"]),
+        ("terminal-ended", &["term-tab-term_3", "term-view", "term-ended"], &[]),
+        ("terminal-remote", &["panel", "term-note"], &["term-view", "term-tabs", "toggle-terminal"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, there, absent) in scenes {
+            let ui = open(scene, look);
+            for k in there {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+            for k in absent {
+                assert!(ui.find(k).is_none(), "{look:?} {scene}: {k} should not be on screen");
+            }
+        }
+    }
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let key = |ui: &mut rune::Runtime<model::App>, key: Key, mods: Mods| {
+        ui.key(KeyEvent { key, mods });
+        ui.frame(0.016);
+    };
+    let none = Mods::default();
+    let ctrl = Mods { ctrl: true, cmd: true, ..none };
+
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = open("terminal", look);
+        // Laying the pane out fits the terminal to it, and tells the host its size.
+        assert!(read(&mut ui, &|s| s.terms.fit.is_some_and(|(c, r)| c >= 30 && r >= 20)), "{look:?}: the pane sized the terminal");
+        assert!(read(&mut ui, &|s| {
+            let fit = s.terms.fit.unwrap();
+            s.terms.current().unwrap().emu.size() == fit && s.terms.sent.iter().any(|c| *c == TermCmd::Resize { id: "term_1".into(), cols: fit.0, rows: fit.1 })
+        }));
+        // The panel is the window's trailing pane, and the cells sit inside it.
+        let rect = |ui: &rune::Runtime<model::App>, key: &str| ui.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key} is not on screen")).rect;
+        let (panel, toolbar, view, grid) = (rect(&ui, "panel"), rect(&ui, "toolbar"), rect(&ui, "term-view"), rect(&ui, "term-grid"));
+        assert_eq!((panel[0] + panel[2], panel[1], panel[3]), (1280.0, 0.0, 800.0), "{look:?}: {panel:?}");
+        assert_eq!(toolbar[0] + toolbar[2], panel[0], "{look:?}: the main pane ends where the panel begins");
+        assert!(grid[0] >= view[0] && grid[1] >= view[1] && grid[0] + grid[2] <= view[0] + view[2] && grid[1] + grid[3] <= view[1] + view[3], "{look:?}: {grid:?} in {view:?}");
+        assert!(view[2] - grid[2] < 30.0 && view[3] - grid[3] < 40.0, "{look:?}: the cells fill the pane: {grid:?} in {view:?}");
+        assert!(ui.elements().iter().any(|e| e.key.as_deref() == Some("term-grid") && e.role == "terminal"));
+        // A click in the terminal gives it the keyboard.
+        click(&mut ui, "term-view");
+        assert!(ui.elements().iter().any(|e| e.key.as_deref() == Some("term-view") && e.focused), "{look:?}: the click focused the terminal");
+        ui.update(|s, _| s.terms.sent.clear());
+        key(&mut ui, Key::Text("l".into()), none);
+        key(&mut ui, Key::Text("s".into()), none);
+        key(&mut ui, Key::Text(" ".into()), none);
+        key(&mut ui, Key::Tab, none);
+        key(&mut ui, Key::Enter, none);
+        key(&mut ui, Key::Escape, none);
+        key(&mut ui, Key::Up, none);
+        let typed = |s: &model::App| -> Vec<u8> {
+            s.terms.sent.iter().flat_map(|c| match c {
+                TermCmd::Input { id, data } if id == "term_1" => data.clone(),
+                other => panic!("unexpected {other:?}"),
+            }).collect()
+        };
+        assert!(read(&mut ui, &|s| typed(s) == b"ls \t\r\x1b\x1b[A"), "{look:?}: every key went to the shell, in order");
+        assert!(read(&mut ui, &|s| s.panel_shown() == Some(model::PanelTab::Terminal) && s.screen == Screen::Session("ses_1".into())), "{look:?}: and did nothing else");
+        // Ctrl+C is the shell's (on a Mac it arrives as Control with the letter).
+        ui.update(|s, _| s.terms.sent.clear());
+        if look == Look::Mac {
+            key(&mut ui, Key::Text("c".into()), Mods { ctrl: true, ..none });
+        } else {
+            key(&mut ui, Key::Command('c'), ctrl);
+        }
+        assert!(read(&mut ui, &|s| typed(s) == b"\x03"), "{look:?}: Ctrl+C interrupts");
+
+        // The other terminal's tab; then "+" asks the host for a third.
+        click(&mut ui, "term-tab-term_2");
+        assert!(read(&mut ui, &|s| s.terms.selected.as_deref() == Some("term_2")));
+        ui.update(|s, _| s.terms.sent.clear());
+        key(&mut ui, Key::Text("q".into()), none);
+        assert!(read(&mut ui, &|s| s.terms.sent == vec![TermCmd::Input { id: "term_2".into(), data: b"q".to_vec() }]), "{look:?}: the tab you clicked has the keyboard");
+        click(&mut ui, "term-new");
+        assert!(read(&mut ui, &|s| s.terms.opening));
+
+        // Ctrl+` hides the terminal from inside it, and brings it back with the keyboard.
+        let backtick = if look == Look::Mac { KeyEvent { key: Key::Text("`".into()), mods: Mods { ctrl: true, ..none } } } else { KeyEvent { key: Key::Command('`'), mods: ctrl } };
+        ui.key(backtick.clone());
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.panel_shown().is_none()), "{look:?}: Ctrl+` hides the terminal");
+        assert!(ui.find("panel").is_none());
+        ui.key(backtick);
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(ui.find("term-view").is_some(), "{look:?}: and shows it again");
+        ui.update(|s, _| s.terms.sent.clear());
+        key(&mut ui, Key::Text("w".into()), none);
+        assert!(read(&mut ui, &|s| s.terms.sent == vec![TermCmd::Input { id: "term_2".into(), data: b"w".to_vec() }]), "{look:?}: with the keyboard in it");
+
+        // The panel's own button hides it; the toolbar's shows it.
+        click(&mut ui, "panel-hide");
+        assert!(ui.find("panel").is_none());
+        click(&mut ui, "toggle-terminal");
+        assert!(ui.find("term-view").is_some());
+    }
+
+    // The first terminal: the button asks the host for a shell, and when it has started
+    // the keyboard is already in it.
+    let mut ui = open("terminal", Look::Gnome);
+    ui.update(|s, _| {
+        s.terminals_reset();
+        s.terms.selected = None;
+        s.panel_open = false;
+    });
+    ui.frame(0.016);
+    click(&mut ui, "toggle-terminal");
+    assert!(read(&mut ui, &|s| s.terms.opening && s.terms.tabs.is_empty()));
+    assert!(ui.find("term-note").is_some() && ui.find("term-view").is_none(), "it says the shell is starting");
+    ui.update(|s, _| s.apply(bridge::FromHost::Reply { tag: bridge::Tag::TerminalOpened, result: Ok(json!({"terminal_id": "term_new", "cwd": "/home/nico/Code/relay", "shell": "/bin/zsh", "cols": 80, "rows": 24, "created_at": 1})) }));
+    ui.frame(0.016);
+    ui.frame(0.016);
+    assert!(ui.find("term-tab-term_new").is_some() && ui.find("term-view").is_some());
+    ui.update(|s, _| s.terms.sent.clear());
+    key(&mut ui, Key::Text("x".into()), none);
+    assert!(read(&mut ui, &|s| s.terms.sent == vec![TermCmd::Input { id: "term_new".into(), data: b"x".to_vec() }]), "the new terminal has the keyboard");
+
+    // The panel's tabs switch what it shows.
+    let mut ui = open("terminal-side", Look::Gnome);
+    click(&mut ui, "panel-tab-side");
+    assert!(ui.find("side-pane").is_some() && ui.find("term-view").is_none());
+    click(&mut ui, "panel-tab-terminal");
+    assert!(ui.find("term-view").is_some() && ui.find("side-pane").is_none());
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
+
+/// The terminal against a real host and a real shell, joined in process (no socket): what
+/// the app sends is what the host takes, and what the shell prints is what the screen shows.
+#[test]
+fn a_real_shell_draws_in_the_terminal() {
+    use crate::bridge::TermCmd;
+    use agenthost_host::api::{serve_connection, Principal};
+    use agenthost_proto::jsonrpc::{Message, Request};
+    use base64::Engine as _;
+    use tokio::sync::mpsc;
+
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::var_os("AGENTHOST_TEST_TMP").unwrap_or_else(|| std::env::temp_dir().into_os_string());
+    let dir = tempfile::Builder::new().prefix("ahd").tempdir_in(root).unwrap();
+    let mut cfg = agenthost_host::HostConfig::in_dir(dir.path());
+    cfg.home_dir = dir.path().join("home");
+    std::fs::create_dir_all(&cfg.home_dir).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::env::set_var("AGENTHOST_TERMINAL_SHELL", "/bin/sh");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let host = agenthost_host::Host::open(cfg).unwrap();
+    let (tx, in_rx) = mpsc::channel::<String>(256);
+    let (out_tx, mut rx) = mpsc::channel::<String>(1024);
+    rt.spawn(serve_connection(host.clone(), Principal::local(), in_rx, out_tx));
+
+    let mut app = model::init();
+    app.conn = Conn::Connected;
+    app.admin = true;
+    let next_id = std::cell::Cell::new(0u64);
+    // One request: the notifications that arrive before its response go to the app, as
+    // the bridge would hand them over.
+    let rpc = |app: &mut model::App, rx: &mut mpsc::Receiver<String>, method: &str, params: serde_json::Value| -> Result<serde_json::Value, String> {
+        next_id.set(next_id.get() + 1);
+        let id = json!(next_id.get());
+        tx.blocking_send(Message::Request(Request::new(id.clone(), method, params)).to_json()).unwrap();
+        loop {
+            let line = rt.block_on(async { tokio::time::timeout(Duration::from_secs(20), rx.recv()).await }).expect("the host went quiet").expect("the connection closed");
+            match Message::parse(&line).unwrap() {
+                Message::Response(r) if r.id == id => return match r.error {
+                    Some(e) => Err(e.message),
+                    None => Ok(r.result.unwrap_or_default()),
+                },
+                Message::Notification(n) => app.apply(bridge::FromHost::Note(n)),
+                _ => {}
+            }
+        }
+    };
+    rpc(&mut app, &mut rx, m::HELLO, json!({"protocol_version": PROTOCOL_VERSION, "client_name": "desktop-test", "client_version": "0"})).unwrap();
+
+    // Open the terminal as the app does, in the folder it would pick.
+    let opened = rpc(&mut app, &mut rx, m::TERMINAL_OPEN, json!({"cwd": work, "cols": 80, "rows": 24})).unwrap();
+    app.show_panel(model::PanelTab::Terminal);
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::TerminalOpened, result: Ok(opened) });
+    let id = app.terms.selected.clone().expect("the new terminal is selected");
+    assert_eq!(app.panel_shown(), Some(model::PanelTab::Terminal));
+    rpc(&mut app, &mut rx, m::TERMINAL_ATTACH, json!({"terminal_id": id})).unwrap();
+
+    // What the app queued for the host goes out in order; what the host sends comes in.
+    let b64 = |d: &[u8]| base64::engine::general_purpose::STANDARD.encode(d);
+    let mut acks = 0;
+    let pump = |app: &mut model::App, rx: &mut mpsc::Receiver<String>, acks: &mut usize, until: &dyn Fn(&model::App) -> bool, what: &str| {
+        let t0 = Instant::now();
+        loop {
+            for cmd in std::mem::take(&mut app.terms.sent) {
+                let r = match cmd {
+                    TermCmd::Input { id, data } => rpc(app, rx, m::TERMINAL_INPUT, json!({"terminal_id": id, "data": b64(&data)})),
+                    TermCmd::Resize { id, cols, rows } => rpc(app, rx, m::TERMINAL_RESIZE, json!({"terminal_id": id, "cols": cols, "rows": rows})),
+                    TermCmd::Ack { id, offset } => {
+                        *acks += 1;
+                        rpc(app, rx, m::TERMINAL_ACK, json!({"terminal_id": id, "offset": offset}))
+                    }
+                };
+                r.unwrap_or_else(|e| panic!("the host refused what the app sent: {e}"));
+            }
+            if until(app) {
+                return;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(30), "timed out waiting for {what}; screen:\n{}", app.terms.current().map(|t| t.emu.screen_text()).unwrap_or_default());
+            // Anything the host has to say, without waiting on a response.
+            rpc(app, rx, m::TERMINAL_LIST, json!({})).unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let screen = |a: &model::App| a.terms.current().map(|t| t.emu.screen_text()).unwrap_or_default();
+
+    // The pane's size reaches the program, and typing reaches the shell.
+    app.terminal_fit(100.0 * 8.0 + 16.0, 30.0 * 16.0 + 16.0, (8.0, 16.0));
+    assert_eq!(app.terms.fit, Some((100, 30)));
+    app.terminal_input(b"echo desk-$((40+2)) $(basename \"$PWD\") $(stty size | tr ' ' x)\n".to_vec());
+    pump(&mut app, &mut rx, &mut acks, &|a| screen(a).contains("desk-42 work 30x100"), "the command's output");
+
+    // A flood: two megabytes arrive whole because the app acknowledges as it draws.
+    app.terminal_input(b"head -c 2000000 /dev/zero | tr '\\0' x; echo; echo flood-$((1+1))-over\n".to_vec());
+    pump(&mut app, &mut rx, &mut acks, &|a| screen(a).contains("flood-2-over"), "the end of the flood");
+    assert!(acks >= 20, "the app acknowledged along the way ({acks} times)");
+    let s = screen(&app);
+    assert!(s.lines().any(|l| l.len() == 100 && l.bytes().all(|b| b == b'x')), "the flood's last lines are on screen:\n{s}");
+
+    // Leaving the shell: the host says it ended, and closing takes the tab and the panel.
+    app.terminal_input(b"exit\n".to_vec());
+    pump(&mut app, &mut rx, &mut acks, &|a| a.terms.tabs.first().is_some_and(|t| t.info.exited.is_some()), "the shell to end");
+    assert_eq!(app.terms.tabs[0].info.exited.and_then(|e| e.code), Some(0));
+    rpc(&mut app, &mut rx, m::TERMINAL_CLOSE, json!({"terminal_id": id})).unwrap();
+    pump(&mut app, &mut rx, &mut acks, &|a| a.terms.tabs.is_empty(), "the tab to close");
+    assert!(app.panel_shown().is_none(), "the last terminal closing hides the panel");
+    assert!(host.terminals.list().is_empty());
 }
