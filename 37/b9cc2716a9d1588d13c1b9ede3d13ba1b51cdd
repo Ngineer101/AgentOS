@@ -1,0 +1,37 @@
+desktop/src/agents.rs
+  s_6ffd22b11a649d::t_31e2a9e8fc4036 268,333,359
+desktop/src/automations.rs
+  s_6ffd22b11a649d::t_f73be9c16f4edc 535,845,894
+desktop/src/look.rs
+  s_6ffd22b11a649d::t_19bafc4157de20 91-97,99-100,102,104-105,158,206,339,360,548
+desktop/src/notes.rs
+  s_6ffd22b11a649d::t_01ecd0c5178000 154,293,384
+desktop/src/session.rs
+  s_6ffd22b11a649d::t_d544b9c9d5827c 308,320,400,457,500,691,988-989,1222,1239,1258,1263,1295,1339,1367,1377
+desktop/src/settings.rs
+  s_6ffd22b11a649d::t_b7156764e54283 76,99,131,166,288,308,769,805,1362,1526,1917,1955
+desktop/src/sheet.rs
+  s_6ffd22b11a649d::t_c15b6159cb7757 160,285,355,429,450,504
+desktop/src/side.rs
+  s_6ffd22b11a649d::t_8915ede05645ac 120,139,169,217
+desktop/src/toast.rs
+  s_6ffd22b11a649d::t_bf0e5e53008da9 126,147,160,175
+desktop/src/view.rs
+  s_6ffd22b11a649d::t_5f620e1765df93 158,205,292,426,539,750,1169,1194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "37b9cc2716a9d1588d13c1b9ede3d13ba1b51cdd",
+  "prompts": {},
+  "sessions": {
+    "s_6ffd22b11a649d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6ffd22b11a649d",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
