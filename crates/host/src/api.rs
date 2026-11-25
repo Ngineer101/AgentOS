@@ -104,6 +104,8 @@ struct Conn {
     out: mpsc::Sender<String>,
     subs: HashMap<String, JoinHandle<()>>,
     watchers: Vec<JoinHandle<()>>,
+    /// Terminals this connection gets the output of, by terminal id.
+    terminals: HashMap<String, crate::terminal::Attachment>,
     greeted: bool,
     pending_after: Option<After>,
 }
@@ -134,6 +136,7 @@ pub async fn serve_connection(
         out: outbound,
         subs: HashMap::new(),
         watchers: vec![],
+        terminals: HashMap::new(),
         greeted: false,
         pending_after: None,
     };
@@ -188,6 +191,12 @@ pub async fn serve_connection(
                     Ok(BusMsg::NoteChanged(n)) if conn.greeted => {
                         conn.notify(m::N_NOTE_CHANGED, serde_json::to_value(n).unwrap()).await;
                     }
+                    Ok(BusMsg::TerminalChanged(t)) if conn.principal.capabilities.contains(&Capability::Admin) && conn.greeted => {
+                        if t.removed {
+                            conn.terminals.remove(&t.terminal.terminal_id);
+                        }
+                        conn.notify(m::N_TERMINAL_CHANGED, serde_json::to_value(t).unwrap()).await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                     _ => {}
                 }
@@ -216,6 +225,8 @@ enum After {
         after_seq: i64,
         sub_id: String,
     },
+    /// Start sending an attached terminal's output, from `offset`.
+    Terminal { terminal_id: String, offset: u64 },
 }
 
 impl Conn {
@@ -556,6 +567,43 @@ impl Conn {
                 Ok(json!({"removed": true}))
             }
 
+            m::TERMINAL_LIST => to_value(TerminalList { terminals: h.terminals.list() }),
+            m::TERMINAL_OPEN => to_value(h.terminals.open(params(p)?)?),
+            m::TERMINAL_ATTACH => {
+                let ap: TerminalAttachParams = params(p)?;
+                let term = h.terminals.get(&ap.terminal_id)?;
+                // Attaching again starts over: the old attachment goes first.
+                self.terminals.remove(&ap.terminal_id);
+                let (reader, offset, end) = term.attach();
+                let terminal = term.describe();
+                self.terminals.insert(ap.terminal_id.clone(), crate::terminal::Attachment::new(term, reader));
+                // Output follows the response, never overtakes it.
+                self.pending_after = Some(After::Terminal { terminal_id: ap.terminal_id, offset });
+                to_value(TerminalAttachResult { terminal, offset, end })
+            }
+            m::TERMINAL_DETACH => {
+                let r: TerminalRef = params(p)?;
+                self.terminals.remove(&r.terminal_id);
+                Ok(json!({"ok": true}))
+            }
+            m::TERMINAL_INPUT => {
+                h.terminals.input(params(p)?)?;
+                Ok(json!({"ok": true}))
+            }
+            m::TERMINAL_RESIZE => to_value(h.terminals.resize(params(p)?)?),
+            m::TERMINAL_ACK => {
+                let ap: TerminalAckParams = params(p)?;
+                let a = self.terminals.get(&ap.terminal_id).ok_or_else(|| RpcError::invalid_state("not attached to this terminal"))?;
+                a.ack(ap.offset);
+                Ok(json!({"ok": true}))
+            }
+            m::TERMINAL_CLOSE => {
+                let r: TerminalRef = params(p)?;
+                self.terminals.remove(&r.terminal_id);
+                h.terminals.close(&r.terminal_id)?;
+                Ok(json!({"removed": true}))
+            }
+
             m::DEVICE_LIST
             | m::DEVICE_PAIR_START
             | m::DEVICE_PAIR_CONFIRM
@@ -570,14 +618,24 @@ impl Conn {
     }
 
     async fn after_response(&mut self) {
-        if let Some(After::Replay {
-            session_id,
-            after_seq,
-            sub_id,
-        }) = self.pending_after.take()
-        {
-            let t = spawn_subscription(self.host.clone(), self.out.clone(), session_id, after_seq);
-            self.subs.insert(sub_id, t);
+        match self.pending_after.take() {
+            Some(After::Replay { session_id, after_seq, sub_id }) => {
+                let t = spawn_subscription(self.host.clone(), self.out.clone(), session_id, after_seq);
+                self.subs.insert(sub_id, t);
+            }
+            Some(After::Terminal { terminal_id, offset }) => {
+                let out = self.out.clone();
+                if let Some(a) = self.terminals.get_mut(&terminal_id) {
+                    a.start(offset, move |o| {
+                        let out = out.clone();
+                        async move {
+                            let n = Notification::new(m::N_TERMINAL_OUTPUT, serde_json::to_value(o).unwrap());
+                            out.send(Message::Notification(n).to_json()).await.is_ok()
+                        }
+                    });
+                }
+            }
+            None => {}
         }
     }
 

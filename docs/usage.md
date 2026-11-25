@@ -127,6 +127,29 @@ and archiving one of them marks the note done. Otherwise only you mark a note
 done. Notes live on the host, so the desktop, the CLI and every paired phone
 see the same ones; a note never runs anything by itself.
 
+## Terminal
+
+The desktop app has a terminal in its right panel, for the commands you'd
+otherwise switch to another window for: the toolbar's terminal button, or
+Ctrl+` (the key under Escape). It runs your login shell on the host, as you
+and outside every sandbox, starting in the open session's folder (its
+worktree, or its workspace's folder), or in your home folder when no session
+is open. "+" opens another; each has its own tab.
+
+The host owns the shell, not the app: quit the app and a build keeps
+running, open it again and the terminal shows what it printed (the last
+megabyte). Typing `exit` closes the tab, and the panel with the last one.
+Stopping the host ends its terminals.
+
+Copy and paste are ⌘C and ⌘V on macOS and Ctrl+Shift+C and Ctrl+Shift+V on
+Linux (Ctrl+C stays the shell's); drag to select, double-click for a word.
+The wheel, or Shift+Page Up, reads back through ten thousand lines. Drag the
+panel's edge to make it wider.
+
+A terminal is only for the app on the host's own computer. A paired desktop
+or phone gets none: the host refuses it. `AGENTHOST_TERMINAL_SHELL` picks a
+shell other than your login one.
+
 ## Automations
 
 An automation is a saved session that starts by itself: on a schedule

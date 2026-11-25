@@ -39,6 +39,7 @@ pub struct Host {
     pub screen: Arc<crate::screen::Screen>,
     pub push: Arc<crate::push::Push>,
     pub automations: Arc<crate::automations::Automations>,
+    pub terminals: Arc<crate::terminal::Terminals>,
 }
 
 pub fn os_name() -> &'static str {
@@ -110,6 +111,7 @@ impl Host {
         let screen = crate::screen::Screen::new(ctx.clone());
         let push = crate::push::Push::new(ctx.clone(), secrets.clone());
         let automations = crate::automations::Automations::new(ctx.clone(), sessions.clone(), secrets.clone())?;
+        let terminals = crate::terminal::Terminals::new(ctx.clone());
         Ok(Arc::new(Host {
             ctx,
             sessions,
@@ -119,6 +121,7 @@ impl Host {
             screen,
             push,
             automations,
+            terminals,
         }))
     }
 

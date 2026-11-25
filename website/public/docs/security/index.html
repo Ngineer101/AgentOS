@@ -62,6 +62,16 @@
 </table>
 <p>"Always Allow" lets a command prefix such as <code>gh pr edit</code> run without asking from then on. These are listed, and undone, under Settings → Connectors. Shells, interpreters and build tools always ask.</p>
 
+<h2 id="terminal">Your own terminal</h2>
+<p>The desktop app's terminal is a login shell the host runs as you, outside every sandbox, exactly as a terminal window would be. It is yours, not an agent's.</p>
+<table>
+  <tr><th>Who</th><th>What they get</th></tr>
+  <tr><td>The app on the host's own computer</td><td>Terminals, over the local socket.</td></tr>
+  <tr><td>A paired phone or desktop</td><td>None. Every terminal method needs the admin capability, which paired devices never hold; they hear nothing about your terminals.</td></tr>
+  <tr><td>Agents</td><td>None. A session can't connect to the host's socket, and the gateway offers no terminal tool.</td></tr>
+</table>
+<p>Opening and closing a terminal is written to the audit log. What you type and what it prints are not logged.</p>
+
 <h2 id="remote">Remote access and the relay</h2>
 <p>The host listens on no network port. Local clients use a Unix socket, and the host dials out to the relay. Phones and the host talk through the relay over end-to-end Noise tunnels (<code>XXpsk3</code> to pair, <code>IK</code> afterwards), so the relay forwards ciphertext it cannot read.</p>
 <p>The one exception is webhook ingress, which the relay seals to the host in memory as it arrives. So the owner of the Cloudflare account the relay runs on, which is you, could see webhook contents and nothing else.</p>

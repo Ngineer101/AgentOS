@@ -148,6 +148,23 @@ pub const NOTE_CREATE: &str = "note.create";
 pub const NOTE_UPDATE: &str = "note.update";
 pub const NOTE_DELETE: &str = "note.delete";
 
+/// Terminals: shells the host runs as you, outside any sandbox (protocol 10;
+/// see [`crate::terminal`]). Admin only: a terminal can do anything you can.
+pub const TERMINAL_LIST: &str = "terminal.list";
+/// Start your login shell in a new terminal: `TerminalOpenParams`, returns the `Terminal`.
+pub const TERMINAL_OPEN: &str = "terminal.open";
+/// Get a terminal's output on this connection, as `terminal.output` notifications.
+pub const TERMINAL_ATTACH: &str = "terminal.attach";
+/// Stop getting a terminal's output. The shell keeps running.
+pub const TERMINAL_DETACH: &str = "terminal.detach";
+/// Keystrokes (or a paste) for the shell.
+pub const TERMINAL_INPUT: &str = "terminal.input";
+pub const TERMINAL_RESIZE: &str = "terminal.resize";
+/// How much output this connection has processed, so the host sends more.
+pub const TERMINAL_ACK: &str = "terminal.ack";
+/// End the shell (hang up) and forget the terminal.
+pub const TERMINAL_CLOSE: &str = "terminal.close";
+
 // ---- Notifications (host -> client) ----
 /// A persisted event; params are an [`crate::Event`].
 pub const N_EVENT: &str = "event";
@@ -176,6 +193,12 @@ pub const N_AUTOMATION_CHANGED: &str = "automation.changed";
 /// A note was created, changed or deleted. Params are a
 /// [`crate::NoteChanged`]. Sent to every connection.
 pub const N_NOTE_CHANGED: &str = "note.changed";
+/// The next bytes of a terminal this connection attached to. Params are a
+/// [`crate::TerminalOutput`].
+pub const N_TERMINAL_OUTPUT: &str = "terminal.output";
+/// A terminal opened, was resized, ended or was closed. Params are a
+/// [`crate::TerminalChanged`]. Sent to admin connections.
+pub const N_TERMINAL_CHANGED: &str = "terminal.changed";
 
 /// One permission a device holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -243,6 +266,9 @@ pub fn required_capability(method: &str) -> Option<Capability> {
         | PROJECT_SET_ROOTS
         // Lets a phone see, and maybe control, everything you are logged in to.
         | SCREEN_SET_POLICY
+        // A shell as you, outside the sandbox, with your logins.
+        | TERMINAL_LIST | TERMINAL_OPEN | TERMINAL_ATTACH | TERMINAL_DETACH | TERMINAL_INPUT
+        | TERMINAL_RESIZE | TERMINAL_ACK | TERMINAL_CLOSE
         | PUSH_CLEAR_KEY => Admin,
         _ => return None,
     })
@@ -270,6 +296,14 @@ mod tests {
             BUILTIN_SET_POLICY,
             SCREEN_SET_POLICY,
             PUSH_CLEAR_KEY,
+            TERMINAL_LIST,
+            TERMINAL_OPEN,
+            TERMINAL_ATTACH,
+            TERMINAL_DETACH,
+            TERMINAL_INPUT,
+            TERMINAL_RESIZE,
+            TERMINAL_ACK,
+            TERMINAL_CLOSE,
         ] {
             assert!(!phone.contains(&required_capability(m).unwrap()), "{m}");
         }

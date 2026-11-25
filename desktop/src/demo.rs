@@ -441,7 +441,8 @@ fn side(s: &mut App) {
     t.events.extend(more);
     t.last_seq = n + 4;
     t.side_live.insert("side_b".into(), "Probably not. The iOS client resubscribes from its last `seq` on every reconnect, so a state change that happens".into());
-    s.side_open = true;
+    s.panel_open = true;
+    s.panel_tab = crate::model::PanelTab::Side;
     s.side_tab.insert(sid.into(), "side_b".into());
 }
 
@@ -535,6 +536,37 @@ fn session(s: &mut App) {
     base(s);
     transcript(s);
     s.screen = Screen::Session("ses_1".into());
+}
+
+/// The right panel on its Terminal tab in ses_1: two of the host's terminals, the first
+/// with a little work in it.
+fn terminal(s: &mut App) {
+    session(s);
+    s.approvals.clear();
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 10;
+    }
+    let prompt = "\x1b[1;32mnico@workstation\x1b[0m \x1b[1;34mrelay\x1b[0m \x1b[35m(agenthost/fix-flaky-resume)\x1b[0m $ ";
+    let out = [
+        format!("{prompt}git status --short\r\n"),
+        " \x1b[31mM\x1b[0m crates/host/tests/resume.rs\r\n".into(),
+        " \x1b[31mM\x1b[0m crates/host/src/session.rs\r\n".into(),
+        "\x1b[31m??\x1b[0m notes.md\r\n".into(),
+        format!("{prompt}cargo test -p agenthost-host resume\r\n"),
+        "\x1b[1;32m   Compiling\x1b[0m agenthost-host v0.1.0\r\n".into(),
+        "\x1b[1;32m    Finished\x1b[0m `test` profile in 14.2s\r\n".into(),
+        "\r\nrunning 3 tests\r\n".into(),
+        "test resume_after_restart ... \x1b[32mok\x1b[0m\r\n".into(),
+        "test resume_keeps_the_worktree ... \x1b[32mok\x1b[0m\r\n".into(),
+        "test resume_twice ... \x1b[31mFAILED\x1b[0m\r\n".into(),
+        "\r\ntest result: \x1b[31mFAILED\x1b[0m. 2 passed; 1 failed; \x1b[33m日本語\x1b[0m ✓\r\n".into(),
+        prompt.to_string(),
+    ]
+    .concat();
+    s.terminal_sample("term_1", "/home/nico/.local/share/agenthost/worktrees/ses_1", 600_000, None, &out);
+    s.terminal_sample("term_2", "/home/nico/Code/relay", 300_000, None, "\x1b]0;npm run dev\x07\x1b[36mready\x1b[0m on http://localhost:8787\r\n");
+    s.select_terminal("term_1");
+    s.show_panel(crate::model::PanelTab::Terminal);
 }
 
 fn sent_images(s: &mut App) {
@@ -1029,6 +1061,29 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         session(s);
         s.approvals.clear();
         side(s);
+    }),
+    ("terminal", terminal),
+    // The terminal stays beside whatever screen is open.
+    ("terminal-home", |s| {
+        terminal(s);
+        s.screen = Screen::Home;
+    }),
+    // A session with side questions: the panel has both tabs.
+    ("terminal-side", |s| {
+        terminal(s);
+        side(s);
+        s.panel_tab = crate::model::PanelTab::Terminal;
+    }),
+    // A shell that could not start keeps its tab and says how it ended.
+    ("terminal-ended", |s| {
+        terminal(s);
+        s.terminal_sample("term_3", "/home/nico", 500, Some(agenthost_proto::TerminalExit { code: Some(127), signal: None }), "zsh: command not found: starship\r\n");
+        s.select_terminal("term_3");
+    }),
+    // Through the relay there is no terminal: the tab says why.
+    ("terminal-remote", |s| {
+        terminal(s);
+        s.admin = false;
     }),
     ("side-panel-pending", |s| {
         session(s);

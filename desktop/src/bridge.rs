@@ -83,6 +83,12 @@ pub enum Tag {
     NoteAction { what: String },
     /// `session.create` from a note: the new session's composer gets the note's text.
     SessionFromNote(String),
+    /// `terminal.list`.
+    Terminals,
+    /// `terminal.open`: answered with the new terminal.
+    TerminalOpened,
+    /// `terminal.attach` to this terminal: its output follows as notifications.
+    TerminalAttached(String),
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -113,6 +119,8 @@ pub enum ToHost {
     Transcribe { wav: Vec<u8> },
     /// Live dictation, sent in order; answered by [`FromHost::LiveText`].
     Live(Live),
+    /// A terminal's keystrokes, size and acknowledgements, sent in order.
+    Term(TermCmd),
     /// Pair with a remote host using the QR payload from `agenthost device
     /// pair` on it; answered by [`FromHost::PairCode`] then
     /// [`FromHost::PairResult`], both carrying `attempt` back so answers to
@@ -126,6 +134,16 @@ pub enum ToHost {
     UseRemote(PathBuf),
     /// Connect back to the local host's socket.
     UseLocal,
+}
+
+/// Traffic for one of the host's terminals. Sent one after another, never side by side:
+/// keys must arrive in the order they were typed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TermCmd {
+    Input { id: String, data: Vec<u8> },
+    Resize { id: String, cols: u16, rows: u16 },
+    /// Output up to `offset` is on screen: the host may send more.
+    Ack { id: String, offset: u64 },
 }
 
 /// One live dictation (`gen`) as it happens: audio is mono 16-bit PCM bytes.
@@ -485,6 +503,62 @@ fn live_dictation(client: Arc<Client>, out: std_mpsc::Sender<FromHost>, waker: r
     tx
 }
 
+/// Terminal traffic in order: each request waits for the one before. Keys typed while
+/// one is on its way go together in the next, and only the newest size is sent.
+fn terminal_io(client: Arc<Client>) -> mpsc::UnboundedSender<TermCmd> {
+    use agenthost_proto::TERMINAL_INPUT_BYTES;
+    use base64::Engine as _;
+    let (tx, mut rx) = mpsc::unbounded_channel::<TermCmd>();
+    tokio::spawn(async move {
+        let mut next: Option<TermCmd> = None;
+        loop {
+            let cmd = match next.take() {
+                Some(c) => c,
+                None => match rx.recv().await {
+                    Some(c) => c,
+                    None => return,
+                },
+            };
+            // Failures are the terminal having gone; its `terminal.changed` says so.
+            match cmd {
+                TermCmd::Input { id, mut data } => {
+                    while data.len() < TERMINAL_INPUT_BYTES {
+                        match rx.try_recv() {
+                            Ok(TermCmd::Input { id: i, data: more }) if i == id => data.extend_from_slice(&more),
+                            Ok(other) => {
+                                next = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    for piece in data.chunks(TERMINAL_INPUT_BYTES) {
+                        let data = base64::engine::general_purpose::STANDARD.encode(piece);
+                        let _ = client.request(m::TERMINAL_INPUT, json!({"terminal_id": id, "data": data})).await;
+                    }
+                }
+                TermCmd::Resize { id, mut cols, mut rows } => {
+                    loop {
+                        match rx.try_recv() {
+                            Ok(TermCmd::Resize { id: i, cols: c, rows: r }) if i == id => (cols, rows) = (c, r),
+                            Ok(other) => {
+                                next = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let _ = client.request(m::TERMINAL_RESIZE, json!({"terminal_id": id, "cols": cols, "rows": rows})).await;
+                }
+                TermCmd::Ack { id, offset } => {
+                    let _ = client.request(m::TERMINAL_ACK, json!({"terminal_id": id, "offset": offset})).await;
+                }
+            }
+        }
+    });
+    tx
+}
+
 pub fn start(waker: rune::Waker) -> Bridge {
     let (tx, cmd_rx) = mpsc::unbounded_channel::<ToHost>();
     let (out_tx, rx) = std_mpsc::channel::<FromHost>();
@@ -604,12 +678,17 @@ pub fn start(waker: rune::Waker) -> Bridge {
                         r2.send(FromHost::Reply { tag: Tag::Sessions, result: r });
                     });
                     let live_tx = live_dictation(client.clone(), out_tx.clone(), waker.clone());
-                    // A command for this host: live dictation goes in order, the
-                    // rest each run on their own.
+                    let term_tx = terminal_io(client.clone());
+                    // A command for this host: live dictation and terminal traffic
+                    // go in order, the rest each run on their own.
                     let run = |cmd: ToHost| {
                         let cmd = match cmd {
                             ToHost::Live(l) => {
                                 let _ = live_tx.send(l);
+                                return;
+                            }
+                            ToHost::Term(t) => {
+                                let _ = term_tx.send(t);
                                 return;
                             }
                             cmd => cmd,
@@ -626,7 +705,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                     FromHost::AttachmentRead { attachment_id, result }
                                 }
                                 ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
-                                ToHost::Live(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } | ToHost::CancelPair => unreachable!(),
+                                ToHost::Live(_) | ToHost::Term(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } | ToHost::CancelPair => unreachable!(),
                             };
                             reply.send(msg);
                         });

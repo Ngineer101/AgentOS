@@ -30,6 +30,8 @@ qrcode = { version = "0.14", default-features = false }
 png = "0.17"
 # Connector icons arrive as data: URLs.
 base64 = "0.22"
+# The terminal panel's emulator (screen state, scrollback, selection); the host owns the shell.
+alacritty_terminal = "0.26"
 # Microphone capture for voice input.
 cpal = "0.16"
 

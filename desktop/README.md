@@ -33,6 +33,23 @@ patterns, Linux gets GNOME / libadwaita. The look follows the OS;
   the window, Esc to close. Dictation (⇧⌘D / Ctrl+Shift+D,
   or the microphone) writes the words into the composer as you talk; ↩ stops
   and sends, Esc throws the dictation away.
+- **Right panel** (`panel.rs`): one trailing pane with a tab per thing it
+  shows; today the terminal and the open session's side questions (`/btw`). A
+  new feature for the panel is a `PanelTab`, its entry in `panel::tabs` and
+  its body in `panel::pane`. A subagent's pane takes its place while open.
+- **Terminal** (⌃` / Ctrl+`, the toolbar's terminal button, GNOME's main
+  menu): your login shell on the host, outside every sandbox, in the open
+  session's folder (its worktree, else its workspace's; your home folder with
+  no session open). "+" opens another, each a tab named for its folder or for
+  what the shell calls itself; `exit` closes the tab, and the panel with the
+  last one. The host owns the shell, so it runs on while the app is closed
+  and the screen is drawn again from what the host kept. ⌘C/⌘V or
+  Ctrl+Shift+C/V copy and paste, drag selects (double-click a word, triple a
+  line), the wheel and Shift+Page Up read back, and the panel's edge drags
+  (remembered in `desktop.json`). Every other key is the shell's while it has
+  the focus. Only on the host's own computer: a paired connection has no
+  terminal button, and the host would refuse it. `term.rs` is the emulator
+  (`alacritty_terminal`, drawn with Rune's `grid`), `terminal.rs` the tab.
 - **New session** (⌘N, quick task ⇧⌘N): a sheet (macOS) or dialog (GNOME):
   workspace and login ("Claude Code · Work"); ⌘↩ starts, and you type the
   first message in the session. Picking a workspace picks its default login
@@ -94,6 +111,7 @@ AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.p
 #           automations automations-webhook automations-empty automation-new automation-new-cron-error
 #           automation-new-webhook automation-edit automation-edit-webhook automation-picker
 #           automation-confirm-delete automation-confirm-rotate
+#           terminal terminal-home terminal-side terminal-ended terminal-remote
 cargo test      # drives a real in-process host through the app's model and bridge
 ```
 

@@ -641,8 +641,13 @@ pub struct App {
     pub toasts_hovered: bool,
     /// Approvals a toast already announced.
     pub toasted_approvals: HashSet<String>,
-    /// The side-question pane is showing (when the session has any).
-    pub side_open: bool,
+    /// The right panel is showing, and which of its tabs: see [`App::panel_shown`].
+    pub panel_open: bool,
+    pub panel_tab: PanelTab,
+    /// The panel's width with the terminal in it, once its edge has been dragged.
+    pub panel_w: Option<f32>,
+    /// The host's terminals (the panel's Terminal tab).
+    pub terms: crate::terminal::Terms,
     /// Side conversations whose tab was closed here.
     pub side_closed: HashSet<String>,
     /// The selected side conversation, by session.
@@ -725,6 +730,15 @@ pub struct App {
 /// A sidebar group shows this many sessions until "Show N more".
 pub const GROUP_SHOWN: usize = 8;
 /// How narrow and wide the sidebar's edge drags it.
+/// A tab of the right panel. A new feature for the panel starts as a variant here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PanelTab {
+    /// Shells the host runs for you.
+    Terminal,
+    /// The open session's side questions (`/btw`).
+    Side,
+}
+
 pub const SIDEBAR_MIN_W: f32 = 220.0;
 pub const SIDEBAR_MAX_W: f32 = 480.0;
 
@@ -812,7 +826,10 @@ pub fn init() -> App {
         next_toast: 1,
         toasts_hovered: false,
         toasted_approvals: HashSet::new(),
-        side_open: false,
+        panel_open: false,
+        panel_tab: PanelTab::Terminal,
+        panel_w: None,
+        terms: Default::default(),
         side_closed: HashSet::new(),
         side_tab: HashMap::new(),
         side_pending: HashMap::new(),
@@ -1440,6 +1457,7 @@ impl App {
         self.automations.clear();
         self.runs.clear();
         self.notes.clear();
+        self.terminals_reset();
         self.suggestions.clear();
         self.transcripts.clear();
         self.subscribed.clear();
@@ -2044,6 +2062,11 @@ impl App {
                 self.refresh_all();
                 self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
                 self.call(Tag::Screen, m::SCREEN_STATUS, json!({}));
+                // A new connection: the terminals' screens are drawn again from the host.
+                self.terminals_reset();
+                if admin {
+                    self.call(Tag::Terminals, m::TERMINAL_LIST, json!({}));
+                }
                 if let Screen::Session(id) = self.screen.clone() {
                     self.ensure_subscribed(&id);
                 }
@@ -2141,7 +2164,7 @@ impl App {
                     if let Some(r) = parse::<SessionSideAskResult>(v) {
                         self.side_closed.remove(&r.side_id);
                         self.side_tab.insert(sess, r.side_id);
-                        self.side_open = true;
+                        self.show_panel(PanelTab::Side);
                     }
                 }
                 (Tag::SideAsked(sess), Err(e)) => {
@@ -2219,6 +2242,16 @@ impl App {
                 }
                 // An older host without notes: the screen says to update it.
                 (Tag::Notes, Err(_)) => self.notes.clear(),
+                (Tag::Terminals, Ok(v)) => self.terminals_listed(parse::<TerminalList>(v).map(|l| l.terminals).unwrap_or_default()),
+                // An older host without terminals: the tab says so when it is opened.
+                (Tag::Terminals, Err(_)) => {}
+                (Tag::TerminalOpened, Ok(v)) => match parse::<Terminal>(v) {
+                    Some(t) => self.terminal_opened(Ok(t)),
+                    None => self.terminal_opened(Err("the host's answer made no sense".into())),
+                },
+                (Tag::TerminalOpened, Err(e)) => self.terminal_opened(Err(e.message)),
+                (Tag::TerminalAttached(_), Ok(_)) => {}
+                (Tag::TerminalAttached(id), Err(_)) => self.terminal_attach_failed(&id),
                 (Tag::NoteSaved { new_gen }, Ok(v)) => {
                     self.note_saving = false;
                     if let Some(n) = parse::<Note>(v) {
@@ -2633,7 +2666,7 @@ impl App {
         } else {
             self.side_pending.insert(session.to_string(), text.to_string());
         }
-        self.side_open = true;
+        self.show_panel(PanelTab::Side);
         self.call(Tag::SideAsked(session.to_string()), m::SESSION_SIDE_ASK, params);
     }
 
@@ -2714,12 +2747,23 @@ impl App {
 
     /// The side pane is on screen for the open session.
     pub fn side_visible(&self) -> bool {
-        self.side_open && !self.agent_visible() && matches!(&self.screen, Screen::Session(id) if self.has_side(id))
+        self.panel_shown() == Some(PanelTab::Side)
     }
 
-    /// A trailing pane (side questions or a subagent) is on screen.
+    /// A trailing pane (the right panel or a subagent) is on screen.
     pub fn trailing_visible(&self) -> bool {
-        self.side_visible() || self.agent_visible()
+        self.panel_shown().is_some() || self.agent_visible()
+    }
+
+    /// How wide the trailing pane on screen is; 0 with none.
+    pub fn trailing_width(&self, t: &crate::look::Theme) -> f32 {
+        if self.agent_visible() {
+            crate::side::width(t)
+        } else if self.panel_shown().is_some() {
+            self.panel_width(t)
+        } else {
+            0.0
+        }
     }
 
     // ---- subagents -------------------------------------------------------------------------
@@ -2779,8 +2823,8 @@ impl App {
         if self.side_tab.get(session).map(String::as_str) == Some(side_id) {
             self.side_tab.remove(session);
         }
-        if !self.has_side(session) {
-            self.side_open = false;
+        if !self.has_side(session) && self.panel_tab == PanelTab::Side {
+            self.panel_open = false;
         }
     }
 
@@ -3029,6 +3073,16 @@ impl App {
             m::N_NOTE_CHANGED => {
                 if let Some(ch) = parse::<NoteChanged>(n.params) {
                     self.on_note_changed(ch);
+                }
+            }
+            m::N_TERMINAL_OUTPUT => {
+                if let Some(o) = parse::<TerminalOutput>(n.params) {
+                    self.terminal_output(o);
+                }
+            }
+            m::N_TERMINAL_CHANGED => {
+                if let Some(ch) = parse::<TerminalChanged>(n.params) {
+                    self.terminal_changed(ch);
                 }
             }
             m::N_AUTOMATION_CHANGED => {

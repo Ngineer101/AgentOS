@@ -44,6 +44,22 @@ outside the sandbox.
   under Settings → Connectors); shells, interpreters and build tools always
   ask.
 
+## Your own terminal
+
+The desktop app's terminal is the one deliberate hole in all of the above,
+and it is yours, not an agent's: a login shell the host runs as you, outside
+every sandbox, with your logins, exactly as a terminal window would be.
+
+- Only the local socket may use it. Every `terminal.*` method needs the admin
+  capability, which paired devices never hold, so a phone or a paired desktop
+  can neither open a terminal nor read or type into one of yours, and hears
+  nothing about them.
+- Agents can't reach it: a session can't connect to the host's socket, and
+  the gateway offers no terminal tool.
+- Opening and closing a terminal is written to the audit log (the folder, the
+  shell, its process id). What you type and what it prints are not logged,
+  and the output the host keeps for replay lives in memory only.
+
 ## Remote access and the relay
 
 The host listens on no network port: local clients use a Unix socket, and

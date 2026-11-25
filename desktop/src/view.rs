@@ -19,13 +19,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         body = body.child(sidebar(s, &t));
     }
     body = body.child(main_pane(s, &t, &k, cx));
-    if let Screen::Session(id) = &s.screen {
-        if s.agent_visible() {
-            if let Some((_, call)) = &s.agent_open {
-                body = body.child(crate::agents::pane(s, id, call, &t, &k));
+    // One trailing pane: a subagent's, else the right panel on its open tab.
+    match (&s.screen, &s.agent_open) {
+        (Screen::Session(id), Some((_, call))) if s.agent_visible() => body = body.child(crate::agents::pane(s, id, call, &t, &k)),
+        _ => {
+            if let Some(tab) = s.panel_shown() {
+                body = body.child(crate::panel::pane(s, tab, &t, &k));
             }
-        } else if s.side_visible() {
-            body = body.child(crate::side::pane(s, id, &t, &k));
         }
     }
     let mut root = col().key("root").w_full().h_full().fill(t.window).child(body);
@@ -868,6 +868,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if shown { b.fill(Color::WHITE.alpha(if mac { 0.10 } else { 0.12 })) } else { b }
     });
 
+    // The terminal's toggle, on every screen, where this connection may have one.
+    let terminal = s.terminal_allowed().then(|| crate::terminal::toggle_button(s, t));
+
     if mac {
         let mut bar = row()
             .key("toolbar")
@@ -897,6 +900,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if let Some(b) = side {
             group = group.child(b.w(32.0));
         }
+        if let Some(b) = terminal {
+            group = group.child(b.w(32.0));
+        }
         bar.child(group)
     } else {
         let mut bar = row()
@@ -922,7 +928,11 @@ fn toolbar(s: &App, t: &Theme) -> El {
                 bar = bar.child(b);
             }
         } else {
-            bar = bar.child(el().w(72.0));
+            // Keeps the title centred as the session's two buttons would.
+            bar = bar.child(el().w(if terminal.is_some() { 36.0 } else { 72.0 }));
+        }
+        if let Some(b) = terminal {
+            bar = bar.child(b);
         }
         // Linux keeps the window manager's own frame; elsewhere (a preview) draw Adwaita's.
         if !cfg!(target_os = "linux") {
@@ -1243,6 +1253,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("New Quick Task", keys(look, Cmd::QuickTask), |s, tx| run(s, Cmd::QuickTask, tx))),
                 Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
                 Some(Item::new("Notes", String::new(), |s, _| s.open_notes()).enabled(s.host_has_notes())),
+                Some(Item::new("Terminal", keys(look, Cmd::ToggleTerminal), |s, tx| run(s, Cmd::ToggleTerminal, tx)).enabled(s.terminal_allowed())),
                 None,
                 Some(Item::new("Preferences", keys(look, Cmd::Settings), |s, tx| run(s, Cmd::Settings, tx))),
                 Some(Item::new("Pair a Phone…", String::new(), |s, tx| run(s, Cmd::PairPhone, tx))),

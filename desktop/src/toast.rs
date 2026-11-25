@@ -62,7 +62,7 @@ pub fn layer(s: &App, t: &Theme) -> Option<El> {
             stack = stack.child(mac_toast(t, sh));
         }
         let top = t.toolbar_h + 10.0;
-        let right = 14.0 + if s.trailing_visible() { crate::side::width(t) } else { 0.0 };
+        let right = 14.0 + s.trailing_width(t);
         Some(stack.w(340.0).pin(None, Some(top), Some(right), None))
     } else {
         // Newest at the bottom, nearest the eye line of AdwToastOverlay.
@@ -73,7 +73,7 @@ pub fn layer(s: &App, t: &Theme) -> Option<El> {
         let bottom = if over_composer { 132.0 } else { 24.0 };
         // Centred over the content, as AdwToastOverlay sits in the content pane.
         let left = if s.sidebar_open { t.sidebar_w } else { 0.0 };
-        let right = if s.trailing_visible() { crate::side::width(t) } else { 0.0 };
+        let right = s.trailing_width(t);
         Some(row().key("toast-overlay").pin(Some(left), None, Some(right), Some(bottom)).justify_center().child(stack.items_center().max_w(560.0)))
     }
 }
