@@ -46,6 +46,7 @@ use std::sync::Arc;
 /// Start serving: resume live sessions and listen on the Unix socket.
 pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let socket = host.ctx.cfg.socket_path.clone();
+    api::ensure_no_other_host(&socket).await?;
     let gw = mcp::Gateway::start(host.ctx.clone(), host.secrets.clone(), &host.sessions).await?;
     let _ = host.ctx.gateway.set(gw.clone());
     let _ = host.connectors.set(Arc::new(gw));

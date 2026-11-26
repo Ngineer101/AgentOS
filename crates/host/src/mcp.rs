@@ -252,6 +252,7 @@ fn pr_tool_def() -> Value {
                 "base": {"type": "string", "description": "The branch to merge into (optional; the repository's default branch)."},
                 "head": {"type": "string", "description": "The branch with the changes (optional; the branch checked out in this session's folder)."},
                 "draft": {"type": "boolean", "description": "Open it as a draft."},
+                "repo": {"type": "string", "description": "The repository, as a folder inside this session's folder (optional; the session's folder). Only when the session's folder holds repositories rather than being one."},
                 "reason": {"type": "string", "description": "One sentence for the user: why open it now."}
             },
             "required": ["title", "body"]
@@ -300,6 +301,7 @@ fn git_tools() -> Vec<Value> {
                     "remote_branch": {"type": "string", "description": "The branch name on the remote (optional; the same name)."},
                     "set_upstream": {"type": "boolean", "description": "Track the pushed branch (git push --set-upstream)."},
                     "force_with_lease": {"type": "boolean", "description": "Replace the remote branch if nobody else pushed to it (git push --force-with-lease). Only when the user asked for it."},
+                    "repo": {"type": "string", "description": "The repository, as a folder inside this session's folder (optional; the session's folder). Only when the session's folder holds repositories rather than being one."},
                     "reason": {"type": "string", "description": "One sentence for the user: what this push is."}
                 },
                 "required": ["reason"]
@@ -313,7 +315,8 @@ fn git_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "remote": {"type": "string", "description": "A remote the repository has (optional; origin)."}
+                    "remote": {"type": "string", "description": "A remote the repository has (optional; origin)."},
+                    "repo": {"type": "string", "description": "The repository, as a folder inside this session's folder (optional; the session's folder). Only when the session's folder holds repositories rather than being one."}
                 }
             },
             "annotations": {"readOnlyHint": true, "openWorldHint": true, "title": "Fetch with the user's credentials"}
@@ -334,6 +337,22 @@ pub fn classify(tool: &Value) -> ToolKind {
     }
 }
 
+/// How often the gateway checks its socket file is still its own.
+const SOCKET_CHECK: Duration = Duration::from_secs(2);
+
+/// Bind the gateway's socket, owner-only, replacing a stale file. Returns the
+/// listener and the file's inode, to notice later if the file is replaced.
+fn bind_gateway_socket(socket: &std::path::Path) -> Result<(UnixListener, u64)> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if socket.symlink_metadata().is_ok() {
+        std::fs::remove_file(socket)?;
+    }
+    let listener = UnixListener::bind(socket)?;
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    let ino = std::fs::metadata(socket)?.ino();
+    Ok((listener, ino))
+}
+
 impl Gateway {
     pub async fn start(
         ctx: Arc<Ctx>,
@@ -341,12 +360,7 @@ impl Gateway {
         sessions: &Arc<SessionManager>,
     ) -> Result<Arc<Gateway>> {
         let socket = ctx.cfg.runtime_dir.join("gw.sock");
-        if socket.exists() {
-            std::fs::remove_file(&socket)?;
-        }
-        let listener = UnixListener::bind(&socket)?;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+        let (mut listener, mut bound) = bind_gateway_socket(&socket)?;
         let gw = Arc::new(Gateway {
             ctx,
             secrets,
@@ -375,9 +389,27 @@ impl Gateway {
         });
         let g = gw.clone();
         tokio::spawn(async move {
+            let mut check = tokio::time::interval(SOCKET_CHECK);
+            check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
+                let accepted = tokio::select! {
+                    r = listener.accept() => r,
+                    _ = check.tick() => {
+                        if let Some((l, b)) = g.reclaim_socket(bound) {
+                            (listener, bound) = (l, b);
+                        }
+                        continue;
+                    }
+                };
+                // A failed accept (out of file descriptors, say) must not end
+                // the loop: every session's MCP tools go through here.
+                let stream = match accepted {
+                    Ok((s, _)) => s,
+                    Err(e) => {
+                        tracing::warn!("MCP gateway accept failed: {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
                 };
                 let g = g.clone();
                 tokio::spawn(async move {
@@ -393,6 +425,31 @@ impl Gateway {
             }
         });
         Ok(gw)
+    }
+
+    /// Listen again if the socket file is no longer ours and nobody else
+    /// answers on it: removed, or replaced by a process that has since exited
+    /// (a second host that started and gave up). Agents only find the
+    /// gateway through this file, so without it every session's MCP tools
+    /// are gone (Claude Code reports the server as needing authentication).
+    fn reclaim_socket(&self, bound: u64) -> Option<(UnixListener, u64)> {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::metadata(&self.socket) {
+            Ok(m) if m.ino() == bound => return None,
+            // Another live process serves it; leave it alone.
+            Ok(_) if std::os::unix::net::UnixStream::connect(&self.socket).is_ok() => return None,
+            _ => {}
+        }
+        match bind_gateway_socket(&self.socket) {
+            Ok(x) => {
+                tracing::warn!(socket = %self.socket.display(), "MCP gateway socket was removed or replaced; listening again");
+                Some(x)
+            }
+            Err(e) => {
+                tracing::warn!(socket = %self.socket.display(), "MCP gateway socket is gone and can't be bound again: {e}");
+                None
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -887,6 +944,13 @@ impl Gateway {
             finish("failed", "no such session");
             return text_result("AgentOS: this session's folder is unknown", true);
         };
+        let dir = match crate::gitremote::repo_dir(&dir, args["repo"].as_str()).await {
+            Ok(d) => d,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("AgentOS: {e}"), true);
+            }
+        };
         let plan = crate::gitremote::plan_pr(
             &dir,
             &program,
@@ -980,6 +1044,13 @@ impl Gateway {
         let Some(dir) = self.session_git_dir(session_id) else {
             finish("failed", "no such session");
             return text_result("AgentOS: this session's folder is unknown", true);
+        };
+        let dir = match crate::gitremote::repo_dir(&dir, args["repo"].as_str()).await {
+            Ok(d) => d,
+            Err(e) => {
+                finish("failed", &e);
+                return text_result(&format!("AgentOS: {e}"), true);
+            }
         };
         let plan = if push {
             crate::gitremote::plan_push(
