@@ -765,3 +765,45 @@ async fn voice_streams_live_dictation() {
         .unwrap();
     assert!(r.text.is_empty());
 }
+
+#[tokio::test]
+async fn second_host_leaves_the_running_gateway_alone() {
+    let th = TestHost::start().await;
+    let cfg = th.host.ctx.cfg.clone();
+    let gw_sock = cfg.runtime_dir.join("gw.sock");
+    assert!(tokio::net::UnixStream::connect(&gw_sock).await.is_ok());
+
+    // A second host on the same directories refuses to start...
+    let second = agenthost_host::Host::open(cfg).unwrap();
+    let err = agenthost_host::start(second).await.unwrap_err();
+    assert!(err.to_string().contains("another host"), "{err}");
+
+    // ...without taking over the gateway's socket on the way out.
+    assert!(
+        tokio::net::UnixStream::connect(&gw_sock).await.is_ok(),
+        "running host's MCP gateway became unreachable"
+    );
+}
+
+#[tokio::test]
+async fn gateway_listens_again_when_its_socket_is_taken_over() {
+    let th = TestHost::start().await;
+    let gw_sock = th.host.ctx.cfg.runtime_dir.join("gw.sock");
+    // What an older second host did: replace the socket, then exit.
+    std::fs::remove_file(&gw_sock).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(&gw_sock).unwrap());
+    assert!(tokio::net::UnixStream::connect(&gw_sock).await.is_err());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while tokio::net::UnixStream::connect(&gw_sock).await.is_err() {
+        assert!(Instant::now() < deadline, "the gateway never listened again");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // And a removed one.
+    std::fs::remove_file(&gw_sock).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while tokio::net::UnixStream::connect(&gw_sock).await.is_err() {
+        assert!(Instant::now() < deadline, "the gateway never listened again");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
