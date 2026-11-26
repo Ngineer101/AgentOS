@@ -61,39 +61,80 @@ const USER_GIT_CONFIG: &[(&str, &str)] = &[
 /// repository's copy of the same setting is ignored. Read once.
 pub(crate) fn safe_git_config() -> &'static [String] {
     static CONFIG: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let mut out: Vec<String> = FIXED_GIT_CONFIG.iter().map(|c| c.to_string()).collect();
-        for (key, default) in USER_GIT_CONFIG {
-            // Reset first: this drops whatever the repository set.
-            out.push(format!("{key}={default}"));
-            // Then yours, in git's own order of precedence.
-            let mine = ["--system", "--global"]
-                .iter()
-                .flat_map(|scope| user_git_config(scope, key))
-                .filter(|v| !v.is_empty())
-                .collect::<Vec<_>>();
-            for value in mine {
+    CONFIG.get_or_init(|| build_safe_git_config(&[]))
+}
+
+/// [`safe_git_config`], reading your config with `env` added to git's
+/// environment (tests point it at a config of their own).
+fn build_safe_git_config(env: &[(&str, &str)]) -> Vec<String> {
+    let mut out: Vec<String> = FIXED_GIT_CONFIG.iter().map(|c| c.to_string()).collect();
+    for (key, default) in USER_GIT_CONFIG {
+        // Reset first: this drops whatever the repository set.
+        out.push(format!("{key}={default}"));
+        // Then yours, in git's own order of precedence.
+        if *key == "credential.helper" {
+            out.extend(user_credential_helpers(env));
+            continue;
+        }
+        for scope in ["--system", "--global"] {
+            for value in user_git_config(scope, key, env) {
                 out.push(format!("{key}={value}"));
             }
         }
-        out
-    })
+    }
+    out
 }
 
-/// One config key's values from a scope outside any repository.
-fn user_git_config(scope: &str, key: &str) -> Vec<String> {
+/// Your credential helpers, as `-c` settings in the order git reads them.
+///
+/// Not only `credential.helper`: a helper is usually kept for one site, as
+/// `credential.https://github.com.helper`, which is how `gh auth setup-git`
+/// writes GitHub's. git keeps one list for a URL, filled from both kinds of
+/// key, and the empty `credential.helper` that drops the repository's
+/// helpers empties all of it. So every helper of yours goes back, under its
+/// own key (it still answers only for its own site) and with your own empty
+/// values, which reset the list where you meant them to.
+fn user_credential_helpers(env: &[(&str, &str)]) -> Vec<String> {
+    let mut out = vec![];
+    for scope in ["--system", "--global"] {
+        // git matches the pattern against the key with its section and
+        // variable in lower case and the URL between them as written.
+        let found = git_config(&[scope, "--includes", "-z", "--get-regexp", r"^credential\.(.*\.)?helper$"], env);
+        // With `-z` a setting is its key, a newline, its value and a NUL.
+        for entry in found.split('\0').filter(|e| !e.is_empty()) {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            // `-c key=value` ends the key at the first `=`: a URL with one
+            // in it can't be passed on, and is left out.
+            if !key.contains('=') {
+                out.push(format!("{key}={value}"));
+            }
+        }
+    }
+    out
+}
+
+/// One config key's values from a scope outside any repository, and the
+/// files it includes.
+fn user_git_config(scope: &str, key: &str, env: &[(&str, &str)]) -> Vec<String> {
+    git_config(&[scope, "--includes", "--get-all", key], env)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// What `git config <args>` prints, or nothing if it fails (no such key).
+fn git_config(args: &[&str], env: &[(&str, &str)]) -> String {
     let out = std::process::Command::new("git")
-        .args(["config", scope, "--get-all", key])
+        .arg("config")
+        .args(args)
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
     match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => vec![],
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        _ => String::new(),
     }
 }
 
@@ -343,7 +384,7 @@ mod tests {
         }
         // The lookup itself works: this machine has a global user.email, and
         // the same call shape is what reads the settings above.
-        let scoped = user_git_config("--global", "user.email");
+        let scoped = user_git_config("--global", "user.email", &[]);
         let global_set = std::process::Command::new("git")
             .args(["config", "--global", "--get", "user.email"])
             .output()
@@ -354,5 +395,74 @@ mod tests {
             global_set,
             "reading your own config is broken, so your settings would be silently dropped"
         );
+    }
+
+    /// A login kept for one site (`credential.https://github.com.helper`,
+    /// as `gh auth setup-git` writes it) must still answer: the reset that
+    /// drops a repository's helpers empties git's whole list for the URL,
+    /// so without yours added back under its own key a push over HTTPS has
+    /// nobody to ask ("could not read Username"). Checked with git itself,
+    /// asked for a login the way a push asks.
+    #[test]
+    fn a_login_kept_for_one_site_still_answers_and_a_repository_s_never_does() {
+        let t = tempfile::tempdir().unwrap();
+        let sh = |dir: &Path, args: &[&str]| {
+            let s = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+            assert!(s.status.success(), "{args:?}: {}", String::from_utf8_lossy(&s.stderr));
+        };
+        // Your config, as the GitHub CLI leaves it, with a helper for every
+        // site in a file it includes.
+        let (global, included) = (t.path().join("gitconfig"), t.path().join("more"));
+        std::fs::write(&included, "[credential]\n\thelper = \"!f() { echo username=anywhere; echo password=p1; }; f\"\n").unwrap();
+        std::fs::write(
+            &global,
+            format!(
+                "[include]\n\tpath = {}\n[credential \"https://github.com\"]\n\thelper =\n\thelper = \"!f() {{ echo username=you; echo password=p2; }}; f\"\n",
+                included.display()
+            ),
+        )
+        .unwrap();
+        // A repository that names helpers of its own, of both kinds.
+        let repo = t.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q"]);
+        let marker = t.path().join("config-ran");
+        let fire = format!("!f() {{ touch {}; echo username=theirs; echo password=p3; }}; f", marker.display());
+        sh(&repo, &["config", "credential.helper", &fire]);
+        sh(&repo, &["config", "credential.https://github.com.helper", &fire]);
+        sh(&repo, &["config", "credential.https://example.org.helper", &fire]);
+
+        let env = [("GIT_CONFIG_GLOBAL", global.to_str().unwrap()), ("GIT_CONFIG_SYSTEM", "/dev/null")];
+        let config = build_safe_git_config(&env);
+        let login_for = |host: &str| -> String {
+            use std::io::Write;
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(&repo);
+            for c in &config {
+                cmd.arg("-c").arg(c);
+            }
+            let mut child = cmd
+                .args(["credential", "fill"])
+                .envs(env)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(format!("protocol=https\nhost={host}\n\n").as_bytes()).unwrap();
+            let out = child.wait_with_output().unwrap();
+            format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+        };
+        // GitHub: your helper for it, alone (your own empty value put the
+        // one for every site aside, as it does without the host).
+        let github = login_for("github.com");
+        assert!(github.contains("username=you") && github.contains("password=p2"), "your GitHub login was dropped: {github}");
+        // Any other site: your helper for every site, from the included file.
+        let other = login_for("example.org");
+        assert!(other.contains("username=anywhere"), "your login for other sites was dropped: {other}");
+        // The repository's helpers answered for neither, and never ran.
+        assert!(!github.contains("theirs") && !other.contains("theirs"), "{github}{other}");
+        assert!(!marker.exists(), "a helper the repository's config named ran");
     }
 }
