@@ -1,6 +1,7 @@
 //! The main window: the sidebar (sessions by workspace, search, host line), the toolbar or
 //! header bar, banners and the open session; sheets, Settings and menus over it.
 
+use crate::look::MEDIUM;
 use crate::commands::{label as keys, run, Cmd};
 use crate::icons as ic;
 use crate::look::{Btn, Look, Theme};
@@ -214,16 +215,23 @@ fn title_field(s: &App, x: &Session, t: &Theme, font: TextStyle) -> El {
 }
 
 /// The status vocabulary: spinner = working, orange = needs you, red = failed, accent dot =
-/// your turn, grey = ended. `on_accent` draws it on a selected (accent) row.
+/// your turn (green while unread: see [`unread_glyph`]), grey = ended. `on_accent` draws it
+/// on a selected (accent) row.
 pub fn status_glyph(t: &Theme, st: Status, on_accent: bool) -> El {
     let size = if t.mac() { 8.0 } else { 9.0 };
     let c = if on_accent { Color::WHITE } else { status_color(t, st) };
     let e = match st {
         Status::Working => icon(&ic::SPINNER, if t.mac() { 14.0 } else { 16.0 }).color(if on_accent { Color::WHITE } else if t.mac() { t.text2 } else { t.text }).looping(rune::LoopSpec::rotation(0.9)),
         Status::Ended if on_accent => t.dot(Color::WHITE.alpha(0.6), size),
+        Status::YourTurn if !on_accent => t.dot(t.your_turn, size),
         _ => t.dot(c, size),
     };
     row().size(14.0, 14.0).center().child(e)
+}
+
+/// A session's glyph while its agent's finished turn is unread: a green dot.
+pub fn unread_glyph(t: &Theme) -> El {
+    row().size(14.0, 14.0).center().child(t.dot(t.unread, if t.mac() { 8.0 } else { 9.0 }))
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +263,7 @@ fn sidebar(s: &App, t: &Theme) -> El {
             .grow(1.0)
             .min_w(0.0)
             .child(el().size(22.0, 22.0).pixels(crate::brand::logo()))
-            .child(text("AgentOS").font(TextStyle::new(t.fs, t.w_bold)).color(t.text).truncate().min_w(0.0));
+            .child(text("AgentOS").font(TextStyle::new(t.fs, MEDIUM)).color(t.text).truncate().min_w(0.0));
         header
             .px(6.0)
             .child(brand)
@@ -459,7 +467,7 @@ fn nav_row(t: &Theme, key: &str, glyph: &'static rune::Icon, label: &str, select
         .focusable(true)
         .on_press_tx(f)
         .child(row().size(16.0, 16.0).center().child(icon(glyph, if mac { 15.0 } else { 16.0 }).color(if selected || !mac { t.text } else { t.text2 })))
-        .child(text(label.to_string()).font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(if selected && mac { Color::WHITE } else { t.text }).grow(1.0));
+        .child(text(label.to_string()).font(TextStyle { weight: if selected && !mac { MEDIUM } else { 400.0 }, ..t.font() }).color(if selected && mac { Color::WHITE } else { t.text }).grow(1.0));
     if let Some(e) = trailing {
         r = r.child(e);
     }
@@ -480,7 +488,7 @@ fn heading(t: &Theme, title: &str, button: Option<El>) -> El {
         .pr(if mac { 2.0 } else { 0.0 })
         .pt(8.0)
         .center_y()
-        .child(text(title.to_string()).font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) }).color(if mac { t.text3 } else { t.text2 }).grow(1.0));
+        .child(text(title.to_string()).font(if mac { TextStyle::new(11.0, MEDIUM) } else { TextStyle::new(12.5, MEDIUM) }).color(if mac { t.text3 } else { t.text2 }).grow(1.0));
     if let Some(b) = button {
         r = r.child(b);
     }
@@ -511,7 +519,7 @@ fn group_row(s: &App, t: &Theme, w: &Workspace, sessions: &[&Session], gap_above
         .focusable(true)
         .hover(t.row_hover)
         .child(row().size(if mac { 14.0 } else { 16.0 }, 14.0).center().child(icon(if collapsed { &ic::CHEVRON_R } else { &ic::CHEVRON_D }, if mac { 10.0 } else { 12.0 }).color(ink)))
-        .child(text(title.clone()).font(if mac { TextStyle::new(t.fs, 500.0) } else { TextStyle::new(t.fs, 700.0) }).color(ink).truncate().grow(1.0).min_w(0.0))
+        .child(text(title.clone()).font(TextStyle::new(t.fs, MEDIUM)).color(ink).truncate().grow(1.0).min_w(0.0))
         .on_secondary_press({
             let wsid = wsid.clone();
             move |s: &mut App, p: rune::PointerPress, tx: &mut Tx| section_menu(s, &wsid, p, tx)
@@ -660,6 +668,7 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
     let ended = x.state.is_terminal();
     let title = s.session_title(x);
     let status = Status::of(x.state);
+    let unread = s.unread(x);
     let profile = x.profile_id.as_ref().and_then(|id| s.info.as_ref()?.agents.iter().find(|a| a.profile_id.as_ref() == Some(id))?.profile_name.clone());
     let age = short_age(x.updated_at, s.look);
     let line = exception_line(s, t, x, status);
@@ -668,7 +677,8 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
     let ws = s.workspace(&x.workspace_id).map(|w| if w.kind == WorkspaceKind::Scratch { "Quick tasks".to_string() } else { w.name.clone() });
 
     // What the second line used to say, for the tooltip and the screen reader.
-    let mut facts = vec![line.as_ref().map(|l| l.0.clone()).unwrap_or_else(|| status.word().to_string()), profile.unwrap_or_else(|| x.agent.display_name().to_string())];
+    let word = if unread { format!("{}, unread", status.word()) } else { status.word().to_string() };
+    let mut facts = vec![line.as_ref().map(|l| l.0.clone()).unwrap_or(word), profile.unwrap_or_else(|| x.agent.display_name().to_string())];
     facts.extend(ws.clone());
     facts.push(age.clone());
     let mut tip = facts.join(" · ");
@@ -723,11 +733,11 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
             }
         });
     r = if two { r.py(if mac { 6.0 } else { 7.0 }).items_start() } else { r.h(if mac { 28.0 } else { 34.0 }).center_y() };
-    let glyph = status_glyph(t, status, false);
+    let glyph = if unread { unread_glyph(t) } else { status_glyph(t, status, false) };
     r = r.child(if two { row().h(if mac { 16.0 } else { 20.0 }).center_y().child(glyph) } else { glyph });
 
-    let weight = if selected && !mac { 700.0 } else { 400.0 };
-    let name = text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate().min_w(0.0).spans(match_spans(&s.session_title(x), q, if mac { 700.0 } else { 800.0 }));
+    let weight = if selected && !mac { MEDIUM } else { 400.0 };
+    let name = text(title).font(TextStyle { weight, ..t.font() }).color(title_c).truncate().min_w(0.0).spans(match_spans(&s.session_title(x), q, MEDIUM));
     r = r.child(match &line {
         Some((l, c)) => col().grow(1.0).min_w(0.0).gap(1.0).child(name).child(text(l.clone()).font(t.font_small()).color(*c).truncate()),
         None => name.grow(1.0),
@@ -772,7 +782,7 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
             end = end.child(icon(&ic::CLOCK, if mac { 12.0 } else { 14.0 }).color(sub_faint));
         }
         match n.filter(|_| s.jump_held) {
-            Some(n) => end = end.child(text(keys(s.look, Cmd::Jump(n as u8))).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 600.0)).color(t.text)),
+            Some(n) => end = end.child(text(keys(s.look, Cmd::Jump(n as u8))).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, MEDIUM)).color(t.text)),
             None => end = end.child(text(age).font(small).color(sub_faint)),
         }
     }
@@ -826,7 +836,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
     let sub_line = match sess.filter(|x| !mac && x.archived_at.is_none() && Status::of(x.state) != Status::YourTurn) {
         Some(x) => {
             let st = Status::of(x.state);
-            let word = text(format!("{} · ", st.word())).font(TextStyle::new(t.fs_small, 700.0).lh((t.fs_small * 1.2).round())).color(if st == Status::Working { t.text2 } else { status_color(t, st) });
+            let word = text(format!("{} · ", st.word())).font(TextStyle::new(t.fs_small, MEDIUM).lh((t.fs_small * 1.2).round())).color(if st == Status::Working { t.text2 } else { status_color(t, st) });
             row().key("header-status").gap(6.0).center_y().min_w(0.0).child(status_glyph(t, st, false).size(12.0, 12.0)).child(word).child(sub_text.shrink())
         }
         None => row().min_w(0.0).child(sub_text.shrink()),
@@ -836,7 +846,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         None => sub_line,
     };
     let sub_line = if mac { sub_line } else { sub_line.max_w(10_000.0).w_full().justify_center() };
-    let title_font = TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 }).lh((t.fs * 1.2).round());
+    let title_font = TextStyle::new(t.fs, MEDIUM).lh((t.fs * 1.2).round());
     let renaming = sess.filter(|x| s.session_rename.as_deref() == Some(x.session_id.as_str()));
     let title_el = match renaming {
         Some(x) => title_field(s, x, t, title_font),
@@ -963,7 +973,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
 /// The macOS toolbar's status capsule, and one for approvals waiting in other sessions.
 fn capsule(s: &App, t: &Theme) -> Option<El> {
     let pill = |key: &str, label: String, fg: Color, bg: Color, glyph: El| {
-        row().key(key.to_string()).h(22.0).px(9.0).gap(6.0).center_y().radius(11.0).fill(bg).child(glyph).child(text(label).font(TextStyle::new(11.0, 600.0)).color(fg))
+        row().key(key.to_string()).h(22.0).px(9.0).gap(6.0).center_y().radius(11.0).fill(bg).child(glyph).child(text(label).font(TextStyle::new(11.0, MEDIUM)).color(fg))
     };
     let mut r = row().gap(6.0).center_y();
     let mut any = false;
@@ -1098,7 +1108,7 @@ fn home(s: &App, t: &Theme) -> El {
     c = c.child(el().w(64.0).h(64.0).pixels(crate::brand::logo()));
     if let Conn::Down(e) = &s.conn {
         let mut d = c
-            .child(text("Not connected to the host").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("Not connected to the host").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
             .child(t.small(format!("{e}")).wrap().align(rune::Align::Center).max_w(460.0));
         if s.link_remote {
             // A paired connection that dropped: the host is asleep, or the
@@ -1138,7 +1148,7 @@ fn home(s: &App, t: &Theme) -> El {
         }
         return d;
     }
-    c.child(text("No Session Selected").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+    c.child(text("No Session Selected").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
         .child(t.small(format!("Start a session with {}, or a quick task with {}.", keys(s.look, Cmd::NewSession), keys(s.look, Cmd::QuickTask))).wrap().align(rune::Align::Center))
         .child(
             row()

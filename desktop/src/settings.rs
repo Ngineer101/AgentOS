@@ -4,6 +4,7 @@
 //! Drawn in the main window, over it: Rune windows each own their state, and Settings edits
 //! the same state as the main window (it would need a second copy kept in step).
 
+use crate::look::MEDIUM;
 use crate::bridge::{Refresh, Tag};
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
@@ -88,7 +89,7 @@ fn mac_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
         .w_full()
         .fill(t.toolbar)
         .border_sides([0.0, 0.0, 0.5, 0.0], Color::BLACK.alpha(0.6))
-        .child(row().w_full().h(28.0).px(12.0).center_y().child(lights).child(row().grow(1.0).justify_center().child(text(tab.title()).font(TextStyle::new(13.0, 600.0)).color(t.text))).child(el().w(52.0)))
+        .child(row().w_full().h(28.0).px(12.0).center_y().child(lights).child(row().grow(1.0).justify_center().child(text(tab.title()).font(TextStyle::new(13.0, MEDIUM)).color(t.text))).child(el().w(52.0)))
         .child(row().w_full().justify_center().pt(6.0).pb(8.0).child(tabs));
     let mut panel = col()
         .key("settings")
@@ -135,7 +136,7 @@ fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
             .focusable(true)
             .on_press(move |s: &mut App| s.open_settings(tb))
             .child(icon(tab_icon(tb), 16.0).color(if on { t.text } else { t.text2 }))
-            .child(text(tb.title()).font(TextStyle::new(14.5, 700.0)).color(if on { t.text } else { t.text2 }));
+            .child(text(tb.title()).font(TextStyle::new(14.5, MEDIUM)).color(if on { t.text } else { t.text2 }));
         b = if on { b.fill(Color::WHITE.alpha(0.1)) } else { b.hover(Color::WHITE.alpha(0.05)) };
         switcher = switcher.child(b);
     }
@@ -358,7 +359,7 @@ fn general(s: &App, t: &Theme) -> El {
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(text("AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+                    .child(text("AgentOS").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
                     .help(format!("Host {} · version {} · {} · protocol {}", info.host_id, info.version, info.os, info.protocol_version)),
             )
             .child(rerun.key("rerun")),
@@ -462,7 +463,7 @@ fn pair_remote_form(p: &crate::model::PairRemote, t: &Theme) -> El {
                 t,
                 "Compare the code",
                 Some("The host shows the same code. Confirm there, and pairing finishes.".into()),
-                text(code.clone()).font(TextStyle::new(if t.mac() { 17.0 } else { 20.0 }, t.w_bold)).color(t.text).selectable(true),
+                text(code.clone()).font(TextStyle::new(if t.mac() { 17.0 } else { 20.0 }, MEDIUM)).color(t.text).selectable(true),
             ));
         } else {
             rows.push(form_row(t, "Reaching the relay", Some("The host's pairing slot is single-use and expires in two minutes.".into()), t.small("…")));
@@ -808,7 +809,7 @@ fn gnome_agents(s: &App, info: &HostInfo, t: &Theme) -> El {
         .label("Add Profile")
         .hover(Color::WHITE.alpha(0.06))
         .child(icon(&ic::PLUS, 13.0).color(t.text))
-        .child(text("Add Profile").font(TextStyle::new(14.5, 700.0)).color(t.text));    let add = if s.admin {
+        .child(text("Add Profile").font(TextStyle::new(14.5, MEDIUM)).color(t.text));    let add = if s.admin {
         add.on_press(|s: &mut App| s.adding_profile = true)
     } else {
         add.disabled(true).opacity(0.55)
@@ -1061,7 +1062,7 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
     col()
         .w_full()
         .gap(if mac { 6.0 } else { 10.0 })
-        .child(text(if quick { "Quick tasks".to_string() } else { w.name.clone() }).font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+        .child(text(if quick { "Quick tasks".to_string() } else { w.name.clone() }).font(TextStyle::new(15.0, MEDIUM)).color(t.text))
         .child(place)
         .child(el().h(8.0))
         .child(t.group_title(if mac { "New sessions" } else { "New Sessions" }))
@@ -1408,7 +1409,7 @@ fn add_connector(s: &App, t: &Theme) -> El {
             }
             s.conn_url.focused = true;
         });
-    let mut c = col().key("add-connector").w_full().gap(8.0).child(text("Add a Connector").font(TextStyle::new(15.0, t.w_bold)).color(t.text)).child(field);
+    let mut c = col().key("add-connector").w_full().gap(8.0).child(text("Add a Connector").font(TextStyle::new(15.0, MEDIUM)).color(t.text)).child(field);
     if let Some(st) = status {
         c = c.child(st.pt(2.0));
     }
@@ -1482,7 +1483,7 @@ fn add_by_url(s: &App, t: &Theme) -> El {
         .key("add-connector")
         .w_full()
         .gap(8.0)
-        .child(text("Add a Connector").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+        .child(text("Add a Connector").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
         .child(t.group(rows, 12.0))
         .child(footnote(t, "If the server needs an account, your browser opens so you can sign in."))
         .child(
@@ -1554,7 +1555,7 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
         let idb = id.clone();
         let mut name = text(c.name.clone())
             .key("conn-name")
-            .font(TextStyle::new(15.0, t.w_bold))
+            .font(TextStyle::new(15.0, MEDIUM))
             .color(t.text)
             .truncate()
             .shrink()
@@ -1910,7 +1911,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let Some(p) = &s.pairing else { return el() };
     let mut c = col().w_full().items_center().gap(12.0);
-    let title = text("Pair an iPhone").font(TextStyle::new(15.0, t.w_bold)).color(t.text);
+    let title = text("Pair an iPhone").font(TextStyle::new(15.0, MEDIUM)).color(t.text);
     let center = |msg: &str| text(msg.to_string()).font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0).lh(if mac { 18.0 } else { 21.0 })).color(t.text2).wrap().align(rune::Align::Center).max_w(330.0);
     let buttons;
     match (&p.pending, &p.done) {
@@ -1931,7 +1932,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
                         .radius(t.box_radius)
                         .fill(Color::WHITE.alpha(0.05))
                         .child(center(&format!("\u{201c}{}\u{201d} wants to pair. Check it shows the same code:", pend.device_name)))
-                        .child(text(pend.short_code.clone()).font(TextStyle::new(26.0, 600.0).mono().tracking(2.0)).color(t.text).key("short-code"));
+                        .child(text(pend.short_code.clone()).font(TextStyle::new(26.0, MEDIUM).mono().tracking(2.0)).color(t.text).key("short-code"));
                     if mac {
                         code = code.border(0.5, Color::WHITE.alpha(0.14));
                     }

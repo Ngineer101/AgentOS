@@ -5,6 +5,7 @@
 //! Both belong to the open session. They load when shown, again when the agent's turn
 //! ends, and on Refresh.
 
+use crate::look::MEDIUM;
 use crate::bridge::Tag;
 use crate::icons as ic;
 use crate::look::Theme;
@@ -604,7 +605,7 @@ fn file_bar(s: &App, t: &Theme, open: &OpenFile) -> El {
                 .min_w(0.0)
                 .shrink()
                 .child(text(dir).font(t.font()).color(t.text2).truncate().shrink().min_w(0.0))
-                .child(text(name).font(TextStyle { weight: t.w_bold, ..t.font() }).color(t.text)),
+                .child(text(name).font(TextStyle { weight: MEDIUM, ..t.font() }).color(t.text)),
         )
         .child(text(meta).key("file-meta").font(t.font_small()).color(t.text2))
         .child(el().grow(1.0));

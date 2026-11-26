@@ -1,6 +1,7 @@
 //! New session: a sheet under the toolbar (macOS) or an AdwDialog (GNOME). And GNOME's
 //! keyboard shortcuts window.
 
+use crate::look::MEDIUM;
 use crate::commands::{label as keys, Cmd};
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
@@ -157,7 +158,7 @@ fn agent_rows(s: &App, t: &Theme) -> Vec<El> {
         r = r.child(names);
         let is_default = s.new_ws.as_ref().and_then(|w| s.default_login(w)).as_deref() == Some(key.as_str());
         if is_default {
-            r = r.child(row().key("default-tag").h(16.0).px(6.0).center_y().radius(8.0).fill(Color::WHITE.alpha(0.1)).child(text("Default").font(TextStyle::new(10.5, 600.0)).color(t.text2)));
+            r = r.child(row().key("default-tag").h(16.0).px(6.0).center_y().radius(8.0).fill(Color::WHITE.alpha(0.1)).child(text("Default").font(TextStyle::new(10.5, MEDIUM)).color(t.text2)));
         }
         if a.available {
             let k2 = key.clone();
@@ -249,7 +250,7 @@ fn mac_sheet(s: &App, t: &Theme) -> El {
                 .px(20.0)
                 .pt(18.0)
                 .pb(6.0)
-                .child(text("New Session").font(TextStyle::new(15.0, 600.0)).color(t.text))
+                .child(text("New Session").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
                 .child(text(from_note(s).unwrap_or_else(|| "Pick where the agent works and which login it uses.".into())).font(TextStyle::new(12.0, 400.0)).color(t.text2).truncate()),
         )
         .child(col().w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(form))
@@ -345,7 +346,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
             s.new_open = false;
             s.menu = None
         }))
-        .child(row().grow(1.0).justify_center().child(text("New Session").font(TextStyle::new(14.5, 700.0)).color(t.text)))
+        .child(row().grow(1.0).justify_center().child(text("New Session").font(TextStyle::new(14.5, MEDIUM)).color(t.text)))
         .child(t.button("Start", if ready { Btn::Primary } else { Btn::Default }, None, |s| s.start_from_sheet()).key("start-session").default_button());
     let dialog = col()
         .key("new-session")
@@ -445,7 +446,7 @@ fn caps(t: &Theme, spec: &str) -> El {
 pub fn shortcuts(s: &App, t: &Theme) -> El {
     let sections = shortcut_sections(s);
     let section = |(title, rows): &(&'static str, Vec<(&'static str, String)>)| {
-        let mut c = col().w_full().gap(8.0).child(text(title.to_string()).font(TextStyle::new(14.5, 700.0)).color(t.accent_text).pb(4.0));
+        let mut c = col().w_full().gap(8.0).child(text(title.to_string()).font(TextStyle::new(14.5, MEDIUM)).color(t.accent_text).pb(4.0));
         for (name, k) in rows.iter().filter(|(_, k)| !k.is_empty()) {
             c = c.child(row().w_full().h(28.0).center_y().child(text(name.to_string()).font(TextStyle::new(14.5, 400.0)).color(t.text)).child(el().grow(1.0)).child(caps(t, k)));
         }
@@ -470,7 +471,7 @@ pub fn shortcuts(s: &App, t: &Theme) -> El {
                 .px(12.0)
                 .center_y()
                 .child(el().w(24.0))
-                .child(row().grow(1.0).justify_center().child(text("Keyboard Shortcuts").font(TextStyle::new(14.5, 700.0)).color(t.text)))
+                .child(row().grow(1.0).justify_center().child(text("Keyboard Shortcuts").font(TextStyle::new(14.5, MEDIUM)).color(t.text)))
                 .child(
                     row()
                         .size(24.0, 24.0)
@@ -509,7 +510,7 @@ pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, |s: &mut App| s.confirm_archive = None)
-        .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
+        .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap())
         .child(t.small("The agent stops and the session moves to Archived.").wrap())
         .child(buttons);
     panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };

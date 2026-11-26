@@ -727,6 +727,9 @@ pub struct App {
     pub save_prefs: bool,
     /// The sidebar's width as dragged by its edge; `None` is the look's own.
     pub sidebar_w: Option<f32>,
+    /// Per session, the newest event seen while it was open (see [`App::unread`]). `None`
+    /// until the first session list, which marks every session seen so nothing starts unread.
+    pub seen: Option<HashMap<String, i64>>,
 }
 
 /// A sidebar group shows this many sessions until "Show N more".
@@ -879,6 +882,7 @@ pub fn init() -> App {
         jump_held: false,
         save_prefs: false,
         sidebar_w: None,
+        seen: None,
     }
 }
 
@@ -1571,6 +1575,8 @@ impl App {
     /// Open a session: subscribe from what we already have, so nothing is lost
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
+        // What arrived in the session being left was on screen.
+        self.mark_seen(false);
         if self.screen == Screen::Notes {
             self.save_note();
         }
@@ -1587,6 +1593,51 @@ impl App {
         }
         self.ensure_subscribed(id);
         self.files_sync();
+        self.mark_seen(false);
+    }
+
+    /// The agent finished a turn since you last had the session open: its dot says so until
+    /// you open it.
+    pub fn unread(&self, x: &Session) -> bool {
+        if Status::of(x.state) != Status::YourTurn || matches!(&self.screen, Screen::Session(id) if *id == x.session_id) {
+            return false;
+        }
+        let Some(seen) = &self.seen else { return false };
+        x.last_seq > seen.get(&x.session_id).copied().unwrap_or(0)
+    }
+
+    /// Mark the open session seen up to its newest event, remembered between launches. The
+    /// first full session list (`listed`) ever marks every session seen.
+    pub(crate) fn mark_seen(&mut self, listed: bool) {
+        if self.seen.is_none() && !listed {
+            return;
+        }
+        let mut changed = false;
+        let seen = self.seen.get_or_insert_with(|| {
+            changed = true;
+            self.sessions.iter().map(|x| (x.session_id.clone(), x.last_seq)).collect()
+        });
+        if let Screen::Session(id) = &self.screen {
+            // The list's number, or the transcript's when events have come in since.
+            let newest = self.sessions.iter().find(|x| &x.session_id == id).map(|x| x.last_seq).max(self.transcripts.get(id).map(|t| t.last_seq));
+            if let Some(newest) = newest {
+                let at = seen.entry(id.clone()).or_insert(0);
+                if *at < newest {
+                    *at = newest;
+                    changed = true;
+                }
+            }
+        }
+        if changed && self.save_prefs {
+            // Kept across hosts (a paired one and this computer's); only a long history is
+            // cut back to the sessions listed now.
+            if seen.len() > 2000 {
+                seen.retain(|id, _| self.sessions.iter().any(|x| &x.session_id == id));
+            }
+            let mut p = crate::prefs::load();
+            p.seen = Some(seen.clone());
+            crate::prefs::save(&p);
+        }
     }
 
     /// Put the composer's text away with its session and bring back `id`'s.
@@ -2119,6 +2170,7 @@ impl App {
                 (Tag::Sessions, Ok(v)) => {
                     let all: Vec<Session> = parse(v).unwrap_or_default();
                     self.sessions = all.into_iter().filter(|s| s.archived_at.is_none()).collect();
+                    self.mark_seen(true);
                 }
                 (Tag::Archived, Ok(v)) => {
                     let mut all: Vec<Session> = parse(v).unwrap_or_default();
@@ -3017,6 +3069,7 @@ impl App {
             Some(x) => *x = s,
             None => self.sessions.push(s),
         }
+        self.mark_seen(false);
     }
 
     fn on_note(&mut self, n: agenthost_proto::jsonrpc::Notification) {

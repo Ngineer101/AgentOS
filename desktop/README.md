@@ -9,13 +9,17 @@ relay (see [Remote access](#remote-access) below).
 Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
 patterns, Linux gets GNOME / libadwaita. The look follows the OS;
 `AGENTHOST_DESKTOP_LOOK=macos|gnome` picks one, so both render on one machine.
+`AGENTHOST_DESKTOP_FONT="Liberation Sans"` sets the interface font to any
+installed family (the look's own font fills in what it lacks).
 
 - **Sidebar** (compact, nano page "Desktop sidebar v3"): New Session and
   Automations at the top, then Pinned and the workspaces (Quick tasks first),
   each a collapsible group with a "+" for a new session there; the newest 8
   show, "Show N more" the rest. A row is one line: status, title, a pull
   request or automation icon and its age; a second line only when it needs
-  you, failed or has agents running. Hover a row for Pin and Archive (pins
+  you, failed or has agents running. A session whose agent finished a turn you
+  haven't looked at has a green dot until you open it (remembered between
+  launches). Hover a row for Pin and Archive (pins
   need a host on protocol 8). Search sits behind the header's magnifier
   (⌘F / Ctrl+F; Escape clears, then closes). Live sessions are numbered
   ⌘1…⌘9 (Alt+1…9), shown while you hold the key. Collapsed groups are

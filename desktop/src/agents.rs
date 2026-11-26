@@ -3,6 +3,7 @@
 //! messages as they happen, and its whole report. The panel stands in for the side-question
 //! pane while it's open (same place, same chrome); closing it brings the side pane back.
 
+use crate::look::MEDIUM;
 use crate::icons as ic;
 use crate::look::Theme;
 use crate::model::{plain_lines, span_label, App, SubItem, Subagent};
@@ -104,7 +105,7 @@ fn card(s: &App, session: &str, a: &Subagent, calls: &HashMap<&str, &Event>, t: 
         .gap(8.0)
         .center_y()
         .child(icon(&ic::SPARKLE, 14.0).color(t.text))
-        .child(text(clip(&title, 120)).font(TextStyle::new(t.fs, t.w_bold)).color(t.text).truncate().shrink().min_w(0.0))
+        .child(text(clip(&title, 120)).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).truncate().shrink().min_w(0.0))
         .child(el().grow(1.0))
         .child(status_mark(t, &a.status, 14.0));
     let mut c = col()
@@ -186,9 +187,9 @@ pub fn running_pill(s: &App, session: &str, t: &Theme) -> Option<El> {
 
 fn heading(t: &Theme, label: &str) -> El {
     if t.mac() {
-        text(label.to_uppercase()).font(TextStyle::new(10.5, 600.0)).color(t.text3)
+        text(label.to_uppercase()).font(TextStyle::new(10.5, MEDIUM)).color(t.text3)
     } else {
-        text(label.to_string()).font(TextStyle::new(13.0, 700.0)).color(t.text2)
+        text(label.to_string()).font(TextStyle::new(13.0, MEDIUM)).color(t.text2)
     }
 }
 
@@ -196,7 +197,7 @@ pub fn pane(s: &App, session: &str, call_id: &str, t: &Theme, k: &Kit) -> El {
     let mac = t.mac();
     let a = s.subagent(session, call_id);
     let title_s = a.as_ref().map(|a| a.title().to_string()).unwrap_or_else(|| "Subagent".into());
-    let title = text(clip(&title_s, 80)).font(TextStyle::new(t.fs, if mac { 600.0 } else { 700.0 })).color(t.text).truncate().shrink().min_w(0.0);
+    let title = text(clip(&title_s, 80)).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).truncate().shrink().min_w(0.0);
     let hide = t.icon_button(&ic::CLOSE, 10.0, "Close (Esc)", |s: &mut App, _: &mut Tx| s.close_agent()).key("agent-close");
     let header = if mac {
         row()
