@@ -40,7 +40,9 @@ pub use types::*;
 /// 11: a session's changes and files (`session.changes`, `session.files`,
 /// `session.file_read`).
 /// 12: a browser per workspace (`browser.*`), admin only.
-pub const PROTOCOL_VERSION: u32 = 12;
+/// 13: files agents send you (`agent.file` events, read with
+/// `attachment.read`), such as recordings of the browser.
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

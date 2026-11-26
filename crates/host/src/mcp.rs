@@ -160,7 +160,11 @@ const BUILTINS: &[(&str, &str, &str, bool)] = &[
     ("install_tool", "Install tools on this computer", "Runs a package manager as you, outside the sandbox. Always asks.", false),
     ("run_command", "Run commands as you", "Runs a program as you, outside the sandbox, with your logins. Asks, except for the commands you let run.", false),
     ("browser", "Use the browser", "Lets an agent use its workspace's browser, signed in to the sites you signed in to there. Asks once per session.", true),
+    ("browser_recording", "Record the browser", "Lets an agent record its browser tab and send you the video, which your paired devices can play too. It shows whatever the tab shows. Records without asking unless you set it to ask.", true),
 ];
+
+/// Built-in tools that run without asking until the user says otherwise.
+const DEFAULT_AUTO: &[&str] = &["browser_recording"];
 
 fn policy_key(name: &str) -> String {
     format!("builtin_policy.{name}")
@@ -175,6 +179,7 @@ impl Gateway {
         let can_auto = BUILTINS.iter().any(|(n, _, _, a)| *n == name && *a);
         match self.ctx.store.setting_get::<ToolPolicy>(&policy_key(name)) {
             Ok(Some(ToolPolicy::Auto)) if can_auto => ToolPolicy::Auto,
+            Ok(None) if can_auto && DEFAULT_AUTO.contains(&name) => ToolPolicy::Auto,
             _ => ToolPolicy::Ask,
         }
     }
@@ -246,6 +251,8 @@ impl Gateway {
 
 mod browser_tools;
 use browser_tools::browser_tool_defs;
+mod file_tools;
+pub use file_tools::SEND_FILE_TOOL;
 
 /// The definition of `agenthost__create_pull_request`.
 fn pr_tool_def() -> Value {
@@ -688,6 +695,9 @@ impl Gateway {
         if name == RUN_COMMAND_TOOL {
             return self.run_command(session_id, args).await;
         }
+        if name == SEND_FILE_TOOL {
+            return self.send_file(session_id, args).await;
+        }
         if name == GIT_PUSH_TOOL || name == GIT_FETCH_TOOL {
             return self.git_tool(session_id, name == GIT_PUSH_TOOL, args).await;
         }
@@ -869,6 +879,7 @@ impl Gateway {
     fn builtin_tools(&self) -> Vec<Value> {
         let mut tools = git_tools();
         tools.push(run_command_def());
+        tools.push(file_tools::send_file_def());
         if self.browsers.support().available {
             tools.extend(browser_tool_defs());
         }
@@ -1965,6 +1976,7 @@ impl GatewayApi for Gateway {
             .lock()
             .unwrap()
             .retain(|_, r| r.session_id != session_id);
+        self.browsers.discard_recording(session_id);
         // Deny anything still waiting for this session.
         let ids: Vec<String> = self
             .approvals

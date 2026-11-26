@@ -90,6 +90,25 @@ pub(super) fn browser_tool_defs() -> Vec<Value> {
             true,
         ),
         def(
+            "record_start",
+            "Record the browser",
+            &format!(
+                "Start recording your browser tab as a video for the user, to show them what you tested. Then use the browser as usual                  (the recording follows you to another tab you select) and call browser_record_stop to send it. At most {} minutes;                  the page looks the same as before, only slower to show for a moment. Record only what the user should see.",
+                crate::browser::record::MAX_LENGTH.as_secs() / 60
+            ),
+            json!({}),
+            &[],
+            false,
+        ),
+        def(
+            "record_stop",
+            "Send the recording",
+            "Stop recording and send the video (MP4) to the user: it shows in this conversation on their desktop and phone. Say in `caption` what it shows.",
+            json!({"caption": {"type": "string", "description": "A sentence for the user: what the recording shows, e.g. \"Signing up with a new email, then the welcome page.\""}}),
+            &[],
+            false,
+        ),
+        def(
             "tabs",
             "Your browser tabs",
             "List your tabs (yours and the popups they opened, such as a sign-in window), switch the other tools to one (`select`), or close one.",
@@ -116,6 +135,18 @@ impl Gateway {
             self.browser_ok.lock().unwrap().insert(session_id.to_string());
         }
         ok
+    }
+
+    /// Whether this session may record: without asking unless the user set
+    /// recordings to ask.
+    async fn recording_allowed(self: &Arc<Self>, session_id: &str, workspace_id: &str) -> bool {
+        if self.builtin_policy("browser_recording") == ToolPolicy::Auto || self.automation_allows(session_id, "browser_recording").is_some() {
+            return true;
+        }
+        let ws = self.ctx.store.workspace_get(workspace_id).ok().flatten().map(|w| w.name).unwrap_or_else(|| "this workspace".into());
+        let summary = format!("Record this session's tab in the {ws} browser and send you the video. It shows whatever the tab shows, including sites you are signed in to.");
+        let shown = json!({"tool": format!("{BROWSER_TOOL_PREFIX}record_start")});
+        self.await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", "browser_recording", &shown, Some(summary)).await == ApprovalDecision::Approve
     }
 
     pub(super) async fn browser_tool(self: &Arc<Self>, session_id: &str, workspace_id: &str, tool: &str, args: Value) -> Value {
@@ -195,6 +226,11 @@ impl Gateway {
             },
             "wait_for" => b.agent_wait(session_id, workspace_id, s("text").as_deref(), s("text_gone").as_deref(), args["seconds"].as_f64()).await,
             "tabs" => b.agent_tabs(session_id, workspace_id, s("select").as_deref(), s("close").as_deref()).await,
+            "record_start" => match self.recording_allowed(session_id, workspace_id).await {
+                true => b.agent_record_start(session_id, workspace_id).await,
+                false => Err(anyhow!("The user did not let this session record the browser. Don't try again in this session; describe what you saw instead.")),
+            },
+            "record_stop" => self.send_recording(session_id, &call_id, &args).await,
             _ => Err(anyhow!("unknown tool {exposed}")),
         };
         match res {
@@ -222,7 +258,7 @@ mod tests {
     #[test]
     fn every_tool_is_named_and_described() {
         let defs = browser_tool_defs();
-        assert_eq!(defs.len(), 11);
+        assert_eq!(defs.len(), 13);
         for d in &defs {
             let name = d["name"].as_str().unwrap();
             assert!(name.starts_with(BROWSER_TOOL_PREFIX), "{name}");

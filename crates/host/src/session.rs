@@ -929,6 +929,13 @@ pub fn scratch_folder(ctx: &Ctx, session_id: &str) -> PathBuf {
     ctx.cfg.scratch_dir().join(session_id)
 }
 
+/// A session's temp folder (its agent's `TMPDIR`), deleted when it ends.
+/// Short, so Unix socket paths inside it stay under their length limit.
+pub fn temp_dir_for(cfg: &crate::config::HostConfig, session_id: &str) -> PathBuf {
+    let short: String = session_id.trim_start_matches("ses_").chars().take(10).collect();
+    cfg.runtime_dir.join(format!("s{short}"))
+}
+
 /// The session's agent spec: its profile's login (if it has one and the
 /// profile still exists), with every other profile's folder to hide.
 fn session_spec(ctx: &Ctx, session: &Session) -> AgentSpec {
@@ -974,13 +981,7 @@ impl Actor {
             }
             workspace.path = p.display().to_string();
         }
-        let short = session
-            .session_id
-            .trim_start_matches("ses_")
-            .chars()
-            .take(10)
-            .collect::<String>();
-        let temp_dir = ctx.cfg.runtime_dir.join(format!("s{short}"));
+        let temp_dir = temp_dir_for(&ctx.cfg, &session.session_id);
         let state = session.state;
         Actor {
             ctx,

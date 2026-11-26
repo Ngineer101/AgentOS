@@ -448,6 +448,7 @@ final class AppModel: ObservableObject {
             // Not paired: make sure nothing from an earlier pairing is left.
             TranscriptCache.deleteAll()
             SentImages.shared.clearMemory()
+            AgentFiles.deleteAll()
             phase = UserDefaults.standard.bool(forKey: Self.removedFlag) ? .removed : .unpaired
         }
     }
@@ -529,6 +530,7 @@ final class AppModel: ObservableObject {
         guard phase == .unpaired else { return }
         TranscriptCache.deleteAll()
         SentImages.shared.clearMemory()
+        AgentFiles.deleteAll()
         clearContent()
         credentials = stored
         phase = .ready
@@ -565,6 +567,7 @@ final class AppModel: ObservableObject {
         CredentialStore.deleteAll()
         TranscriptCache.deleteAll()
         SentImages.shared.clearMemory()
+        AgentFiles.deleteAll()
         credentials = nil
         clearContent()
         forgetPush()

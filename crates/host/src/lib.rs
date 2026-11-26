@@ -19,6 +19,7 @@ pub mod gitremote;
 pub mod hostcmd;
 pub mod installer;
 pub mod mcp;
+pub mod mp4;
 pub mod notes;
 pub mod profiles;
 pub mod prstate;

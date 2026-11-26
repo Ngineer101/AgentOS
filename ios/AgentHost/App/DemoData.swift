@@ -12,7 +12,7 @@ import UIKit
 ///                                         notifications | pair-notifications |
 ///                                         pair-apns-key | automations | automation |
 ///                                         automation-webhook | automation-new |
-///                                         notes | note | note-new
+///                                         notes | note | note-new | files
 ///     -AgentHostDemoInstall               the waiting approval is a tool install
 ///     -AgentHostDemoModelSheet            the session opens with "Select model" shown
 ///     -AgentHostDemoTitleMenu             the session opens with its title menu open
@@ -66,6 +66,8 @@ struct DemoData {
         case note
         /// The New Note sheet over Notes.
         case noteNew = "note-new"
+        /// Files from the agent: a recording, an image and a log.
+        case files
     }
 
     /// `push.status` for a screen: this iPhone registered through the relay
@@ -112,6 +114,7 @@ struct DemoData {
     static let archivedSession = "demo-quic"
     static let plainSession = "demo-notes-tidy"
     static let subagentSession = "demo-audit"
+    static let filesSession = "demo-signup"
     static let upgradeSession = "demo-upgrade"
     static let upgradeAutomation = "auto-upgrade"
     static let sentryAutomation = "auto-sentry"
@@ -263,6 +266,8 @@ struct DemoData {
                  pullRequest: 48483),
             live(session(Self.subagentSession, "ws-relay", "claude", "claude-work", SessionStateName.running,
                          "Audit the relay worker", ago: 0, lastSeq: 19), branch: "audit-relay"),
+            live(session(Self.filesSession, "ws-relay", "claude", "claude-work", SessionStateName.idle,
+                         "Test the sign-up flow", ago: 2, lastSeq: 9), branch: "agenthost/signup-test"),
             // Untitled, no worktree (notes is not a git repository): called "notes".
             live(session(Self.plainSession, "ws-notes", "claude", "claude-personal", SessionStateName.idle,
                          nil, ago: 8, lastSeq: 2)),
@@ -504,8 +509,59 @@ struct DemoData {
                  ["command": .string("cargo bench -p relay-worker")]),
         ] { _ = audit.ingest(e) }
 
+        var signup = Transcript(sessionId: Self.filesSession)
+        let s0 = now - 6 * min
+        let fsid = Self.filesSession
+        func attachment(_ id: String, _ name: String, _ mime: String, _ size: Double) -> JSONValue {
+            .object(["attachment_id": .string(id), "name": .string(name), "mime": .string(mime), "size": .number(size)])
+        }
+        for e in [
+            Self.event(fsid, 1, EventKind.prompt, s0, [
+                "text": .string("Try the new sign-up in your browser and send me a recording."),
+                "device": .string("Nico's iPhone"),
+            ]),
+            Self.event(fsid, 2, EventKind.toolCall, s0 + 3000, [
+                "tool_call_id": .string("browse-1"), "name": .string("browser_navigate"), "source": .string("sandbox"),
+                "arguments": .object(["url": .string("http://localhost:5173/signup")]),
+            ]),
+            Self.event(fsid, 3, EventKind.toolResult, s0 + 5000, [
+                "tool_call_id": .string("browse-1"), "status": .string("completed"), "output": .string("Opened Sign up"),
+            ]),
+            Self.event(fsid, 4, EventKind.toolCall, s0 + 6000, [
+                "tool_call_id": .string("record-1"), "name": .string("browser_record"), "source": .string("sandbox"),
+                "arguments": .object(["seconds": .number(60)]),
+            ]),
+            Self.event(fsid, 5, EventKind.toolResult, s0 + 52_000, [
+                "tool_call_id": .string("record-1"), "status": .string("completed"), "output": .string("Recorded 42 s"),
+            ]),
+            Self.event(fsid, 6, EventKind.agentMessage, s0 + 60_000, [
+                "text": .string("Sign-up works, but Continue stays disabled until the email field loses focus."),
+            ]),
+            Self.event(fsid, 7, EventKind.agentFile, s0 + 61_000, [
+                "attachment": attachment(Self.demoRecording, "signup.mp4", "video/mp4", 3_250_000),
+                "kind": .string("recording"),
+                "caption": .string("Sign-up, start to finish"),
+                "poster": attachment(Self.demoPoster, "signup.jpg", "image/jpeg", 48_000),
+                "duration_ms": .number(42_000), "width": .number(1280), "height": .number(800),
+                "tool_call_id": .string("send-1"),
+            ]),
+            Self.event(fsid, 8, EventKind.agentFile, s0 + 62_000, [
+                "attachment": attachment(Self.demoScreenshot, "continue-disabled.png", "image/png", 182_000),
+                "kind": .string("file"),
+                "caption": .string("Continue disabled with a valid email"),
+                "width": .number(1280), "height": .number(832),
+                "tool_call_id": .string("send-2"),
+            ]),
+            Self.event(fsid, 9, EventKind.agentFile, s0 + 63_000, [
+                "attachment": attachment(Self.demoLog, "signup-test.log", "text/plain", Double(Self.demoLogText.utf8.count)),
+                "kind": .string("file"),
+                "caption": .string("The full test run"),
+                "tool_call_id": .string("send-3"),
+            ]),
+        ] { _ = signup.ingest(e) }
+
         transcripts = [Self.subagentSession: audit, Self.flakySession: flaky, Self.quickSession: rust, Self.archivedSession: quic,
-                       Self.plainSession: tidy]
+                       Self.plainSession: tidy, Self.filesSession: signup]
     }
 
     /// Ideas kept for later in relay and notes: one became a session (the
@@ -621,6 +677,66 @@ struct DemoData {
             ctx.fill(CGRect(x: 24, y: 40, width: 420, height: 60))
             UIColor.systemOrange.setFill()
             ctx.fill(CGRect(x: 24, y: 120, width: 200, height: 140))
+        }
+    }
+
+    // MARK: Files from the agent
+
+    static let demoRecording = "att-signup-mp4"
+    static let demoPoster = "att-signup-poster"
+    static let demoScreenshot = "att-signup-png"
+    static let demoLog = "att-signup-log"
+
+    /// Tapping the recording: the demo ships no video.
+    static let noRecordingMessage = "The demo has no video to play. Connected to your computer, the recording downloads and plays here."
+
+    static let demoLogText = """
+    signup.spec.ts
+      ✓ shows the sign-up form (412 ms)
+      ✓ rejects a malformed email (230 ms)
+      ✗ enables Continue once the email is valid (5004 ms)
+          Timed out waiting for button "Continue" to be enabled.
+          The button is enabled only after the email field's blur event.
+      ✓ creates the account after blur (1890 ms)
+
+    3 passed, 1 failed (7.5 s)
+    """
+
+    /// A downloaded file's bytes (the log); nil for the recording.
+    static func agentFileData(_ attachmentId: String) -> Data? {
+        attachmentId == demoLog ? Data(demoLogText.utf8) : nil
+    }
+
+    /// The recording's poster or the screenshot: a sign-up form, as a
+    /// browser would show it.
+    static func agentImage(_ attachmentId: String) -> UIImage {
+        let poster = attachmentId == demoPoster
+        let size = poster ? CGSize(width: 640, height: 400) : CGSize(width: 640, height: 416)
+        return UIGraphicsImageRenderer(size: size).image { ctx in
+            UIColor(white: 0.95, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            func rounded(_ r: CGRect, _ color: UIColor, stroke: UIColor? = nil) {
+                let path = UIBezierPath(roundedRect: r, cornerRadius: 10)
+                color.setFill()
+                path.fill()
+                if let stroke {
+                    stroke.setStroke()
+                    path.lineWidth = 2
+                    path.stroke()
+                }
+            }
+            if poster {
+                UIColor(white: 0.82, alpha: 1).setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: size.width, height: 44))
+                rounded(CGRect(x: 160, y: 84, width: 320, height: 28), UIColor(white: 0.56, alpha: 1))
+                rounded(CGRect(x: 160, y: 140, width: 320, height: 52), .white, stroke: UIColor(white: 0.78, alpha: 1))
+                rounded(CGRect(x: 160, y: 208, width: 320, height: 52), .white, stroke: UIColor(white: 0.78, alpha: 1))
+                rounded(CGRect(x: 160, y: 288, width: 320, height: 56), UIColor.systemBlue.withAlphaComponent(0.35))
+            } else {
+                rounded(CGRect(x: 72, y: 72, width: 496, height: 64), .white, stroke: .systemRed)
+                rounded(CGRect(x: 72, y: 156, width: 300, height: 22), UIColor.systemRed.withAlphaComponent(0.6))
+                rounded(CGRect(x: 72, y: 260, width: 496, height: 72), UIColor(white: 0.78, alpha: 1))
+            }
         }
     }
 

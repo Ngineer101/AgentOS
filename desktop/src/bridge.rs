@@ -129,6 +129,10 @@ pub enum ToHost {
     UploadBytes { local_id: u64, name: String, mime: String, data: Vec<u8> },
     /// Fetch an image sent with a prompt; answered by [`FromHost::AttachmentRead`].
     ReadAttachment { session_id: String, attachment_id: String },
+    /// Fetch a file an agent sent and save it in `dir` (`attachment.read`, a piece at a
+    /// time); answered by [`FromHost::DownloadProgress`] as it comes, then
+    /// [`FromHost::Downloaded`].
+    Download { session_id: String, attachment: agenthost_proto::Attachment, dir: PathBuf },
     /// Transcribe a WAV recording; answered by [`FromHost::Transcribed`].
     Transcribe { wav: Vec<u8> },
     /// Live dictation, sent in order; answered by [`FromHost::LiveText`].
@@ -230,6 +234,10 @@ pub enum FromHost {
     Note(Notification),
     Uploaded { local_id: u64, result: Result<agenthost_proto::Attachment, String> },
     AttachmentRead { attachment_id: String, result: Result<Vec<u8>, String> },
+    /// `done` of a download's `size` bytes are in.
+    DownloadProgress { attachment_id: String, done: u64, size: u64 },
+    /// Where a download was saved, or why it wasn't.
+    Downloaded { attachment_id: String, result: Result<PathBuf, String> },
     Transcribed(Result<String, String>),
     /// Everything heard so far in dictation `gen`; `done` with the final text.
     LiveText { gen: u64, done: bool, result: Result<String, String> },
@@ -855,6 +863,24 @@ pub fn start(waker: rune::Waker, shown: crate::browser::Shown) -> Bridge {
                                 ToHost::ReadAttachment { session_id, attachment_id } => {
                                     let result = c.read_attachment(&session_id, &attachment_id).await.map(|(_, data)| data).map_err(|e| format!("{e:#}"));
                                     FromHost::AttachmentRead { attachment_id, result }
+                                }
+                                ToHost::Download { session_id, attachment, dir } => {
+                                    let id = attachment.attachment_id.clone();
+                                    let read = |offset| {
+                                        let (c, params) = (c.clone(), crate::agentfile::read_params(&session_id, &id, offset));
+                                        async move {
+                                            let v = c.request(m::ATTACHMENT_READ, params).await.map_err(|e| e.message)?;
+                                            serde_json::from_value(v).map_err(|e| format!("the host's answer was not understood: {e}"))
+                                        }
+                                    };
+                                    let progress = |done, size| reply.send(FromHost::DownloadProgress { attachment_id: id.clone(), done, size });
+                                    let result = match crate::agentfile::read_all(read, progress).await {
+                                        Ok(data) => tokio::task::spawn_blocking(move || crate::agentfile::save_unique(&dir, &attachment.name, &data).map_err(|e| format!("it could not be saved: {e}")))
+                                            .await
+                                            .unwrap_or_else(|e| Err(e.to_string())),
+                                        Err(e) => Err(e),
+                                    };
+                                    FromHost::Downloaded { attachment_id: id, result }
                                 }
                                 ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
                                 ToHost::Live(_) | ToHost::Term(_) | ToHost::Browser(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } | ToHost::CancelPair => unreachable!(),

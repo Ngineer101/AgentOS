@@ -592,6 +592,11 @@ pub enum EventType {
     /// events whose `parent_tool_call_id` names the subagent's call.
     #[serde(rename = "subagent.message")]
     SubagentMessage,
+    /// A file the agent sent you ([`AgentFile`]): a screenshot, a report, a
+    /// recording of its browser tab. Read its bytes with `attachment.read`.
+    /// Clients older than protocol 13 skip it.
+    #[serde(rename = "agent.file")]
+    AgentFile,
 }
 
 
@@ -612,6 +617,7 @@ impl EventType {
             EventType::SideMessage => "side.message",
             EventType::SideEnd => "side.end",
             EventType::SubagentMessage => "subagent.message",
+            EventType::AgentFile => "agent.file",
         }
     }
 
@@ -1188,6 +1194,43 @@ impl Attachment {
     }
 }
 
+/// What an agent sent you: the payload of an `agent.file` event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentFile {
+    /// The file; its bytes come from `attachment.read` with the event's
+    /// session.
+    pub attachment: Attachment,
+    #[serde(default)]
+    pub kind: AgentFileKind,
+    /// What the agent said about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// A still (JPEG) to show for a video before it plays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<Attachment>,
+    /// A video's length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// A picture's or video's size in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// The gateway call that sent it (`tool.call` / `tool.result`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFileKind {
+    /// A file from the agent's folder (`agenthost__send_file`).
+    #[default]
+    File,
+    /// A recording of the agent's browser tab (MP4, H.264).
+    Recording,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AttachmentReadParams {
     pub session_id: String,
@@ -1221,6 +1264,9 @@ pub fn guess_mime(name: &str) -> &'static str {
         "pdf" => "application/pdf",
         "wav" => "audio/wav",
         "m4a" => "audio/mp4",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
         "json" => "application/json",
         "zip" => "application/zip",
         "csv" => "text/csv",
@@ -1674,6 +1720,8 @@ mod tests {
     #[test]
     fn event_type_names() {
         assert_eq!(EventType::parse("net.denied"), Some(EventType::NetDenied));
+        assert_eq!(EventType::parse("agent.file"), Some(EventType::AgentFile));
+        assert_eq!(EventType::AgentFile.as_str(), "agent.file");
         assert_eq!(
             serde_json::to_value(EventType::TurnEnd).unwrap(),
             Value::String("turn.end".into())

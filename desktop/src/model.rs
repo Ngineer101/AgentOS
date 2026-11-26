@@ -466,7 +466,12 @@ pub const PREVIEW_PT: f32 = 32.0;
 
 /// Images the app decodes itself (not HEIC): those get a picture in the composer.
 fn name_decodes(name: &str) -> bool {
-    matches!(guess_mime(name), "image/png" | "image/jpeg" | "image/gif" | "image/webp")
+    mime_decodes(guess_mime(name))
+}
+
+/// Whether the app can draw an image of this type.
+pub fn mime_decodes(mime: &str) -> bool {
+    matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp")
 }
 
 /// A file picked for the next message.
@@ -629,6 +634,11 @@ pub struct App {
     pub image_cache: Option<rune::ImageCache>,
     /// The image open in the viewer: its attachment id.
     pub viewing: Option<String>,
+    /// Files agents sent that were clicked this run: being fetched, saved, or failed, by
+    /// attachment id.
+    pub downloads: HashMap<String, crate::agentfile::Download>,
+    /// Saved files to open or show in their folder on the next poll.
+    pub open_files: Vec<crate::agentfile::Opening>,
     pub next_local_id: u64,
     pub voice: Option<VoiceStatus>,
     /// Phone screen sharing (protocol 3); `None` on older hosts.
@@ -815,6 +825,8 @@ pub fn init() -> App {
         images: HashMap::new(),
         image_cache: None,
         viewing: None,
+        downloads: HashMap::new(),
+        open_files: vec![],
         ws_path: TextEdit::new(""),
         custom_host: TextEdit::new(""),
         host_for: None,
@@ -1317,8 +1329,7 @@ impl App {
             Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
             None => path.to_string(),
         };
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+        if let Err(e) = std::process::Command::new(crate::agentfile::opener()).arg(&path).spawn() {
             self.error = Some(format!("Could not open {path}: {e}"));
         }
     }
@@ -1473,6 +1484,8 @@ impl App {
         self.new_open = false;
         self.auto_open = false;
         self.viewing = None;
+        // Files being fetched from that host won't arrive; saved ones stay saved.
+        self.downloads.retain(|_, d| matches!(d, crate::agentfile::Download::Saved(_)));
         self.info = None;
         self.voice = None;
         self.screen_share = None;
@@ -1791,7 +1804,9 @@ impl App {
             return;
         }
         let events = self.transcripts.get(id).map(|t| t.events.as_slice()).unwrap_or_default();
-        let wanted: Vec<String> = events.iter().filter(|e| e.kind == EventType::Prompt).flat_map(|e| sent_images(&e.payload)).map(|(a, _)| a).collect();
+        let mut wanted: Vec<String> = events.iter().filter(|e| e.kind == EventType::Prompt).flat_map(|e| sent_images(&e.payload)).map(|(a, _)| a).collect();
+        // Pictures agents sent, and their videos' stills.
+        wanted.extend(crate::agentfile::pictures(events));
         let keep: HashSet<&String> = wanted.iter().collect();
         self.images.retain(|k, _| keep.contains(k));
         for a in wanted {
@@ -2542,6 +2557,8 @@ impl App {
                     };
                 }
             }
+            FromHost::DownloadProgress { attachment_id, done, size } => self.download_progress(&attachment_id, done, size),
+            FromHost::Downloaded { attachment_id, result } => self.downloaded(attachment_id, result),
             FromHost::Transcribed(r) => {
                 self.mic = Mic::Idle;
                 let send = std::mem::take(&mut self.send_after_dictation);

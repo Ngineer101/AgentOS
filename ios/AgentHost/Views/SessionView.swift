@@ -812,6 +812,9 @@ struct TranscriptRowView: View {
             MarkdownView(text: text)
                 .equatable()
 
+        case let .agentFile(_, file, ts):
+            AgentFileView(sessionId: sessionId, file: file, sentAt: dateFromMillis(ts))
+
         case let .thought(_, text):
             ThoughtRow(text: text)
 

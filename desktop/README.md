@@ -38,7 +38,15 @@ installed family (the look's own font fills in what it lacks).
   empty composer brings back your last message. Each session keeps what you
   typed in it while you look at another. Images you sent show as
   pictures in the transcript (hosts on protocol 7); click one to see it in
-  the window, Esc to close. Dictation (⇧⌘D / Ctrl+Shift+D,
+  the window, Esc to close. Files an agent sends you (hosts on protocol 13,
+  `agentfile.rs`) show in its reply with what it said about them: a picture
+  inline, a recording of its browser as its still with a play button and its
+  length, anything else as a chip with its size. Clicking one saves it in
+  Downloads › AgentOS (`$XDG_DOWNLOAD_DIR` or `user-dirs.dirs` on Linux) under
+  its own name, numbered if taken, and opens it in the system's app (a
+  recording in its video player); the next click opens the saved copy. A
+  file that could run a program (a script, an app) is only shown in its
+  folder. Dictation (⇧⌘D / Ctrl+Shift+D,
   or the microphone) writes the words into the composer as you talk; ↩ stops
   and sends, Esc throws the dictation away.
 - **Right panel** (`panel.rs`): one trailing pane with a tab per thing it
@@ -150,6 +158,7 @@ AGENTHOST_DESKTOP_OFFLINE=1 AGENTHOST_DESKTOP_LOOK=macos cargo run -- --snap s.p
 #           automation-confirm-delete automation-confirm-rotate
 #           terminal terminal-home terminal-side terminal-ended terminal-remote
 #           changes changes-split files file-open
+#           sent-images sent-image-viewer agent-files agent-files-downloads
 cargo test      # drives a real in-process host through the app's model and bridge
 ```
 

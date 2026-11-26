@@ -15,6 +15,7 @@
 mod agent;
 mod cdp;
 pub mod keys;
+pub mod record;
 pub mod snapshot;
 
 pub use agent::AgentOut;
@@ -233,6 +234,8 @@ struct Tab {
     viewers: Vec<Arc<ViewerInner>>,
     last_frame: Option<Arc<Frame>>,
     casting: bool,
+    /// A session's recording of this tab ([`record`]): it gets every frame.
+    rec: Option<Arc<record::Sink>>,
     /// The button held down, so moves while it is drag.
     pressed: Option<BrowserButton>,
     log: VecDeque<(u64, String)>,
@@ -359,6 +362,15 @@ pub struct Browsers {
     errors: Mutex<HashMap<String, String>>,
     /// The tab each agent session works in.
     session_tabs: Mutex<HashMap<String, String>>,
+    /// Recordings in progress, by session.
+    recordings: Mutex<HashMap<String, Recording>>,
+}
+
+/// A session's recording and the tab it records.
+struct Recording {
+    recorder: record::Recorder,
+    workspace_id: String,
+    tab_id: String,
 }
 
 fn rpc(e: anyhow::Error) -> RpcError {
@@ -374,6 +386,7 @@ impl Browsers {
             starting: tokio::sync::Mutex::new(()),
             errors: Mutex::default(),
             session_tabs: Mutex::default(),
+            recordings: Mutex::default(),
         })
     }
 
@@ -577,7 +590,7 @@ impl Browsers {
                 if !i.alive.load(Ordering::Relaxed) {
                     return;
                 }
-                let watched = i.st.lock().unwrap().tabs.iter().any(|t| t.viewers.iter().any(|v| !v.gone.load(Ordering::Relaxed)));
+                let watched = i.st.lock().unwrap().tabs.iter().any(|t| t.rec.is_some() || t.viewers.iter().any(|v| !v.gone.load(Ordering::Relaxed)));
                 if !watched && i.used.lock().unwrap().elapsed() > IDLE_STOP {
                     tracing::info!(workspace_id = %i.workspace_id, "browser idle, stopping");
                     b.quit(&i).await;
@@ -667,6 +680,7 @@ impl Browsers {
                 viewers: vec![],
                 last_frame: None,
                 casting: false,
+                rec: None,
                 pressed: None,
                 log: VecDeque::new(),
                 log_seq: 0,
@@ -999,8 +1013,11 @@ async fn events(b: Weak<Browsers>, inst: Weak<Instance>, mut rx: mpsc::Unbounded
                         for v in &tab.viewers {
                             v.offer(f.clone());
                         }
+                        if let Some(r) = &tab.rec {
+                            r.offer(f.data.clone());
+                        }
                         tab.last_frame = Some(f);
-                        if tab.viewers.is_empty() && tab.casting {
+                        if tab.viewers.is_empty() && tab.rec.is_none() && tab.casting {
                             tab.casting = false;
                             i.cdp.send("Page.stopScreencast", json!({}), Some(s));
                         }

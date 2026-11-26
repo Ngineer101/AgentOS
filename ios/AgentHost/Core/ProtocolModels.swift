@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Method and notification names, exactly as in `crates/proto/src/methods.rs`.
@@ -47,7 +48,8 @@ enum RPC {
     static let mediaProtocolVersion: UInt32 = 2
     /// `session.prompt` takes at most this many attachments.
     static let maxAttachments = 10
-    /// An image sent with a prompt, read back in pieces.
+    /// A file kept by the host (an image sent with a prompt, a file the
+    /// agent sent), read back in pieces.
     static let attachmentRead = "attachment.read"
     /// Hosts on this protocol version or newer keep the images sent with
     /// prompts, so the transcript can show them again (`attachment.read`).
@@ -78,6 +80,9 @@ enum EventKind {
     /// the main reply). Its tool calls are `tool.call`/`tool.result` with
     /// `parent_tool_call_id`.
     static let subagentMessage = "subagent.message"
+    /// A file the agent sent the user (`AgentFileInfo`): a screenshot, a
+    /// report, a recording of its browser tab. Protocol 13 and newer.
+    static let agentFile = "agent.file"
 }
 
 /// `SessionState` values.
@@ -574,19 +579,66 @@ struct AttachmentInfo: Codable, Hashable, Identifiable {
         case name, mime, size
     }
 
+    /// One attachment object (`{attachment_id, name, mime, size}`).
+    static func one(from item: JSONValue) -> AttachmentInfo? {
+        guard let id = item["attachment_id"].string else { return nil }
+        return AttachmentInfo(
+            attachmentId: id,
+            name: item["name"].string ?? "Attachment",
+            mime: item["mime"].string ?? "application/octet-stream",
+            size: item["size"].int ?? 0
+        )
+    }
+
     /// The `attachments` array of an event payload. Read field by field
     /// because `JSONValue` keeps numbers as `Double`.
     static func list(from value: JSONValue) -> [AttachmentInfo] {
         guard case let .array(items) = value else { return [] }
-        return items.compactMap { item in
-            guard let id = item["attachment_id"].string else { return nil }
-            return AttachmentInfo(
-                attachmentId: id,
-                name: item["name"].string ?? "Attachment",
-                mime: item["mime"].string ?? "application/octet-stream",
-                size: item["size"].int ?? 0
-            )
-        }
+        return items.compactMap(AttachmentInfo.one(from:))
+    }
+}
+
+/// A file the agent sent (`agent.file` payload). Its bytes, and the
+/// poster's, come from `attachment.read` with the event's session.
+struct AgentFileInfo: Hashable {
+    enum Kind: String {
+        /// A file from the agent's folder.
+        case file
+        /// A recording of the agent's browser tab (MP4, H.264), with a poster.
+        case recording
+    }
+
+    var attachment: AttachmentInfo
+    var kind: Kind
+    var caption: String?
+    /// A still (JPEG) shown for a video before it plays.
+    var poster: AttachmentInfo?
+    var durationMs: Int64?
+    /// The picture's or video's size in pixels.
+    var width: Int64?
+    var height: Int64?
+    var toolCallId: String?
+
+    var isVideo: Bool { kind == .recording || attachment.mime.hasPrefix("video/") }
+    var isImage: Bool { !isVideo && attachment.isImage }
+
+    /// The pixel size, when the host sent one.
+    var pixelSize: CGSize? {
+        guard let w = width, let h = height, w > 0, h > 0 else { return nil }
+        return CGSize(width: CGFloat(w), height: CGFloat(h))
+    }
+
+    init?(payload p: JSONValue) {
+        guard let a = AttachmentInfo.one(from: p["attachment"]) else { return nil }
+        attachment = a
+        kind = Kind(rawValue: p["kind"].string ?? "") ?? .file
+        let text = p["caption"].string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        caption = (text?.isEmpty ?? true) ? nil : text
+        poster = AttachmentInfo.one(from: p["poster"])
+        durationMs = p["duration_ms"].int
+        width = p["width"].int
+        height = p["height"].int
+        toolCallId = p["tool_call_id"].string
     }
 }
 
