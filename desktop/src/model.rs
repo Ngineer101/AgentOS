@@ -661,6 +661,8 @@ pub struct App {
     pub panel_w: Option<f32>,
     /// The host's terminals (the panel's Terminal tab).
     pub terms: crate::terminal::Terms,
+    /// The workspace's browser (the panel's Browser tab).
+    pub web: crate::browser::Browse,
     /// The open session's changes and files (the panel's Changes and Files tabs).
     pub browse: crate::files::FilesState,
     /// Side conversations whose tab was closed here.
@@ -759,6 +761,8 @@ pub enum PanelTab {
     Files,
     /// The open session's side questions (`/btw`).
     Side,
+    /// The workspace's browser, which agents drive.
+    Browser,
 }
 
 pub const SIDEBAR_MIN_W: f32 = 220.0;
@@ -853,6 +857,7 @@ pub fn init() -> App {
         panel_tab: PanelTab::Terminal,
         panel_w: None,
         terms: Default::default(),
+        web: Default::default(),
         browse: Default::default(),
         side_closed: HashSet::new(),
         side_tab: HashMap::new(),
@@ -1483,6 +1488,7 @@ impl App {
         self.runs.clear();
         self.notes.clear();
         self.terminals_reset();
+        self.browsers_reset();
         self.suggestions.clear();
         self.transcripts.clear();
         self.subscribed.clear();
@@ -2147,8 +2153,10 @@ impl App {
                 self.refresh_all();
                 self.call(Tag::Voice, m::VOICE_STATUS, json!({}));
                 self.call(Tag::Screen, m::SCREEN_STATUS, json!({}));
-                // A new connection: the terminals' screens are drawn again from the host.
+                // A new connection: the terminals' screens are drawn again from the host,
+                // and the browser's tab is attached to again.
                 self.terminals_reset();
+                self.browsers_reset();
                 if admin {
                     self.call(Tag::Terminals, m::TERMINAL_LIST, json!({}));
                 }
@@ -2350,6 +2358,18 @@ impl App {
                 (Tag::TerminalOpened, Err(e)) => self.terminal_opened(Err(e.message)),
                 (Tag::TerminalAttached(_), Ok(_)) => {}
                 (Tag::TerminalAttached(id), Err(_)) => self.terminal_attach_failed(&id),
+                (Tag::Browsers, r) => {
+                    let r = r.map_err(|e| if e.code == agenthost_proto::jsonrpc::codes::METHOD_NOT_FOUND { "This host is too old for the browser.".to_string() } else { e.message });
+                    self.browsers_listed(r.and_then(|v| parse::<BrowserList>(v).ok_or_else(|| "the host's answer made no sense".to_string())));
+                }
+                (Tag::BrowserOpened, r) => {
+                    let r = r.map_err(|e| e.message).and_then(|v| parse::<BrowserTab>(v).ok_or_else(|| "the host's answer made no sense".to_string()));
+                    self.browser_opened(r);
+                }
+                (Tag::BrowserAttached(_), Ok(_)) => {}
+                (Tag::BrowserAttached(id), Err(_)) => self.browser_attach_failed(&id),
+                (Tag::BrowserCopied, Ok(v)) => self.browser_copied(parse::<BrowserSelection>(v).map(|s| s.text).unwrap_or_default()),
+                (Tag::BrowserCopied, Err(_)) => {}
                 (Tag::NoteSaved { new_gen }, Ok(v)) => {
                     self.note_saving = false;
                     if let Some(n) = parse::<Note>(v) {
@@ -3189,6 +3209,13 @@ impl App {
                     self.terminal_changed(ch);
                 }
             }
+            m::N_BROWSER_CHANGED => {
+                if let Some(ch) = parse::<BrowserChanged>(n.params) {
+                    self.browser_changed(ch.browser);
+                }
+            }
+            // The bridge decodes frames into the panel's surface; one reaching here is late.
+            m::N_BROWSER_FRAME => {}
             m::N_AUTOMATION_CHANGED => {
                 if let Some(ch) = parse::<AutomationChanged>(n.params) {
                     self.on_automation_changed(ch);

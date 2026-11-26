@@ -569,6 +569,56 @@ fn terminal(s: &mut App) {
     s.show_panel(crate::model::PanelTab::Terminal);
 }
 
+/// The right panel on its Browser tab in ses_1: the relay workspace's browser, with the
+/// tab ses_1's agent opened (on show, with a picture) and one you opened.
+fn browser(s: &mut App) {
+    use agenthost_proto::*;
+    session(s);
+    s.approvals.clear();
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 12;
+    }
+    let tab = |id: &str, url: &str, title: &str, session: Option<&str>, w: u32, h: u32| BrowserTab {
+        tab_id: id.into(),
+        url: url.into(),
+        title: title.into(),
+        loading: false,
+        session_id: session.map(str::to_string),
+        width: w,
+        height: h,
+        can_go_back: session.is_some(),
+        can_go_forward: false,
+    };
+    s.browsers_listed(Ok(BrowserList {
+        support: BrowserSupport { available: true, detail: "/usr/bin/chromium".into() },
+        browsers: vec![BrowserInfo {
+            workspace_id: "ws_relay".into(),
+            running: true,
+            tabs: vec![
+                tab("tab_mine", "https://dash.cloudflare.com/", "Cloudflare Dashboard", None, 520, 640),
+                tab("tab_agent", "https://staging.relay.example.com/settings", "Settings – Relay (staging)", Some("ses_1"), 1280, 800),
+            ],
+            blocked: vec!["fonts.gstatic.com".into()],
+            error: None,
+        }],
+    }));
+    s.show_panel(crate::model::PanelTab::Browser);
+    // As the bridge would after the first frame: a page-sized picture on the surface.
+    s.web.chosen.insert("ws_relay".into(), "tab_agent".into());
+    s.web.attached = Some("tab_agent".into());
+    s.web.shown.set_tab(Some("tab_agent".into()));
+    let (w, h) = (640u32, 400u32);
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let header = y < 48;
+            let (b, g, r) = if header { (0x3a, 0x2a, 0x1f) } else if (x / 160 + y / 100) % 2 == 0 { (0xf4, 0xf4, 0xf4) } else { (0xea, 0xea, 0xea) };
+            px.extend_from_slice(&[b, g, r, 255]);
+        }
+    }
+    s.web.shown.show("tab_agent", 1, w, h, px, (1280, 800));
+}
+
 /// What ses_1 changed, as the host would send it.
 pub const SAMPLE_PATCH: &str = "diff --git a/src/net/backoff.rs b/src/net/backoff.rs
 index 3f1c2aa..9d0e4b1 100644
@@ -1115,6 +1165,26 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         side(s);
     }),
     ("terminal", terminal),
+    ("browser", browser),
+    // No tab open yet: an address bar and what the browser is for.
+    ("browser-empty", |s| {
+        browser(s);
+        s.web.browsers.clear();
+        s.web.chosen.clear();
+        s.web.attached = None;
+        s.web.shown.set_tab(None);
+        s.screen = Screen::Home;
+    }),
+    // A host without Chromium says what to install.
+    ("browser-missing", |s| {
+        browser(s);
+        s.web.support = Some(agenthost_proto::BrowserSupport { available: false, detail: "No Chromium-based browser found. Install chromium (or Google Chrome).".into() });
+    }),
+    // Through the relay there is no browser: the tab says why.
+    ("browser-remote", |s| {
+        browser(s);
+        s.admin = false;
+    }),
     ("changes", changes),
     ("changes-split", |s| {
         changes(s);

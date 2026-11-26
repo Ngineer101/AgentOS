@@ -42,8 +42,8 @@ installed family (the look's own font fills in what it lacks).
   or the microphone) writes the words into the composer as you talk; ↩ stops
   and sends, Esc throws the dictation away.
 - **Right panel** (`panel.rs`): one trailing pane with a tab per thing it
-  shows; today the terminal, the open session's changes and files, and its
-  side questions (`/btw`). A
+  shows; today the terminal, the browser, the open session's changes and
+  files, and its side questions (`/btw`). A
   new feature for the panel is a `PanelTab`, its entry in `panel::tabs` and
   its body in `panel::pane`. A subagent's pane takes its place while open.
 - **Terminal** (⌃` / Ctrl+`, the toolbar's terminal button, GNOME's main
@@ -59,6 +59,20 @@ installed family (the look's own font fills in what it lacks).
   the focus. Only on the host's own computer: a paired connection has no
   terminal button, and the host would refuse it. `term.rs` is the emulator
   (`alacritty_terminal`, drawn with Rune's `grid`), `terminal.rs` the tab.
+- **Browser** (⇧⌘B / Ctrl+Shift+B, the toolbar's globe), in `browser.rs`, for
+  hosts on protocol 12: the host's Chromium for the open session's workspace
+  (else the one picked for a new session, else Quick tasks), the one that
+  workspace's agents drive. Sign in to a site here once and every session of
+  the workspace is signed in. Its tabs are a strip (a bolt marks an agent's;
+  the panel follows the open session's agent to a tab it opens), with back,
+  forward, reload and an address bar (⌘L / Ctrl+L). The page is a picture the
+  host sends; clicks, the wheel, keys and paste go back to it, ⌘C / Ctrl+C
+  copies its selection, ⌘R / F5 reloads. A tab you open takes the panel's
+  size; an agent's keeps its own and is scaled to fit. Hosts the workspace's
+  network settings refused are named at the bottom, with "Sign Out
+  Everywhere…" (asks first) beside them. Only on the host's own computer.
+  The bridge decodes frames (`zune-jpeg`) on its own thread straight into a
+  `rune::NativeSurface` (`browser::Shown`), so the UI thread never queues them.
 - **Changes** (⇧⌘G / Ctrl+Shift+G, the toolbar's button in a session with a
   branch of its own) and **Files** (⇧⌘E / Ctrl+Shift+E), in `files.rs`, for
   hosts on protocol 11. Changes is everything the session's branch changed

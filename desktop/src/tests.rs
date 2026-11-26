@@ -54,7 +54,7 @@ fn desktop_model_runs_a_session_against_a_real_host() {
     std::env::set_var("AGENTHOST_SOCKET", &socket);
 
     let mut app = model::init();
-    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    app.bridge = Some(bridge::start(Arc::new(|| {}), Default::default()));
     pump(&mut app, |a| a.conn == Conn::Connected && a.info.is_some());
 
     // Add a workspace, start a session, send a prompt: all through the UI's own actions.
@@ -306,7 +306,7 @@ fn a_lost_event_stream_heals_without_reopening() {
     let socket2 = socket.clone();
     let mut app = model::init();
     std::env::set_var("AGENTHOST_SOCKET", &socket2);
-    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    app.bridge = Some(bridge::start(Arc::new(|| {}), Default::default()));
     let step = |a: &mut model::App| {
         a.drain();
         a.catch_up();
@@ -360,7 +360,7 @@ fn start_host(rt: &tokio::runtime::Runtime, dir: &std::path::Path, relay: Option
 fn connect(socket: &std::path::Path) -> model::App {
     std::env::set_var("AGENTHOST_SOCKET", socket);
     let mut app = model::init();
-    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    app.bridge = Some(bridge::start(Arc::new(|| {}), Default::default()));
     pump(&mut app, |a| a.conn == Conn::Connected && a.info.is_some() && !a.workspaces.is_empty());
     app
 }
@@ -2008,7 +2008,7 @@ fn remote_pairing_connects_runs_and_stays_read_only() {    let _turn = HOST_TEST
     std::fs::write(&dead, b"").unwrap();
     std::env::set_var("AGENTHOST_SOCKET", &dead);
     let mut app = model::init();
-    app.bridge = Some(bridge::start(Arc::new(|| {})));
+    app.bridge = Some(bridge::start(Arc::new(|| {}), Default::default()));
     pump(&mut app, |a| matches!(a.conn, Conn::Down(_)));
 
     let qr = pair_payload(&rt, &socket);
@@ -2989,6 +2989,279 @@ fn changes_and_files_lay_out() {
         click(&mut ui, "toggle-changes");
         click(&mut ui, "toggle-changes");
         assert!(ui.find("panel").is_none(), "{look:?}: the toolbar's button hides the panel from Changes");
+    }
+}
+
+/// The Browser tab lays out in both looks; the tab on screen is the one attached to, a click
+/// lands on the page where you clicked, keys go to the page, and a tab of yours follows the
+/// panel's size while an agent's keeps its own.
+#[test]
+fn the_browser_lays_out_and_sends_what_you_do() {
+    use crate::bridge::BrowserCmd;
+    use crate::look::Look;
+    use rune::{Key, KeyEvent, Mods};
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    let scenes: [(&str, &[&str], &[&str]); 4] = [
+        (
+            "browser",
+            &["panel", "panel-tab-browser", "panel-tab-terminal", "browser-tabs", "browser-tab-tab_agent", "browser-tab-tab_mine", "browser-close-tab_agent", "browser-new", "browser-back", "browser-forward", "browser-reload", "browser-url", "browser-view", "browser-blocked", "browser-owner", "browser-clear", "toggle-browser"],
+            &["browser-note", "browser-error", "browser-clear-confirm"],
+        ),
+        ("browser-empty", &["panel", "browser-note", "browser-url", "browser-new", "browser-clear"], &["browser-view", "browser-owner"]),
+        ("browser-missing", &["panel", "browser-note"], &["browser-url", "browser-view"]),
+        ("browser-remote", &[], &["panel-tab-browser", "toggle-browser", "browser-view"]),
+    ];
+    for look in [Look::Mac, Look::Gnome] {
+        for (scene, there, absent) in scenes {
+            let ui = open(scene, look);
+            for k in there {
+                assert!(ui.find(k).is_some(), "{look:?} {scene}: {k} is not on screen");
+            }
+            for k in absent {
+                assert!(ui.find(k).is_none(), "{look:?} {scene}: {k} should not be on screen");
+            }
+        }
+    }
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let inputs = |s: &model::App| -> Vec<BrowserInput> {
+        s.web.sent.iter().filter_map(|c| match c {
+            BrowserCmd::Input { tab, input } if tab == "tab_agent" => Some(input.clone()),
+            _ => None,
+        }).collect()
+    };
+    let none = Mods::default();
+
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = open("browser", look);
+        assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_agent") && s.web.view.is_some()), "{look:?}: the agent's tab is on screen");
+        assert!(read(&mut ui, &|s| s.web.url.text == "https://staging.relay.example.com/settings"), "{look:?}: the address shows");
+        // An agent's tab keeps its size: the picture is scaled to the view.
+        assert!(read(&mut ui, &|s| !s.web.sent.iter().any(|c| matches!(c, BrowserCmd::Resize { .. }))), "{look:?}: no resize of the agent's tab");
+
+        // A click in the middle of the view is a click in the middle of the page.
+        ui.update(|s, _| s.web.sent.clear());
+        click(&mut ui, "browser-view");
+        assert!(ui.elements().iter().any(|e| e.key.as_deref() == Some("browser-view") && e.focused), "{look:?}: the click gave the page the keyboard");
+        let clicks: Vec<(BrowserPointer, f32, f32)> = {
+            let r = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let r2 = r.clone();
+            ui.update_if(|s, _| {
+                *r2.borrow_mut() = inputs(s).into_iter().filter_map(|i| match i {
+                    BrowserInput::Mouse { phase, x, y, .. } if phase != BrowserPointer::Move => Some((phase, x, y)),
+                    _ => None,
+                }).collect();
+                false
+            });
+            r.take()
+        };
+        assert_eq!(clicks.iter().map(|c| c.0).collect::<Vec<_>>(), vec![BrowserPointer::Down, BrowserPointer::Up], "{look:?}");
+        let (_, x, y) = clicks[0];
+        assert!((x - 640.0).abs() < 4.0 && (y - 400.0).abs() < 4.0, "{look:?}: the page's centre, not ({x}, {y})");
+
+        // Keys go to the page, in order; ⌘/Ctrl+A selects in the page; ⌘/Ctrl+L goes to the address.
+        ui.update(|s, _| s.web.sent.clear());
+        for k in [Key::Text("h".into()), Key::Text("i".into()), Key::Enter, Key::Tab, Key::Backspace] {
+            ui.key(KeyEvent { key: k, mods: none });
+            ui.frame(0.016);
+        }
+        let cmd = if look == Look::Mac { Mods { cmd: true, logo: true, ..none } } else { Mods { cmd: true, ctrl: true, ..none } };
+        ui.key(KeyEvent { key: Key::Command('a'), mods: cmd });
+        ui.frame(0.016);
+        let keys: Vec<(String, Option<String>, bool)> = {
+            let r = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let r2 = r.clone();
+            ui.update_if(|s, _| {
+                *r2.borrow_mut() = inputs(s).into_iter().filter_map(|i| match i {
+                    BrowserInput::Key { key, text, mods } => Some((key, text, mods.ctrl || mods.meta)),
+                    _ => None,
+                }).collect();
+                false
+            });
+            r.take()
+        };
+        assert_eq!(
+            keys,
+            vec![
+                ("h".to_string(), Some("h".to_string()), false),
+                ("i".into(), Some("i".into()), false),
+                ("Enter".into(), None, false),
+                ("Tab".into(), None, false),
+                ("Backspace".into(), None, false),
+                ("a".into(), None, true),
+            ],
+            "{look:?}"
+        );
+        ui.key(KeyEvent { key: Key::Command('l'), mods: cmd });
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.web.url.focused), "{look:?}: the address field has the keyboard");
+
+        // Your own tab: it follows the panel's size, and waits for its own picture.
+        click(&mut ui, "browser-tab-tab_mine");
+        assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_mine") && s.web.shown.page().is_none()), "{look:?}");
+        assert!(read(&mut ui, &|s| {
+            let (w, h) = s.web.view.unwrap();
+            s.web.sent.iter().any(|c| matches!(c, BrowserCmd::Resize { tab, width, height } if tab == "tab_mine" && width.abs_diff(w.round() as u32) <= 1 && height.abs_diff(h.round() as u32) <= 1))
+        }), "{look:?}: your tab is resized to the view");
+
+        // The open session's agent opens another tab: the panel follows it.
+        ui.update(|s, _| {
+            let mut b = s.web.browsers["ws_relay"].clone();
+            b.tabs.push(BrowserTab { tab_id: "tab_new".into(), url: "https://accounts.example.com/".into(), title: "Sign in".into(), loading: true, session_id: Some("ses_1".into()), width: 1280, height: 800, can_go_back: false, can_go_forward: false });
+            s.browser_changed(b);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_new")), "{look:?}: the agent's new tab is on screen");
+        assert!(ui.find("browser-stop").is_some(), "{look:?}: a loading page can be stopped");
+
+        // Signing out asks first.
+        click(&mut ui, "browser-clear");
+        assert!(ui.find("browser-clear-confirm").is_some());
+
+        // Hiding the panel stops the frames; the toolbar's button brings them back.
+        click(&mut ui, "panel-hide");
+        assert!(read(&mut ui, &|s| s.web.attached.is_none() && s.web.shown.tab().is_none()), "{look:?}: hidden, nothing attached");
+        click(&mut ui, "toggle-browser");
+        assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_new")), "{look:?}: shown again, attached again");
+    }
+
+    // A tab the host can't attach to is dropped, not tried on every poll.
+    let mut ui = open("browser", Look::Gnome);
+    ui.update(|s, _| s.browser_attach_failed("tab_agent"));
+    for _ in 0..5 {
+        ui.frame(0.016);
+    }
+    assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_mine")), "the other tab is shown instead");
+    ui.update(|s, _| {
+        let mut b = s.web.browsers["ws_relay"].clone();
+        b.tabs.push(BrowserTab { tab_id: "tab_agent".into(), url: "https://x.example/".into(), title: "X".into(), loading: false, session_id: None, width: 800, height: 600, can_go_back: false, can_go_forward: false });
+        s.browser_changed(b);
+        s.select_browser_tab("tab_agent");
+    });
+    ui.frame(0.016);
+    ui.frame(0.016);
+    assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_mine")), "and not picked again on this connection");
+
+    // The view maps points to the page: letterboxed, centred.
+    let mut app = model::init();
+    app.web.view = Some((600.0, 600.0));
+    app.web.shown.set_tab(Some("t".into()));
+    app.web.shown.show("t", 1, 4, 2, vec![0; 32], (1200, 600));
+    assert_eq!(app.browser_point(300.0, 300.0), Some((600.0, 300.0, 0.5)));
+    assert_eq!(app.browser_point(0.0, 150.0), Some((0.0, 0.0, 0.5)));
+    assert_eq!(app.browser_point(300.0, 100.0), None, "above the picture is not the page");
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
+
+/// The browser's protocol against a real host, in process: the app reads what the host says
+/// about its browser, and either a tab opens (Chromium starts) or the panel shows why not
+/// (inside an agent's sandbox Chromium can't start). A paired phone gets no browser.
+#[test]
+fn the_browser_against_a_real_host() {
+    use agenthost_host::api::{serve_connection, Principal};
+    use agenthost_proto::jsonrpc::{Message, Request};
+    use tokio::sync::mpsc;
+
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::var_os("AGENTHOST_TEST_TMP").unwrap_or_else(|| std::env::temp_dir().into_os_string());
+    let dir = tempfile::Builder::new().prefix("ahd").tempdir_in(root).unwrap();
+    let mut cfg = agenthost_host::HostConfig::in_dir(dir.path());
+    cfg.home_dir = dir.path().join("home");
+    std::fs::create_dir_all(&cfg.home_dir).unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let host = agenthost_host::Host::open(cfg).unwrap();
+    let connect = |principal: Principal| {
+        let (tx, in_rx) = mpsc::channel::<String>(256);
+        let (out_tx, rx) = mpsc::channel::<String>(1024);
+        rt.spawn(serve_connection(host.clone(), principal, in_rx, out_tx));
+        (tx, rx)
+    };
+    let next_id = std::cell::Cell::new(0u64);
+    let rpc = |app: &mut model::App, tx: &mpsc::Sender<String>, rx: &mut mpsc::Receiver<String>, method: &str, params: serde_json::Value| -> Result<serde_json::Value, agenthost_proto::RpcError> {
+        next_id.set(next_id.get() + 1);
+        let id = json!(next_id.get());
+        tx.blocking_send(Message::Request(Request::new(id.clone(), method, params)).to_json()).unwrap();
+        loop {
+            let line = rt.block_on(async { tokio::time::timeout(Duration::from_secs(40), rx.recv()).await }).expect("the host went quiet").expect("the connection closed");
+            match Message::parse(&line).unwrap() {
+                Message::Response(r) if r.id == id => return match r.error {
+                    Some(e) => Err(e),
+                    None => Ok(r.result.unwrap_or_default()),
+                },
+                Message::Notification(n) => app.apply(bridge::FromHost::Note(n)),
+                _ => {}
+            }
+        }
+    };
+    let hello = json!({"protocol_version": PROTOCOL_VERSION, "client_name": "desktop-test", "client_version": "0"});
+
+    // A paired phone is refused.
+    let mut phone_app = model::init();
+    let (ptx, mut prx) = connect(Principal { capabilities: agenthost_proto::methods::Capability::phone(), device_id: Some("dev_1".into()), label: "phone".into() });
+    rpc(&mut phone_app, &ptx, &mut prx, m::HELLO, hello.clone()).unwrap();
+    let err = rpc(&mut phone_app, &ptx, &mut prx, m::BROWSER_LIST, json!({})).unwrap_err();
+    assert_eq!(err.code, agenthost_proto::jsonrpc::codes::CAPABILITY_DENIED);
+
+    // The app on the host's own computer.
+    let mut app = model::init();
+    app.conn = Conn::Connected;
+    app.admin = true;
+    let (tx, mut rx) = connect(Principal::local());
+    rpc(&mut app, &tx, &mut rx, m::HELLO, hello).unwrap();
+    let listed = rpc(&mut app, &tx, &mut rx, m::BROWSER_LIST, json!({})).map_err(|e| e.message);
+    app.apply(bridge::FromHost::Reply { tag: bridge::Tag::Browsers, result: listed.map_err(|m| agenthost_proto::RpcError::internal(m)) });
+    let support = app.web.support.clone().expect("the app knows whether the host has a browser");
+    app.show_panel(model::PanelTab::Browser);
+    if !support.available {
+        assert!(support.detail.contains("Chromium"), "{support:?}");
+        return;
+    }
+    let ws = app.browser_ws();
+    assert_eq!(ws, QUICK_WORKSPACE_ID, "with nothing open, the browser is Quick tasks'");
+    let opened = rpc(&mut app, &tx, &mut rx, m::BROWSER_OPEN, json!({"workspace_id": ws, "url": "about:blank", "width": 600, "height": 500}));
+    match opened {
+        Ok(tab) => {
+            app.apply(bridge::FromHost::Reply { tag: bridge::Tag::BrowserOpened, result: Ok(tab) });
+            app.browser_tick();
+            assert!(app.web.attached.is_some(), "the new tab is attached to");
+            let t = app.browser_tab().unwrap().clone();
+            assert_eq!((t.width, t.height, t.session_id), (600, 500, None));
+            rpc(&mut app, &tx, &mut rx, m::BROWSER_STOP, json!({"workspace_id": ws})).unwrap();
+        }
+        Err(e) => {
+            // It could not start here: the host said why, and so does the panel.
+            assert!(e.message.contains("did not start"), "{e:?}");
+            rpc(&mut app, &tx, &mut rx, m::BROWSER_LIST, json!({})).unwrap();
+            let b = app.web.browsers.get(&ws).expect("browser.changed told the app");
+            assert!(b.error.as_deref().is_some_and(|m| m.contains("did not start")), "{b:?}");
+        }
     }
 }
 

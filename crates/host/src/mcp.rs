@@ -53,6 +53,9 @@ pub const PR_TOOL: &str = "agenthost__create_pull_request";
 /// Run any command-line program as the user, outside the sandbox, after
 /// they approve (or a prefix they let run without asking).
 pub const RUN_COMMAND_TOOL: &str = "agenthost__run_command";
+/// The browser tools (`agenthost__browser_navigate`, …): the workspace's
+/// browser, signed in as the user. A session asks once, then uses them freely.
+pub const BROWSER_TOOL_PREFIX: &str = "agenthost__browser_";
 
 struct SessionReg {
     session_id: String,
@@ -130,6 +133,9 @@ pub struct Gateway {
     /// id): live sessions listed the tools under the old name and keep
     /// calling them so.
     renamed: Mutex<HashMap<String, String>>,
+    browsers: Arc<crate::browser::Browsers>,
+    /// Sessions the user let use the browser.
+    browser_ok: Mutex<std::collections::HashSet<String>>,
 }
 
 fn secret_name(connector_id: &str, kind: &str) -> String {
@@ -153,6 +159,7 @@ const BUILTINS: &[(&str, &str, &str, bool)] = &[
     ("git_push", "Push branches", "Pushes with your git credentials. A force-push always asks.", true),
     ("install_tool", "Install tools on this computer", "Runs a package manager as you, outside the sandbox. Always asks.", false),
     ("run_command", "Run commands as you", "Runs a program as you, outside the sandbox, with your logins. Asks, except for the commands you let run.", false),
+    ("browser", "Use the browser", "Lets an agent use its workspace's browser, signed in to the sites you signed in to there. Asks once per session.", true),
 ];
 
 fn policy_key(name: &str) -> String {
@@ -236,6 +243,9 @@ impl Gateway {
         Ok(self.builtin_list())
     }
 }
+
+mod browser_tools;
+use browser_tools::browser_tool_defs;
 
 /// The definition of `agenthost__create_pull_request`.
 fn pr_tool_def() -> Value {
@@ -358,6 +368,7 @@ impl Gateway {
         ctx: Arc<Ctx>,
         secrets: Arc<dyn SecretStore>,
         sessions: &Arc<SessionManager>,
+        browsers: Arc<crate::browser::Browsers>,
     ) -> Result<Arc<Gateway>> {
         let socket = ctx.cfg.runtime_dir.join("gw.sock");
         let (mut listener, mut bound) = bind_gateway_socket(&socket)?;
@@ -377,6 +388,8 @@ impl Gateway {
             oauth: Mutex::new(HashMap::new()),
             install_lock: tokio::sync::Mutex::new(()),
             renamed: Mutex::new(HashMap::new()),
+            browsers,
+            browser_ok: Mutex::new(Default::default()),
         });
         // Icons for connectors added before the host fetched them.
         let g = gw.clone();
@@ -557,7 +570,7 @@ impl Gateway {
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(MCP_PROTOCOL),
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "agenthost", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Tools from the connectors enabled for this workspace (named <connector>__<tool>), plus agenthost__install_tool, which installs a command-line tool on the user's computer after they approve it."
+                "instructions": "Tools from the connectors enabled for this workspace (named <connector>__<tool>), plus agenthost__install_tool, which installs a command-line tool on the user's computer after they approve it, and agenthost__browser_* tools for testing in a real browser (this workspace's, signed in as the user) when one is installed."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => {
@@ -677,6 +690,9 @@ impl Gateway {
         }
         if name == GIT_PUSH_TOOL || name == GIT_FETCH_TOOL {
             return self.git_tool(session_id, name == GIT_PUSH_TOOL, args).await;
+        }
+        if let Some(tool) = name.strip_prefix(BROWSER_TOOL_PREFIX) {
+            return self.browser_tool(session_id, workspace_id, tool, args).await;
         }
         let call_id = new_id("mcp");
         let tools = self.list_tools(workspace_id);
@@ -853,6 +869,9 @@ impl Gateway {
     fn builtin_tools(&self) -> Vec<Value> {
         let mut tools = git_tools();
         tools.push(run_command_def());
+        if self.browsers.support().available {
+            tools.extend(browser_tool_defs());
+        }
         if crate::installer::find("gh", self.ctx.cfg.install_bin_dir.as_deref()).is_some() {
             tools.push(pr_tool_def());
         }

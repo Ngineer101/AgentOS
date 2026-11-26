@@ -95,6 +95,14 @@ pub enum Tag {
     TerminalOpened,
     /// `terminal.attach` to this terminal: its output follows as notifications.
     TerminalAttached(String),
+    /// `browser.list`.
+    Browsers,
+    /// `browser.open`: answered with the new tab.
+    BrowserOpened,
+    /// `browser.attach` to this tab: its frames follow as notifications.
+    BrowserAttached(String),
+    /// `browser.selection`: the page's selected text, to copy.
+    BrowserCopied,
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }
@@ -127,6 +135,8 @@ pub enum ToHost {
     Live(Live),
     /// A terminal's keystrokes, size and acknowledgements, sent in order.
     Term(TermCmd),
+    /// A browser tab's clicks, keys, size and frame acknowledgements, sent in order.
+    Browser(BrowserCmd),
     /// Pair with a remote host using the QR payload from `agenthost device
     /// pair` on it; answered by [`FromHost::PairCode`] then
     /// [`FromHost::PairResult`], both carrying `attempt` back so answers to
@@ -150,6 +160,30 @@ pub enum TermCmd {
     Resize { id: String, cols: u16, rows: u16 },
     /// Output up to `offset` is on screen: the host may send more.
     Ack { id: String, offset: u64 },
+}
+
+/// Traffic for one of the host's browser tabs, sent one after another: a click's press
+/// must not overtake the move before it. Moves, sizes and acknowledgements waiting behind
+/// another request go as the newest only.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrowserCmd {
+    Input { tab: String, input: agenthost_proto::BrowserInput },
+    Resize { tab: String, width: u32, height: u32 },
+    /// Frames up to `frame` are drawn: the host may send more.
+    Ack { tab: String, frame: u64 },
+}
+
+impl BrowserCmd {
+    /// Whether `next` makes this one pointless: a newer move, size or acknowledgement.
+    fn superseded_by(&self, next: &BrowserCmd) -> bool {
+        use agenthost_proto::{BrowserInput as I, BrowserPointer as P};
+        match (self, next) {
+            (BrowserCmd::Input { tab: a, input: I::Mouse { phase: P::Move, .. } }, BrowserCmd::Input { tab: b, input: I::Mouse { phase: P::Move, .. } }) => a == b,
+            (BrowserCmd::Resize { tab: a, .. }, BrowserCmd::Resize { tab: b, .. }) => a == b,
+            (BrowserCmd::Ack { tab: a, .. }, BrowserCmd::Ack { tab: b, .. }) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// One live dictation (`gen`) as it happens: audio is mono 16-bit PCM bytes.
@@ -593,9 +627,88 @@ fn terminal_io(client: Arc<Client>) -> mpsc::UnboundedSender<TermCmd> {
     tx
 }
 
-pub fn start(waker: rune::Waker) -> Bridge {
+/// Browser traffic in order (see [`BrowserCmd`]).
+fn browser_io(client: Arc<Client>) -> mpsc::UnboundedSender<BrowserCmd> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<BrowserCmd>();
+    tokio::spawn(async move {
+        let mut next: Option<BrowserCmd> = None;
+        loop {
+            let mut cmd = match next.take() {
+                Some(c) => c,
+                None => match rx.recv().await {
+                    Some(c) => c,
+                    None => return,
+                },
+            };
+            loop {
+                match rx.try_recv() {
+                    Ok(newer) if cmd.superseded_by(&newer) => cmd = newer,
+                    Ok(other) => {
+                        next = Some(other);
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            // Failures are the tab having gone; its `browser.changed` says so.
+            let _ = match cmd {
+                BrowserCmd::Input { tab, input } => client.request(m::BROWSER_INPUT, json!({"tab_id": tab, "input": input})).await,
+                BrowserCmd::Resize { tab, width, height } => client.request(m::BROWSER_RESIZE, json!({"tab_id": tab, "width": width, "height": height})).await,
+                BrowserCmd::Ack { tab, frame } => client.request(m::BROWSER_ACK, json!({"tab_id": tab, "frame_id": frame})).await,
+            };
+        }
+    });
+    tx
+}
+
+/// The newest `browser.frame` waiting for the decoder; a newer one replaces it unseen.
+#[derive(Default)]
+struct FrameSlot {
+    next: Mutex<Option<Value>>,
+    ready: std::sync::Condvar,
+}
+
+impl FrameSlot {
+    fn offer(&self, v: Value) {
+        *self.next.lock().unwrap_or_else(|e| e.into_inner()) = Some(v);
+        self.ready.notify_one();
+    }
+}
+
+/// Decode the browser's frames off the UI thread, straight into the panel's surface, and
+/// acknowledge each so the host sends the next. Frames of a tab not on screen are dropped.
+fn frame_decoder(shown: crate::browser::Shown, acks: mpsc::UnboundedSender<ToHost>) -> Arc<FrameSlot> {
+    use base64::Engine as _;
+    let slot = Arc::new(FrameSlot::default());
+    let s = slot.clone();
+    std::thread::Builder::new()
+        .name("browser-frames".into())
+        .spawn(move || loop {
+            let v = {
+                let mut g = s.next.lock().unwrap_or_else(|e| e.into_inner());
+                while g.is_none() {
+                    g = s.ready.wait(g).unwrap_or_else(|e| e.into_inner());
+                }
+                g.take().unwrap()
+            };
+            let Ok(f) = serde_json::from_value::<agenthost_proto::BrowserFrame>(v) else { continue };
+            if shown.tab().as_deref() == Some(f.tab_id.as_str()) {
+                if let Some((w, h, px)) = base64::engine::general_purpose::STANDARD.decode(f.data.as_bytes()).ok().and_then(|j| crate::browser::decode_jpeg(&j)) {
+                    shown.show(&f.tab_id, f.frame_id, w, h, px, (f.page_width, f.page_height));
+                }
+            }
+            if acks.send(ToHost::Browser(BrowserCmd::Ack { tab: f.tab_id, frame: f.frame_id })).is_err() {
+                return;
+            }
+        })
+        .expect("browser frame thread");
+    slot
+}
+
+pub fn start(waker: rune::Waker, shown: crate::browser::Shown) -> Bridge {
     let (tx, cmd_rx) = mpsc::unbounded_channel::<ToHost>();
     let (out_tx, rx) = std_mpsc::channel::<FromHost>();
+    let frames = frame_decoder(shown, tx.clone());
     std::thread::Builder::new()
         .name("agenthost-bridge".into())
         .spawn(move || {
@@ -713,6 +826,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                     });
                     let live_tx = live_dictation(client.clone(), out_tx.clone(), waker.clone());
                     let term_tx = terminal_io(client.clone());
+                    let browser_tx = browser_io(client.clone());
                     // A command for this host: live dictation and terminal traffic
                     // go in order, the rest each run on their own.
                     let run = |cmd: ToHost| {
@@ -723,6 +837,10 @@ pub fn start(waker: rune::Waker) -> Bridge {
                             }
                             ToHost::Term(t) => {
                                 let _ = term_tx.send(t);
+                                return;
+                            }
+                            ToHost::Browser(b) => {
+                                let _ = browser_tx.send(b);
                                 return;
                             }
                             cmd => cmd,
@@ -739,7 +857,7 @@ pub fn start(waker: rune::Waker) -> Bridge {
                                     FromHost::AttachmentRead { attachment_id, result }
                                 }
                                 ToHost::Transcribe { wav } => FromHost::Transcribed(c.transcribe_wav(&wav, None).await.map_err(|e| format!("{e:#}"))),
-                                ToHost::Live(_) | ToHost::Term(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } | ToHost::CancelPair => unreachable!(),
+                                ToHost::Live(_) | ToHost::Term(_) | ToHost::Browser(_) | ToHost::UseRemote(_) | ToHost::UseLocal | ToHost::PairRemote { .. } | ToHost::CancelPair => unreachable!(),
                             };
                             reply.send(msg);
                         });
@@ -765,6 +883,8 @@ pub fn start(waker: rune::Waker) -> Bridge {
                             }
                             n = notes.recv() => {
                                 match n {
+                                    // Frames go to the decoder, not the UI thread.
+                                    Some(n) if n.method == m::N_BROWSER_FRAME => frames.offer(n.params),
                                     Some(n) => send(FromHost::Note(n)),
                                     // The tunnel records why just before the stream
                                     // ends; the watch arm or the code below has it.

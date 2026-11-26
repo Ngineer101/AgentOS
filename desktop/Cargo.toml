@@ -32,6 +32,9 @@ png = "0.17"
 base64 = "0.22"
 # The terminal panel's emulator (screen state, scrollback, selection); the host owns the shell.
 alacritty_terminal = "0.26"
+# The browser panel's frames are JPEG (already built for Rune's images).
+zune-jpeg = "0.5"
+zune-core = "0.5"
 # Microphone capture for voice input.
 cpal = "0.16"
 

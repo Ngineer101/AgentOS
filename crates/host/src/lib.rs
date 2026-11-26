@@ -10,6 +10,7 @@ pub mod audit;
 pub mod bus;
 pub mod config;
 pub mod automations;
+pub mod browser;
 pub mod cron;
 pub mod ctx;
 pub mod files;
@@ -48,7 +49,7 @@ use std::sync::Arc;
 pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let socket = host.ctx.cfg.socket_path.clone();
     api::ensure_no_other_host(&socket).await?;
-    let gw = mcp::Gateway::start(host.ctx.clone(), host.secrets.clone(), &host.sessions).await?;
+    let gw = mcp::Gateway::start(host.ctx.clone(), host.secrets.clone(), &host.sessions, host.browsers.clone()).await?;
     let _ = host.ctx.gateway.set(gw.clone());
     let _ = host.connectors.set(Arc::new(gw));
     let remote = remote::Remote::new(&host)?;

@@ -5,6 +5,7 @@
 //! with one message per line on stream transports.
 
 pub mod automation;
+pub mod browser;
 pub mod hookseal;
 pub mod jsonrpc;
 pub mod methods;
@@ -17,6 +18,7 @@ pub mod types;
 
 pub use jsonrpc::{Message, Notification, Request, Response, RpcError};
 pub use automation::*;
+pub use browser::*;
 pub use note::*;
 pub use files::*;
 pub use terminal::*;
@@ -37,7 +39,8 @@ pub use types::*;
 /// 10: terminals (`terminal.*`), admin only.
 /// 11: a session's changes and files (`session.changes`, `session.files`,
 /// `session.file_read`).
-pub const PROTOCOL_VERSION: u32 = 11;
+/// 12: a browser per workspace (`browser.*`), admin only.
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// Oldest client protocol version the host still accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;

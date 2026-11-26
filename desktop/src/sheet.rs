@@ -415,6 +415,7 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
             "Terminal",
             vec![
                 ("Show or hide the terminal", l(Cmd::ToggleTerminal)),
+                ("Show or hide the browser", l(Cmd::ToggleBrowser)),
                 ("Copy", if s.look.mac() { "⌘C".into() } else { "Ctrl+Shift+C".into() }),
                 ("Paste", if s.look.mac() { "⌘V".into() } else { "Ctrl+Shift+V".into() }),
                 ("Scroll back a page", if s.look.mac() { "⇧Page Up".into() } else { "Shift+Page Up".into() }),

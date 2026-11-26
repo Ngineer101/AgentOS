@@ -1,5 +1,5 @@
 //! The right panel: a trailing pane beside the main one, with a tab per thing it can show.
-//! Today that is the terminal and the open session's side questions; a new feature for the
+//! Today that is the terminal, the browser, the open session's changes, files and side questions; a new feature for the
 //! panel is a [`PanelTab`], its entry in [`tabs`] and its body in [`pane`].
 //!
 //! macOS draws it as an inspector (a hairline-separated trailing pane under its own toolbar
@@ -20,6 +20,7 @@ impl PanelTab {
             PanelTab::Changes => "Changes",
             PanelTab::Files => "Files",
             PanelTab::Side => "Side Questions",
+            PanelTab::Browser => "Browser",
         }
     }
 
@@ -29,6 +30,7 @@ impl PanelTab {
             PanelTab::Changes => "panel-tab-changes",
             PanelTab::Files => "panel-tab-files",
             PanelTab::Side => "panel-tab-side",
+            PanelTab::Browser => "panel-tab-browser",
         }
     }
 
@@ -38,6 +40,7 @@ impl PanelTab {
             PanelTab::Changes => &ic::DIFF,
             PanelTab::Files => &ic::FOLDER,
             PanelTab::Side => &ic::BUBBLE,
+            PanelTab::Browser => &ic::GLOBE,
         }
     }
 }
@@ -46,6 +49,9 @@ impl PanelTab {
 /// changes (when it has a branch of its own), its files, and side questions if it has some.
 pub fn tabs(s: &App) -> Vec<PanelTab> {
     let mut v = vec![PanelTab::Terminal];
+    if s.browser_allowed() {
+        v.push(PanelTab::Browser);
+    }
     if s.changes_available() {
         v.push(PanelTab::Changes);
     }
@@ -79,6 +85,7 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
         (PanelTab::Terminal, _) => crate::terminal::body(s, t),
         (PanelTab::Changes, _) => crate::files::changes(s, t, k),
         (PanelTab::Files, _) => crate::files::files(s, t, k),
+        (PanelTab::Browser, _) => crate::browser::body(s, t),
     };
     let mut pane = col()
         .key("panel")
@@ -113,6 +120,9 @@ fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
             s.show_panel(tab);
             if tab == PanelTab::Terminal {
                 tx.focus("term-view", false);
+            }
+            if tab == PanelTab::Browser {
+                tx.focus("browser-view", false);
             }
         })
         .child(icon(tab.glyph(), 12.0).color(if on { t.text } else { t.text2 }))

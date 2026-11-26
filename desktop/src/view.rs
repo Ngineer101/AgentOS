@@ -891,6 +891,8 @@ fn toolbar(s: &App, t: &Theme) -> El {
 
     // The terminal's toggle, on every screen, where this connection may have one.
     let terminal = s.terminal_allowed().then(|| crate::terminal::toggle_button(s, t));
+    // The browser's, likewise.
+    let browser = s.browser_allowed().then(|| crate::browser::toggle_button(s, t));
     // The open session's changes (and, a tab over, its files).
     let changes = (sess.is_some() && s.changes_available()).then(|| crate::files::toggle_button(s, t));
 
@@ -926,6 +928,9 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if let Some(b) = changes {
             group = group.child(b.w(32.0));
         }
+        if let Some(b) = browser {
+            group = group.child(b.w(32.0));
+        }
         if let Some(b) = terminal {
             group = group.child(b.w(32.0));
         }
@@ -958,7 +963,11 @@ fn toolbar(s: &App, t: &Theme) -> El {
             }
         } else {
             // Keeps the title centred as the session's two buttons would.
-            bar = bar.child(el().w(if terminal.is_some() { 36.0 } else { 72.0 }));
+            let others = usize::from(terminal.is_some()) + usize::from(browser.is_some());
+            bar = bar.child(el().w((72.0 - 36.0 * others as f32).max(0.0)));
+        }
+        if let Some(b) = browser {
+            bar = bar.child(b);
         }
         if let Some(b) = terminal {
             bar = bar.child(b);
@@ -1275,6 +1284,7 @@ fn menu_layer(s: &App, t: &Theme) -> El {
                 Some(Item::new("Automations", String::new(), |s, _| s.open_automations())),
                 Some(Item::new("Notes", String::new(), |s, _| s.open_notes()).enabled(s.host_has_notes())),
                 Some(Item::new("Terminal", keys(look, Cmd::ToggleTerminal), |s, tx| run(s, Cmd::ToggleTerminal, tx)).enabled(s.terminal_allowed())),
+                Some(Item::new("Browser", keys(look, Cmd::ToggleBrowser), |s, tx| run(s, Cmd::ToggleBrowser, tx)).enabled(s.browser_allowed())),
                 Some(Item::new("Changes", keys(look, Cmd::ToggleChanges), |s, tx| run(s, Cmd::ToggleChanges, tx)).enabled(s.changes_available())),
                 Some(Item::new("Files", keys(look, Cmd::ToggleFiles), |s, tx| run(s, Cmd::ToggleFiles, tx)).enabled(s.files_available())),
                 None,
