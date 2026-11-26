@@ -50,8 +50,12 @@ fn hostname() -> String {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    // A terminal you asked for wins over the composer of the session it opened in.
+    let prompt = s.take_prompt_focus();
     if s.take_terminal_focus() {
         tx.focus("term-view", false);
+    } else if prompt {
+        tx.focus_when_shown("prompt", false);
     }
     s.fetch_images();
     if s.catch_up() {

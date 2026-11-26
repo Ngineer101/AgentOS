@@ -62,7 +62,7 @@ pub struct Theme {
     pub warn: Color,
     pub danger: Color,
     pub bolt: Color,
-    /// A pull request's mark in the sidebar.
+    /// A merged pull request's mark in the sidebar (an open one's is `ok`, a closed one's `danger`).
     pub pr: Color,
     /// The "your turn" dot by a session: the accent, toned down so a list of them stays quiet.
     pub your_turn: Color,
@@ -163,7 +163,7 @@ impl Theme {
                 btn_radius: 6.0,
                 toolbar_h: 52.0,
                 sidebar_w: 280.0,
-                column: 700.0,
+                column: 780.0,
                 row_radius: 6.0,
                 box_radius: 8.0,
                 card_radius: 10.0,
@@ -213,7 +213,7 @@ impl Theme {
                 btn_radius: 7.0,
                 toolbar_h: 47.0,
                 sidebar_w: 300.0,
-                column: 720.0,
+                column: 800.0,
                 row_radius: 7.0,
                 box_radius: 12.0,
                 card_radius: 12.0,

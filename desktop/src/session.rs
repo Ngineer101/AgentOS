@@ -670,6 +670,9 @@ fn voice_offer(s: &App, t: &Theme) -> Option<El> {
     )
 }
 
+/// The widest an attached image's picture gets in its chip (a wide screenshot), in points.
+const PREVIEW_MAX_W: f32 = 56.0;
+
 /// Files waiting to go with the next message.
 fn file_chips(s: &App, id: &str, t: &Theme) -> Option<El> {
     let files = s.files.get(id).filter(|f| !f.is_empty())?;
@@ -681,17 +684,38 @@ fn file_chips(s: &App, id: &str, t: &Theme) -> Option<El> {
             FileState::Ready(a) => (human_size(a.size), t.text3),
             FileState::Failed(e) => (format!("failed: {e}"), t.danger),
         };
+        // An image shows a small picture of itself (once decoded), so pasted images can be
+        // told apart; other files, and images still decoding, show the file mark.
+        let pic = f.preview.as_ref().and_then(|img| Some((img, img.size()?)));
+        let mut chip = row()
+            .key(format!("file-{lid}"))
+            .h(if pic.is_some() { 44.0 } else { 30.0 })
+            .gap(7.0)
+            .center_y()
+            .pl(if pic.is_some() { 6.0 } else { 8.0 })
+            .pr(6.0)
+            .radius(t.btn_radius)
+            .fill(Color::WHITE.alpha(0.08));
+        chip = match pic {
+            Some((img, [w, h])) => {
+                let (bw, bh) = (PREVIEW_MAX_W, crate::model::PREVIEW_PT);
+                let scale = (bw / w.max(1) as f32).min(bh / h.max(1) as f32).min(1.0);
+                let (w, h) = ((w as f32 * scale).round().max(12.0), (h as f32 * scale).round().max(12.0));
+                chip.child(
+                    row().w(bw.min(w.max(bh))).h(bh).center().child(
+                        el().key(format!("file-preview-{lid}"))
+                            .size(w, h)
+                            .radius(4.0)
+                            .clip_rounded(4.0)
+                            .border(0.5, Color::WHITE.alpha(0.12))
+                            .pixels_fit(img.pixels(), rune::SurfaceFit::Fill),
+                    ),
+                )
+            }
+            None => chip.child(icon(&ic::FILE_SM, 13.0).color(t.text2)),
+        };
         r = r.child(
-            row()
-                .key(format!("file-{lid}"))
-                .h(30.0)
-                .gap(7.0)
-                .center_y()
-                .pl(8.0)
-                .pr(6.0)
-                .radius(t.btn_radius)
-                .fill(Color::WHITE.alpha(0.08))
-                .child(icon(&ic::FILE_SM, 13.0).color(t.text2))
+            chip
                 .child(text(clip(&f.name, 40)).font(TextStyle::new(12.0, 400.0)).color(t.text))
                 .child(text(note).font(TextStyle::new(12.0, 400.0)).color(color))
                 .child(

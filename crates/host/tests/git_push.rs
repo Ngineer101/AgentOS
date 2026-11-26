@@ -187,7 +187,11 @@ async fn pull_requests_open_only_after_approval_with_the_text_shown() {
 
     // The session remembers it, for the session list's "#7".
     let s = c.call::<Session>(m::SESSION_GET, json!({"session_id": sid})).await.unwrap();
-    assert_eq!(s.pull_request.map(|p| (p.number, p.url)), Some((7, "https://github.com/o/r/pull/7".into())));
+    // Just opened, so open (the host checks GitHub for changes later).
+    assert_eq!(
+        s.pull_request.map(|p| (p.number, p.url, p.state)),
+        Some((7, "https://github.com/o/r/pull/7".into(), Some(PullRequestState::Open)))
+    );
 }
 
 #[tokio::test]

@@ -673,7 +673,7 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
     let age = short_age(x.updated_at, s.look);
     let line = exception_line(s, t, x, status);
     let run = x.automation_id.is_some();
-    let pr = x.pull_request.as_ref().map(|p| p.number);
+    let pr = x.pull_request.as_ref();
     let ws = s.workspace(&x.workspace_id).map(|w| if w.kind == WorkspaceKind::Scratch { "Quick tasks".to_string() } else { w.name.clone() });
 
     // What the second line used to say, for the tooltip and the screen reader.
@@ -683,8 +683,13 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
     facts.push(age.clone());
     let mut tip = facts.join(" · ");
     let mut extra = vec![];
-    if let Some(n) = pr {
-        extra.push(format!("Pull request #{n}"));
+    if let Some(p) = pr {
+        extra.push(match p.state {
+            Some(PullRequestState::Open) => format!("Pull request #{}, open", p.number),
+            Some(PullRequestState::Merged) => format!("Pull request #{}, merged", p.number),
+            Some(PullRequestState::Closed) => format!("Pull request #{}, closed", p.number),
+            None => format!("Pull request #{}", p.number),
+        });
     }
     if let Some(w) = &x.worktree {
         extra.push(w.branch.clone());
@@ -775,8 +780,8 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
         end = end.child(button(format!("archive-{}", x.session_id), &ic::ARCHIVE, if ended { "Archive" } else { "Archive…" }, Box::new(move |s| s.archive(&id))));
         end = end.mr(if mac { -6.0 } else { -8.0 });
     } else {
-        if pr.is_some() {
-            end = end.child(icon(&ic::PULL_REQUEST, if mac { 12.0 } else { 14.0 }).color(if ended { t.pr.alpha(0.7) } else { t.pr }));
+        if let Some(p) = pr {
+            end = end.child(icon(&ic::PULL_REQUEST, if mac { 12.0 } else { 14.0 }).color(pr_color(t, p.state)));
         }
         if run {
             end = end.child(icon(&ic::CLOCK, if mac { 12.0 } else { 14.0 }).color(sub_faint));
@@ -791,6 +796,17 @@ fn session_row(s: &App, t: &Theme, x: &Session, n: Option<usize>, q: &str) -> El
         r.fill(t.row_selected)
     } else {
         r.hover(t.row_hover)
+    }
+}
+
+/// A pull request's mark: green while open, purple once merged, red when closed without
+/// merging; grey until the host has looked (older hosts never do).
+pub fn pr_color(t: &Theme, state: Option<PullRequestState>) -> Color {
+    match state {
+        Some(PullRequestState::Open) => t.ok,
+        Some(PullRequestState::Merged) => t.pr,
+        Some(PullRequestState::Closed) => t.danger,
+        None => t.text2,
     }
 }
 
@@ -859,13 +875,8 @@ fn toolbar(s: &App, t: &Theme) -> El {
         }
     };
     let titles = col().key("title").min_w(0.0).shrink().gap(if renaming.is_some() && !mac { 2.0 } else { 0.0 }).child(title_el).child(sub_line);
-    let running = sess.is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
+    // Stopping a turn is the composer's stop button and its keys, not the toolbar's.
     let live = sess.is_some_and(|x| !x.state.is_terminal());
-    let stop = t
-        .icon_button(if mac { &ic::STOP_CIRCLE } else { &ic::STOP }, 16.0, &format!("Stop the Turn ({})", keys(s.look, Cmd::Stop)), |s, tx| run(s, Cmd::Stop, tx))
-        .key("stop-turn")
-        .opacity(if running { 1.0 } else { 0.35 })
-        .disabled(!running);
     let more = t
         .icon_button(if mac { &ic::MORE_H } else { &ic::MORE_V }, 16.0, "Session Menu", |s: &mut App, tx: &mut Tx| session_menu(s, tx))
         .key("session-menu")
@@ -907,7 +918,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         }
         let mut group = row().gap(2.0).ml(6.0);
         if sess.is_some() {
-            group = group.child(stop.w(32.0)).child(more.w(32.0));
+            group = group.child(more.w(32.0));
         }
         if let Some(b) = side {
             group = group.child(b.w(32.0));
@@ -938,7 +949,7 @@ fn toolbar(s: &App, t: &Theme) -> El {
         };
         bar = bar.child(col().grow(1.0).min_w(0.0).items_center().child(titles.w_full().items_center()));
         if sess.is_some() {
-            bar = bar.child(stop).child(more);
+            bar = bar.child(more);
             if let Some(b) = side {
                 bar = bar.child(b);
             }
@@ -1043,12 +1054,7 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
     }
     if s.look.mac() && rune::popup_menu_supported() {
         let live = s.current().is_some_and(|x| !x.state.is_terminal());
-        let running = s.current().is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
         let key = |k: &str| k.parse::<rune::Shortcut>().ok();
-        let mut stop = rune::PopupItem::new("stop", "Stop Turn").enabled(running);
-        if let Some(k) = key("cmd+period") {
-            stop = stop.key_equivalent(k);
-        }
         let mut folder = rune::PopupItem::new("folder", "Show Session Folder in Finder");
         if let Some(k) = key("alt+cmd+r") {
             folder = folder.key_equivalent(k);
@@ -1063,11 +1069,10 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
         if branch {
             menu = menu.item(rune::PopupItem::new("copy-branch", "Copy Branch Name"));
         }
-        let menu = menu.separator().item(stop).item(folder).separator().item(archive);
+        let menu = menu.separator().item(folder).separator().item(archive);
         tx.popup_menu(menu, "session-menu", |s: &mut App, picked, tx| match picked {
             Some("rename") => run(s, Cmd::RenameSession, tx),
             Some("copy-branch") => run(s, Cmd::CopyBranch, tx),
-            Some("stop") => run(s, Cmd::Stop, tx),
             Some("folder") => run(s, Cmd::ShowFolder, tx),
             Some("archive") => run(s, Cmd::Archive, tx),
             _ => {}
@@ -1248,7 +1253,6 @@ fn menu_layer(s: &App, t: &Theme) -> El {
     match &s.menu {
         Some(Menu::Session) => {
             let live = s.current().is_some_and(|x| !x.state.is_terminal());
-            let running = s.current().is_some_and(|x| matches!(x.state, SessionState::Running | SessionState::WaitingApproval));
             let archived = s.current().is_some_and(|x| x.archived_at.is_some());
             let mut items = vec![Some(Item::new("Rename Session…", String::new(), |s, tx| run(s, Cmd::RenameSession, tx)).enabled(!archived))];
             if s.current().is_some_and(|x| x.worktree.is_some()) {
@@ -1256,7 +1260,6 @@ fn menu_layer(s: &App, t: &Theme) -> El {
             }
             items.extend([
                 None,
-                Some(Item::new("Stop the Turn", keys(look, Cmd::Stop), |s, tx| run(s, Cmd::Stop, tx)).enabled(running)),
                 Some(Item::new("Show Session Folder", keys(look, Cmd::ShowFolder), |s, tx| run(s, Cmd::ShowFolder, tx))),
                 Some(Item::new("Attach Files…", keys(look, Cmd::Attach), |s, tx| run(s, Cmd::Attach, tx)).enabled(live)),
                 None,

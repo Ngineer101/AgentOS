@@ -294,15 +294,19 @@ fn row_session(r: &Row) -> rusqlite::Result<Session> {
         side_questions: r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
         automation_id: r.get(16)?,
         pull_request: match (r.get::<_, Option<i64>>(17)?, r.get::<_, Option<String>>(18)?) {
-            (Some(n), Some(url)) => Some(SessionPullRequest { number: n as u64, url }),
+            (Some(n), Some(url)) => Some(SessionPullRequest {
+                number: n as u64,
+                url,
+                state: r.get::<_, Option<String>>(20)?.as_deref().map(enum_parse).transpose()?,
+            }),
             _ => None,
         },
         pinned_at: r.get(19)?,
     })
 }
-const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
+const SESSION_COLS: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, title, created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at, pr_state";
 /// [`SESSION_COLS`] to read: the title shown is the user's, else the host's.
-const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at";
+const SESSION_SELECT: &str = "session_id, workspace_id, agent, state, state_reason, acp_session_id, COALESCE(title, auto_title), created_at, updated_at, last_seq, profile_id, archived_at, worktree_path, worktree_branch, config_options, side_questions, automation_id, pr_number, pr_url, pinned_at, pr_state";
 
 fn row_profile(r: &Row) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -342,6 +346,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("push_devices", "gateway_handle", "TEXT"),
     // When the user pinned the session (`session.pin`).
     ("sessions", "pinned_at", "INTEGER"),
+    // Whether the session's pull request is open, merged or closed (`PullRequestState`).
+    ("sessions", "pr_state", "TEXT"),
 ];
 
 fn row_workspace(r: &Row) -> rusqlite::Result<Workspace> {
@@ -662,7 +668,7 @@ impl Store {
 
     pub fn session_insert(&self, s: &Session) -> Result<()> {
         self.db().execute(
-            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"),
+            &format!("INSERT INTO sessions ({SESSION_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)"),
             params![
                 s.session_id,
                 s.workspace_id,
@@ -683,7 +689,8 @@ impl Store {
                 s.automation_id,
                 s.pull_request.as_ref().map(|p| p.number as i64),
                 s.pull_request.as_ref().map(|p| p.url.clone()),
-                s.pinned_at
+                s.pinned_at,
+                s.pull_request.as_ref().and_then(|p| p.state.as_ref()).map(enum_str)
             ],
         )?;
         Ok(())
@@ -873,8 +880,17 @@ impl Store {
     /// Record the pull request a session opened.
     pub fn session_set_pull_request(&self, id: &str, pr: &SessionPullRequest) -> Result<bool> {
         Ok(self.db().execute(
-            "UPDATE sessions SET pr_number = ?2, pr_url = ?3 WHERE session_id = ?1",
-            params![id, pr.number as i64, pr.url],
+            "UPDATE sessions SET pr_number = ?2, pr_url = ?3, pr_state = ?4 WHERE session_id = ?1",
+            params![id, pr.number as i64, pr.url, pr.state.as_ref().map(enum_str)],
+        )? > 0)
+    }
+
+    /// Record where the session's pull request stands, if it is still `url`
+    /// (the session may have opened another meanwhile).
+    pub fn session_set_pull_request_state(&self, id: &str, url: &str, state: PullRequestState) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE sessions SET pr_state = ?3 WHERE session_id = ?1 AND pr_url = ?2",
+            params![id, url, enum_str(&state)],
         )? > 0)
     }
 
@@ -1782,10 +1798,15 @@ mod tests {
     fn a_session_keeps_its_pull_request() {
         let (st, sid) = setup();
         assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, None);
-        let pr = SessionPullRequest { number: 48483, url: "https://github.com/o/r/pull/48483".into() };
+        let mut pr = SessionPullRequest { number: 48483, url: "https://github.com/o/r/pull/48483".into(), state: None };
         assert!(st.session_set_pull_request(&sid, &pr).unwrap());
+        assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, Some(pr.clone()));
+        assert!(!st.session_set_pull_request("ses_none", &SessionPullRequest { number: 1, url: "u".into(), state: None }).unwrap());
+        // Its state, only while it is still the session's pull request.
+        assert!(st.session_set_pull_request_state(&sid, &pr.url, PullRequestState::Merged).unwrap());
+        pr.state = Some(PullRequestState::Merged);
         assert_eq!(st.session_get(&sid).unwrap().unwrap().pull_request, Some(pr));
-        assert!(!st.session_set_pull_request("ses_none", &SessionPullRequest { number: 1, url: "u".into() }).unwrap());
+        assert!(!st.session_set_pull_request_state(&sid, "https://github.com/o/r/pull/1", PullRequestState::Closed).unwrap());
     }
 
     #[test]

@@ -461,11 +461,21 @@ pub fn sent_images(payload: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The composer chip's picture of an attached image, in points.
+pub const PREVIEW_PT: f32 = 32.0;
+
+/// Images the app decodes itself (not HEIC): those get a picture in the composer.
+fn name_decodes(name: &str) -> bool {
+    matches!(guess_mime(name), "image/png" | "image/jpeg" | "image/gif" | "image/webp")
+}
+
 /// A file picked for the next message.
 pub struct PendingFile {
     pub local_id: u64,
     pub name: String,
     pub state: FileState,
+    /// An image's picture, for the composer's chip: which pasted image is which.
+    pub preview: Option<rune::Image>,
 }
 
 pub enum FileState {
@@ -571,6 +581,9 @@ pub struct App {
     /// The session whose message `prompt` holds, and the unsent messages of the others:
     /// each session keeps what you typed in it while you look at another.
     pub prompt_for: Option<String>,
+    /// A session was just opened: give its composer the keyboard once it shows, whatever
+    /// had it (the sidebar row clicked, the sheet's Start button).
+    pub prompt_focus_wanted: bool,
     pub drafts: HashMap<String, TextEdit>,
     pub ws_path: TextEdit,
     pub custom_host: TextEdit,
@@ -793,6 +806,7 @@ pub fn init() -> App {
         expanded: HashSet::new(),
         prompt: TextEdit::new(""),
         prompt_for: None,
+        prompt_focus_wanted: false,
         drafts: HashMap::new(),
         images: HashMap::new(),
         image_cache: None,
@@ -1588,12 +1602,19 @@ impl App {
         self.swap_draft(id);
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
+        self.prompt_focus_wanted = true;
         if self.agent_open.as_ref().is_some_and(|(s, _)| s != id) {
             self.agent_open = None;
         }
         self.ensure_subscribed(id);
         self.files_sync();
         self.mark_seen(false);
+    }
+
+    /// A session was just opened and its composer is what should take the keyboard.
+    pub fn take_prompt_focus(&mut self) -> bool {
+        let want = std::mem::take(&mut self.prompt_focus_wanted);
+        want && matches!(&self.screen, Screen::Session(id) if self.session(id).is_some_and(|x| !x.state.is_terminal() && x.archived_at.is_none()))
     }
 
     /// The agent finished a turn since you last had the session open: its dot says so until
@@ -1809,7 +1830,10 @@ impl App {
             }
             let local_id = self.next_local_id;
             self.next_local_id += 1;
-            list.push(PendingFile { local_id, name, state: FileState::Uploading });
+            // Read and decoded off the UI thread; formats it can't decode keep the plain chip.
+            let preview = self.image_cache.as_ref().filter(|_| name_decodes(&name)).map(|c| c.file(p, PREVIEW_PT, 2.0));
+            let list = self.files.entry(id.clone()).or_default();
+            list.push(PendingFile { local_id, name, state: FileState::Uploading, preview });
             if let Some(b) = &self.bridge {
                 b.send(crate::bridge::ToHost::Upload { local_id, path: p.clone() });
             }
@@ -1844,7 +1868,7 @@ impl App {
             self.notice = Some(format!("That image is too large: files can be up to {} MB.", MAX_ATTACHMENT_BYTES / (1024 * 1024)));
             return;
         }
-        let list = self.files.entry(id).or_default();
+        let list = self.files.entry(id.clone()).or_default();
         if list.len() >= MAX_ATTACHMENTS_PER_PROMPT {
             self.notice = Some(format!("A message can carry up to {MAX_ATTACHMENTS_PER_PROMPT} files."));
             return;
@@ -1853,7 +1877,9 @@ impl App {
         let name = pasted_image_name(&taken);
         let local_id = self.next_local_id;
         self.next_local_id += 1;
-        list.push(PendingFile { local_id, name: name.clone(), state: FileState::Uploading });
+        let preview = self.image_cache.as_ref().map(|c| c.load(data.clone()));
+        let list = self.files.entry(id).or_default();
+        list.push(PendingFile { local_id, name: name.clone(), state: FileState::Uploading, preview });
         if let Some(b) = &self.bridge {
             b.send(crate::bridge::ToHost::UploadBytes { local_id, name, mime: mime.to_string(), data });
         }

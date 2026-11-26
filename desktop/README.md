@@ -16,7 +16,8 @@ installed family (the look's own font fills in what it lacks).
   Automations at the top, then Pinned and the workspaces (Quick tasks first),
   each a collapsible group with a "+" for a new session there; the newest 8
   show, "Show N more" the rest. A row is one line: status, title, a pull
-  request or automation icon and its age; a second line only when it needs
+  request icon (green open, purple merged, red closed; the host checks open
+  ones every 5 minutes with your `gh`) or automation icon and its age; a second line only when it needs
   you, failed or has agents running. A session whose agent finished a turn you
   haven't looked at has a green dot until you open it (remembered between
   launches). Hover a row for Pin and Archive (pins
@@ -25,12 +26,15 @@ installed family (the look's own font fills in what it lacks).
   ⌘1…⌘9 (Alt+1…9), shown while you hold the key. Collapsed groups are
   remembered in `desktop.json` (`~/Library/Application Support/AgentHost/`,
   or `~/.config/agenthost/`). The host line at the bottom opens status.
-- **Session**: the transcript in a 700 pt (GNOME 720 px) column: prompts,
+- **Session**: the transcript in a 780 pt (GNOME 800 px) column: prompts,
   Markdown replies (streaming), thoughts, tool calls (expand for output),
   blocked hosts with "Allow for <workspace>", approvals inline with
   Deny ⌥⌘D / Approve ⌥⌘A (Alt+D / Alt+A). The toolbar has a status capsule
-  (macOS) or the window an approval banner (GNOME), Stop turn and a session
-  menu. The composer attaches files, dictates, and shows its keys; ↑ in an
+  (macOS) or the window an approval banner (GNOME), and a session menu.
+  Opening a session puts the keyboard in its composer. While the agent works
+  the composer's send button stops the turn (⌘. / Ctrl+.). The composer
+  attaches files (an image shows a small picture of itself, so pasted ones
+  can be told apart), dictates, and shows its keys; ↑ in an
   empty composer brings back your last message. Each session keeps what you
   typed in it while you look at another. Images you sent show as
   pictures in the transcript (hosts on protocol 7); click one to see it in

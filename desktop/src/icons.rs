@@ -13,7 +13,6 @@ icon!(COMPOSE, "ah-compose", 17.0, r#"<path d="M8 2.5H4.5a2 2 0 0 0-2 2v8a2 2 0 
 icon!(SEARCH, "ah-search", 13.0, r#"<circle cx="5.5" cy="5.5" r="4.2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8.6 8.6L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>"#);
 icon!(BOLT, "ah-bolt", 14.0, r#"<path d="M8.2 0.8L2.5 8h4l-1 5.2L11.5 6h-4z" fill="currentColor"/>"#);
 icon!(SPINNER, "ah-spinner", 14.0, r#"<circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.6" fill="none"/><path d="M7 1.5a5.5 5.5 0 0 1 5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>"#);
-icon!(STOP_CIRCLE, "ah-stop-circle", 16.0, r#"<circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.4" fill="none"/><rect x="5.6" y="5.6" width="4.8" height="4.8" rx="1" fill="currentColor"/>"#);
 icon!(STOP, "ah-stop", 16.0, r#"<rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/>"#);
 icon!(MORE_H, "ah-more-h", 16.0, r#"<circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/>"#);
 icon!(MORE_V, "ah-more-v", 16.0, r#"<circle cx="8" cy="3" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="13" r="1.5" fill="currentColor"/>"#);
