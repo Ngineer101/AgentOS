@@ -19,6 +19,7 @@ mod settings;
 mod sheet;
 mod side;
 mod agents;
+mod agentfile;
 mod term;
 mod terminal;
 mod toast;
@@ -70,6 +71,12 @@ fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     for url in std::mem::take(&mut s.open_queue) {
         if tx.open_url(&url).is_err() {
             s.notice = Some(format!("Could not open the browser. Open this link yourself: {url}"));
+        }
+    }
+    for o in std::mem::take(&mut s.open_files) {
+        if let Err(e) = agentfile::system_open(&o) {
+            let (agentfile::Opening::Open(p) | agentfile::Opening::Reveal(p)) = &o;
+            s.error = Some(format!("Could not open {}: {e}", p.display()));
         }
     }
     // Messages become toasts; toasts go when their time is up; the catalog search runs once

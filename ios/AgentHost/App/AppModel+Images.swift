@@ -79,19 +79,24 @@ extension AppModel {
         }
     }
 
-    /// The whole file, read from the host in pieces.
-    private func readAttachment(sessionId: String, attachmentId: String) async throws -> Data {
+    /// The whole file, read from the host in pieces. `progress` gets the
+    /// bytes read so far and the file's size after each piece.
+    func readAttachment(sessionId: String, attachmentId: String,
+                        progress: ((Int, Int) -> Void)? = nil) async throws -> Data {
         var data = Data()
         while true {
             let r: AttachmentReadResult = try await call(
                 RPC.attachmentRead,
                 ["session_id": sessionId, "attachment_id": attachmentId, "offset": data.count]
             )
+            if r.size == 0 { return data }
             guard let piece = Data(base64Encoded: r.data), !piece.isEmpty, data.count + piece.count <= r.size else {
                 throw ComposerError(message: "The host sent \(data.count) of \(r.size) bytes.")
             }
             data.append(piece)
+            progress?(data.count, r.size)
             if data.count >= r.size { return data }
+            try Task.checkCancellation()
         }
     }
 }

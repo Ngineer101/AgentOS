@@ -960,6 +960,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
         EventType::SideQuestion | EventType::SideMessage | EventType::SideEnd => return None,
         // A subagent's words are in its panel, never in the main reply.
         EventType::SubagentMessage => return None,
+        // Its own item, wrapped so it keeps its key under the row's.
+        EventType::AgentFile => col().w_full().child(crate::agentfile::item(s, &sess.session_id, &crate::agentfile::parse(e)?, t, k)),
         EventType::NetDenied => {
             let host = str_of(&p["host"]);
             let ws = sess.workspace_id.clone();

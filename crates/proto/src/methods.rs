@@ -88,7 +88,8 @@ pub const UPLOAD_FINISH: &str = "upload.finish";
 /// An image sent with a prompt, in pieces (protocol 7): give `offset` 0,
 /// then the end of each piece, until all `size` bytes are in. The host keeps
 /// a session's sent images as long as the session, so clients can show them
-/// again in the transcript.
+/// again in the transcript. Files agents send (`agent.file`, protocol 13)
+/// are read the same way.
 pub const ATTACHMENT_READ: &str = "attachment.read";
 
 /// The local speech-to-text model: whether it is installed, downloading or ready.

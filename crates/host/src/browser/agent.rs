@@ -3,7 +3,7 @@
 //! its workspace's browser (plus the popups that tab opens); acting on the
 //! page answers with what the page shows afterwards.
 
-use super::{keys, snapshot, Browsers, Instance};
+use super::{keys, record, snapshot, Browsers, Instance, Recording};
 use agenthost_proto::*;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -65,6 +65,8 @@ impl Browsers {
         let (w, h) = BROWSER_DEFAULT_SIZE;
         let id = self.new_tab(&inst, Some(session_id), w, h).await?;
         self.session_tabs.lock().unwrap().insert(session_id.to_string(), id.clone());
+        // Its tab closed while recording: the recording carries on here.
+        self.follow_recording(&inst, session_id, &id).await;
         Ok((inst, id))
     }
 
@@ -383,6 +385,7 @@ impl Browsers {
                 return Err(anyhow!("{id} is not one of this session's tabs"));
             }
             self.session_tabs.lock().unwrap().insert(session_id.to_string(), id.to_string());
+            self.follow_recording(&inst, session_id, id).await;
         }
         let current = self.session_tabs.lock().unwrap().get(session_id).cloned().unwrap_or(current);
         let st = inst.st.lock().unwrap();
@@ -393,6 +396,109 @@ impl Browsers {
             .map(|t| format!("{} {} — {} ({})", if t.id == current { "*" } else { " " }, t.id, if t.title.is_empty() { "untitled" } else { &t.title }, t.url))
             .collect();
         Ok(AgentOut::text(if lines.is_empty() { "This session has no tabs.".into() } else { format!("This session's tabs (* is the one the tools act on):\n{}", lines.join("\n")) }))
+    }
+}
+
+// ---- Recording ----
+
+impl Browsers {
+    /// `browser_record_start`: record the session's tab until
+    /// `browser_record_stop` (it follows `browser_tabs` to another tab).
+    pub async fn agent_record_start(&self, session_id: &str, workspace_id: &str) -> Result<AgentOut> {
+        if self.recordings.lock().unwrap().contains_key(session_id) {
+            return Err(anyhow!("already recording: call browser_record_stop to send it first"));
+        }
+        let (inst, tab) = self.session_tab(session_id, workspace_id).await?;
+        let first = inst.st.lock().unwrap().tabs.iter().find(|t| t.id == tab && t.casting).and_then(|t| t.last_frame.as_ref().map(|f| f.data.clone()));
+        let recorder = record::Recorder::start(first)?;
+        let sink = recorder.sink.clone();
+        {
+            let mut recs = self.recordings.lock().unwrap();
+            if recs.contains_key(session_id) {
+                return Err(anyhow!("already recording: call browser_record_stop to send it first"));
+            }
+            recs.insert(session_id.to_string(), Recording { recorder, workspace_id: workspace_id.to_string(), tab_id: tab.clone() });
+        }
+        if let Err(e) = self.record_into(&inst, &tab, sink).await {
+            self.recordings.lock().unwrap().remove(session_id);
+            return Err(e);
+        }
+        self.ctx.audit.log("browser.record_start", json!({"session_id": session_id, "workspace_id": workspace_id}));
+        Ok(AgentOut::text(format!(
+            "Recording your browser tab (at most {} minutes). Do what you want to show, then call browser_record_stop to send the video to the user.",
+            record::MAX_LENGTH.as_secs() / 60
+        )))
+    }
+
+    /// `browser_record_stop`: the recording, finished.
+    pub async fn agent_record_stop(&self, session_id: &str) -> Result<record::Finished> {
+        let rec = self.recordings.lock().unwrap().remove(session_id).ok_or_else(|| anyhow!("not recording: call browser_record_start first"))?;
+        if let Some(inst) = self.instance(&rec.workspace_id) {
+            unrecord(&inst, &rec.tab_id);
+        }
+        let f = tokio::task::spawn_blocking(move || rec.recorder.finish()).await.map_err(|_| anyhow!("the recorder crashed"))??;
+        self.ctx.audit.log("browser.record_stop", json!({"session_id": session_id, "duration_ms": f.duration_ms, "bytes": f.mp4.len()}));
+        Ok(f)
+    }
+
+    /// Throw away a session's recording (the session ended).
+    pub fn discard_recording(&self, session_id: &str) {
+        let Some(rec) = self.recordings.lock().unwrap().remove(session_id) else { return };
+        if let Some(inst) = self.instance(&rec.workspace_id) {
+            unrecord(&inst, &rec.tab_id);
+        }
+    }
+
+    /// The session's tools moved to another tab: so does its recording.
+    async fn follow_recording(&self, inst: &Instance, session_id: &str, tab_id: &str) {
+        let sink = {
+            let mut recs = self.recordings.lock().unwrap();
+            let Some(r) = recs.get_mut(session_id) else { return };
+            if r.tab_id == tab_id {
+                return;
+            }
+            let old = std::mem::replace(&mut r.tab_id, tab_id.to_string());
+            unrecord(inst, &old);
+            r.recorder.sink.clone()
+        };
+        if let Err(e) = self.record_into(inst, tab_id, sink).await {
+            tracing::debug!("browser: the recording could not follow to {tab_id}: {e:#}");
+        }
+    }
+
+    /// Send a tab's frames to a recording, starting its screencast if
+    /// nobody watches it.
+    async fn record_into(&self, inst: &Instance, tab_id: &str, sink: Arc<record::Sink>) -> Result<()> {
+        let start = {
+            let mut st = inst.st.lock().unwrap();
+            let t = st.tabs.iter_mut().find(|t| t.id == tab_id).ok_or_else(|| anyhow!("the tab closed"))?;
+            if t.casting {
+                if let Some(f) = &t.last_frame {
+                    sink.offer(f.data.clone());
+                }
+            }
+            t.rec = Some(sink);
+            let start = !t.casting;
+            t.casting = true;
+            start.then_some((t.width, t.height))
+        };
+        if let Some((w, h)) = start {
+            inst.call(tab_id, "Page.startScreencast", super::screencast_params(w, h)).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Stop sending a tab's frames to a recording, and its screencast if
+/// nobody watches it.
+fn unrecord(inst: &Instance, tab_id: &str) {
+    let mut st = inst.st.lock().unwrap();
+    let Some(t) = st.tabs.iter_mut().find(|t| t.id == tab_id) else { return };
+    t.rec = None;
+    t.viewers.retain(|v| !v.gone.load(std::sync::atomic::Ordering::Relaxed));
+    if t.viewers.is_empty() && t.casting {
+        t.casting = false;
+        inst.cdp.send("Page.stopScreencast", json!({}), Some(&t.cdp));
     }
 }
 

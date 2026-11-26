@@ -1790,6 +1790,133 @@ fn a_sent_image_opens_in_the_viewer() {
     }
 }
 
+/// Files an agent sent show in its reply, outside the folded tool calls: the recording as
+/// its still, the screenshot as a picture, the CSV as a chip. Clicking the recording fetches
+/// it from the host for that session; a second click while it comes does nothing more.
+#[test]
+fn agent_files_show_in_the_reply_and_a_recording_downloads() {
+    use crate::agentfile::Download;
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 1800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "agent-files").unwrap().1;
+        let (fake, from_host, mut to_host) = bridge::Bridge::fake();
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+            s.bridge = Some(fake);
+            for i in s.images.values() {
+                if let model::SentImage::Ready(img) = i {
+                    let _ = img.wait();
+                }
+            }
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        for k in ["agent-file-att_rec", "agent-file-open-att_rec", "agent-file-att_shot", "agent-file-open-att_shot", "agent-file-att_csv", "agent-file-open-att_csv"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        assert!(ui.find("agent-file-status-att_rec").is_none(), "{look:?}: nothing to say before a click");
+
+        click(&mut ui, "agent-file-open-att_rec");
+        let mut asked = vec![];
+        while let Ok(cmd) = to_host.try_recv() {
+            if let bridge::ToHost::Download { session_id, attachment, dir } = cmd {
+                asked.push((session_id, attachment.attachment_id, attachment.size, dir.ends_with("AgentOS")));
+            }
+        }
+        assert_eq!(asked, [("ses_1".to_string(), "att_rec".to_string(), 4_812_331, true)], "{look:?}");
+        assert!(read(&mut ui, &|s| matches!(s.downloads.get("att_rec"), Some(Download::Fetching { done: 0, .. }))), "{look:?}");
+        // Progress shows under it as the pieces arrive.
+        from_host.send(bridge::FromHost::DownloadProgress { attachment_id: "att_rec".into(), done: 524_288, size: 4_812_331 }).unwrap();
+        for _ in 0..3 {
+            ui.frame(0.016);
+        }
+        assert!(ui.find("agent-file-status-att_rec").is_some(), "{look:?}: no progress");
+        assert!(read(&mut ui, &|s| matches!(s.downloads.get("att_rec"), Some(Download::Fetching { done: 524_288, .. }))), "{look:?}");
+        click(&mut ui, "agent-file-open-att_rec");
+        assert!(to_host.try_recv().is_err(), "{look:?}: a second click while it downloads asks again");
+    }
+}
+
+/// A saved file opens as is the next time; a script is only shown in its folder; a failure
+/// says why and the next click tries again.
+#[test]
+fn agent_files_open_once_saved() {
+    use crate::agentfile::{Download, Opening};
+    let mut app = demo("agent-files");
+    let (fake, _from_host, mut to_host) = bridge::Bridge::fake();
+    app.bridge = Some(fake);
+    let att = |id: &str, name: &str| Attachment { attachment_id: id.into(), name: name.into(), mime: guess_mime(name).into(), size: 3 };
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+    std::fs::create_dir_all(&base).unwrap();
+    let dir = tempfile::Builder::new().prefix("agentfiles").tempdir_in(&base).unwrap();
+    let saved = crate::agentfile::save_unique(dir.path(), "flaky-runs.csv", b"a,b").unwrap();
+
+    app.open_agent_file("ses_1", &att("att_csv", "flaky-runs.csv"));
+    assert!(matches!(to_host.try_recv(), Ok(bridge::ToHost::Download { .. })));
+    app.apply(bridge::FromHost::Downloaded { attachment_id: "att_csv".into(), result: Ok(saved.clone()) });
+    assert_eq!(app.downloads["att_csv"], Download::Saved(saved.clone()));
+    assert_eq!(std::mem::take(&mut app.open_files), [Opening::Open(saved.clone())]);
+    // Again: the saved copy, not another download.
+    app.open_agent_file("ses_1", &att("att_csv", "flaky-runs.csv"));
+    assert!(to_host.try_recv().is_err());
+    assert_eq!(std::mem::take(&mut app.open_files), [Opening::Open(saved.clone())]);
+    // Deleted since: fetched again.
+    std::fs::remove_file(&saved).unwrap();
+    app.open_agent_file("ses_1", &att("att_csv", "flaky-runs.csv"));
+    assert!(matches!(to_host.try_recv(), Ok(bridge::ToHost::Download { .. })));
+
+    // A script is saved but only shown in its folder.
+    let script = crate::agentfile::save_unique(dir.path(), "fix.sh", b"rm").unwrap();
+    app.open_agent_file("ses_1", &att("att_sh", "fix.sh"));
+    app.apply(bridge::FromHost::Downloaded { attachment_id: "att_sh".into(), result: Ok(script.clone()) });
+    assert_eq!(std::mem::take(&mut app.open_files), [Opening::Reveal(script)]);
+    assert!(app.notice.as_deref().is_some_and(|n| n.contains("saved but not opened")));
+
+    // A failure: the error, then a click asks again.
+    app.open_agent_file("ses_1", &att("att_rec", "Sign-up flow.mp4"));
+    app.apply(bridge::FromHost::Downloaded { attachment_id: "att_rec".into(), result: Err("the connection to the host closed".into()) });
+    assert!(matches!(&app.downloads["att_rec"], Download::Failed(_)));
+    assert_eq!(app.error.as_deref(), Some("Couldn't download Sign-up flow.mp4: the connection to the host closed"));
+    while to_host.try_recv().is_ok() {}
+    app.open_agent_file("ses_1", &att("att_rec", "Sign-up flow.mp4"));
+    assert!(matches!(to_host.try_recv(), Ok(bridge::ToHost::Download { .. })));
+    // An answer nobody asked for (from a host since left) is dropped.
+    app.apply(bridge::FromHost::Downloaded { attachment_id: "att_other".into(), result: Ok(dir.path().join("x")) });
+    assert!(!app.downloads.contains_key("att_other") && app.open_files.is_empty());
+}
+
+/// The transcript asks for the pictures agents sent and their videos' stills, not the
+/// videos or other files themselves.
+#[test]
+fn agent_file_pictures_are_fetched() {
+    let mut app = demo("agent-files");
+    app.images.clear();
+    app.fetch_images();
+    let mut ids: Vec<&String> = app.images.keys().collect();
+    ids.sort();
+    assert_eq!(ids, ["att_rec_poster", "att_shot"]);
+}
+
 /// What you type in a session stays with it while you look at another.
 #[test]
 fn each_session_keeps_its_unsent_message() {

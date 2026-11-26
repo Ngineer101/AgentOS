@@ -67,6 +67,8 @@ struct Transcript: Codable {
 enum TranscriptRow: Identifiable {
     case prompt(seq: Int64, text: String, attachments: [AttachmentInfo], device: String?, ts: Int64)
     case agentMessage(seq: Int64, text: String)
+    /// A file the agent sent: a recording, an image or any other file.
+    case agentFile(seq: Int64, file: AgentFileInfo, ts: Int64)
     case thought(seq: Int64, text: String)
     case tool(ToolRow)
     /// A call that started a subagent, with the steps it took.
@@ -81,6 +83,7 @@ enum TranscriptRow: Identifiable {
         switch self {
         case let .prompt(seq, _, _, _, _): return "e\(seq)"
         case let .agentMessage(seq, _): return "e\(seq)"
+        case let .agentFile(seq, _, _): return "e\(seq)"
         case let .thought(seq, _): return "e\(seq)"
         case let .tool(t): return "t\(t.callId)-\(t.seq)"
         case let .subagent(a): return "a\(a.callId)"
@@ -158,6 +161,13 @@ func formatDuration(ms: Int64) -> String {
     if s < 60 { return "\(s)s" }
     if s < 3600 { return "\(s / 60)m \(s % 60)s" }
     return "\(s / 3600)h \((s % 3600) / 60)m"
+}
+
+/// A video's length as a clock: "0:42", "12:05", "1:02:09".
+func formatClock(ms: Int64) -> String {
+    let s = max(0, Int((Double(ms) / 1000).rounded()))
+    if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
+    return String(format: "%d:%02d", s / 60, s % 60)
 }
 
 /// The first few lines of Markdown as plain text, for a preview.
@@ -267,6 +277,10 @@ func buildRows(_ events: [HostEvent]) -> [TranscriptRow] {
             rows.append(.agentMessage(seq: e.seq, text: p["text"].string ?? ""))
         case EventKind.agentThought:
             rows.append(.thought(seq: e.seq, text: p["text"].string ?? ""))
+        case EventKind.agentFile:
+            if let file = AgentFileInfo(payload: p) {
+                rows.append(.agentFile(seq: e.seq, file: file, ts: e.ts))
+            }
         case EventKind.toolCall:
             let row = toolRow(e)
             if SubagentRun.starts(p) {

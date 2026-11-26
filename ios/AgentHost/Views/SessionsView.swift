@@ -283,6 +283,7 @@ struct SessionsView: View {
         case .side, .config, .paste, .quick, .btw: path = [.session(DemoData.quickSession)]
         case .plain: path = [.session(DemoData.plainSession)]
         case .subagents: path = [.session(DemoData.subagentSession)]
+        case .files: path = [.session(DemoData.filesSession)]
         case .screen, .screenPicker: showScreen = true
         case .notifications, .notificationsOwnKey: path = [.settings, .notifications]
         case .automations, .automationNew: path = [.settings, .automations]

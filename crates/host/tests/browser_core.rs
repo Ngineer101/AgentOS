@@ -269,3 +269,58 @@ async fn a_public_page_opens_through_the_proxy() {
     assert!(format!("{err:#}").contains("network settings"), "{err:#}");
     host.browsers.close_all().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recording_of_the_agents_tab_is_an_mp4() {
+    if !wanted() {
+        return;
+    }
+    let dir = tempdir();
+    let (host, ws) = open(dir.path());
+    let b = &host.browsers;
+    b.agent_navigate("ses_r", &ws, Some("about:blank"), None).await.unwrap();
+    assert!(b.agent_record_stop("ses_r").await.is_err(), "nothing to stop yet");
+    let out = b.agent_record_start("ses_r", &ws).await.expect("record");
+    assert!(out.text.contains("browser_record_stop"), "{}", out.text);
+    assert!(b.agent_record_start("ses_r", &ws).await.is_err(), "one recording at a time");
+
+    // A page that changes: a counter, ten times, with nobody watching.
+    let page = r#"document.body.innerHTML = '<h1 id="n" style="font-size:120px">0</h1>';
+      let i = 0; const t = setInterval(() => { document.getElementById('n').textContent = ++i; if (i == 10) clearInterval(t); }, 150); 'ok'"#;
+    assert_eq!(b.agent_evaluate("ses_r", &ws, page).await.unwrap().text, "ok");
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    // Someone watches for a moment, then leaves: the recording carries on.
+    let tab_id = b.list().browsers.iter().find(|x| x.workspace_id == ws).unwrap().tabs[0].tab_id.clone();
+    let viewer = b.attach(&tab_id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(viewer);
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let started = std::time::Instant::now();
+    let f = b.agent_record_stop("ses_r").await.expect("stop");
+    assert!(started.elapsed() < Duration::from_secs(5), "stopping is quick");
+    assert_eq!((f.width, f.height), BROWSER_DEFAULT_SIZE);
+    assert!(!f.cut);
+    assert!((1_000..4_000).contains(&f.duration_ms), "{} ms", f.duration_ms);
+    assert!(f.poster.as_ref().is_some_and(|p| p.starts_with(&[0xff, 0xd8])), "a JPEG poster");
+    assert!(f.mp4.len() > 1_000 && f.mp4.len() < 2_000_000, "{} bytes", f.mp4.len());
+
+    if std::process::Command::new("ffprobe").arg("-version").output().is_ok() {
+        let path = dir.path().join("r.mp4");
+        std::fs::write(&path, &f.mp4).unwrap();
+        let out = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=codec_name,profile,width,height,nb_read_frames", "-of", "default=nw=1"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+        eprintln!("ffprobe:\n{text}");
+        assert!(out.status.success() && out.stderr.is_empty(), "{text}");
+        assert!(text.contains("codec_name=h264") && text.contains("width=1280") && text.contains("height=800"), "{text}");
+        let frames: u32 = text.lines().find_map(|l| l.strip_prefix("nb_read_frames=")).unwrap().parse().unwrap();
+        // The counter changed ten times; at most 10 pictures a second.
+        assert!((5..=40).contains(&frames), "{frames} frames\n{text}");
+    }
+    // Stopped, the tab's screencast stopped too (nobody watches).
+    assert!(b.agent_record_stop("ses_r").await.is_err());
+    host.browsers.close_all().await;
+}

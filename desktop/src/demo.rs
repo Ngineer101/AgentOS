@@ -691,6 +691,69 @@ fn sent_images(s: &mut App) {
     }
 }
 
+/// ses_1 after the agent sent three files: a recording of its browser tab (with its still),
+/// a screenshot and a CSV. The pictures are the app icon, as with sent images.
+fn agent_files(s: &mut App) {
+    session(s);
+    s.approvals.clear();
+    if let Some(i) = s.info.as_mut() {
+        i.protocol_version = 13;
+    }
+    let att = |id: &str, name: &str, mime: &str, size: u64| Attachment { attachment_id: id.into(), name: name.into(), mime: mime.into(), size };
+    let files = [
+        AgentFile {
+            attachment: att("att_rec", "Sign-up flow.mp4", "video/mp4", 4_812_331),
+            kind: AgentFileKind::Recording,
+            caption: Some("Here is the sign-up flow after the fix: the error banner no longer flashes before the form loads.".into()),
+            poster: Some(att("att_rec_poster", "Sign-up flow.jpg", "image/jpeg", 61_204)),
+            duration_ms: Some(42_400),
+            width: Some(1280),
+            height: Some(800),
+            tool_call_id: Some("tb1".into()),
+        },
+        AgentFile {
+            attachment: att("att_shot", "Settings at 1280 px.png", "image/png", 284_102),
+            kind: AgentFileKind::File,
+            caption: Some("The settings screen fits again at 1280 px.".into()),
+            poster: None,
+            duration_ms: None,
+            width: Some(512),
+            height: Some(512),
+            tool_call_id: Some("tb2".into()),
+        },
+        AgentFile {
+            attachment: att("att_csv", "flaky-runs.csv", "text/csv", 18_200),
+            kind: AgentFileKind::File,
+            caption: Some("Every CI run of the resume test this week, failures marked.".into()),
+            poster: None,
+            duration_ms: None,
+            width: None,
+            height: None,
+            tool_call_id: Some("tb3".into()),
+        },
+    ];
+    let tr = s.transcripts.entry("ses_1".into()).or_default();
+    let seq = tr.last_seq;
+    tr.events.push(ev("ses_1", seq + 1, 60_000, EventType::Prompt, json!({"text": "Show me the sign-up flow working, and the settings screen."})));
+    tr.events.push(ev("ses_1", seq + 2, 62_000, EventType::ToolCall, json!({"tool_call_id": "tb0", "name": "Open localhost:5173/signup", "kind": "fetch", "source": "sandbox"})));
+    tr.events.push(ev("ses_1", seq + 3, 63_000, EventType::ToolResult, json!({"tool_call_id": "tb0", "status": "completed"})));
+    // Each file follows the gateway call that sent it, as the host records them.
+    let mut n = seq + 3;
+    for (i, f) in files.iter().enumerate() {
+        let (at, call) = (70_000 + i as i64 * 2_000, f.tool_call_id.clone().unwrap_or_default());
+        tr.events.push(ev("ses_1", n + 1, at, EventType::ToolCall, json!({"tool_call_id": call, "name": "send_file", "tool_name": "agenthost__send_file", "kind": "other", "source": "mcp", "arguments": {"path": f.attachment.name}})));
+        tr.events.push(ev("ses_1", n + 2, at + 300, EventType::ToolResult, json!({"tool_call_id": call, "status": "completed"})));
+        tr.events.push(ev("ses_1", n + 3, at + 400, EventType::AgentFile, serde_json::to_value(f).unwrap_or_default()));
+        n += 3;
+    }
+    tr.events.push(ev("ses_1", n + 1, 80_000, EventType::TurnEnd, json!({"stop_reason": "end_turn"})));
+    tr.last_seq = n + 1;
+    for id in ["att_rec_poster", "att_shot"] {
+        let shown = s.image_cache.as_ref().map(|c| crate::model::SentImage::Ready(c.load(crate::brand::APP_ICON_PNG)));
+        s.images.insert(id.into(), shown.unwrap_or(crate::model::SentImage::Loading));
+    }
+}
+
 fn pairing(s: &mut App, confirm: bool) {
     base(s);
     s.settings = Some(Tab::Devices);
@@ -1309,6 +1372,17 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("sent-image-viewer", |s| {
         sent_images(s);
         s.viewing = Some("att_s1".into());
+    }),
+    // Files the agent sent: a recording, a screenshot and a CSV; `agent-files-downloads`
+    // has the recording downloading, the screenshot saved and the CSV failed.
+    ("agent-files", agent_files),
+    ("agent-files-downloads", |s| {
+        use crate::agentfile::Download;
+        agent_files(s);
+        let home = std::env::var("HOME").unwrap_or_default();
+        s.downloads.insert("att_rec".into(), Download::Fetching { name: "Sign-up flow.mp4".into(), done: 1_572_864, size: 4_812_331 });
+        s.downloads.insert("att_shot".into(), Download::Saved(format!("{home}/Downloads/AgentOS/Settings at 1280 px.png").into()));
+        s.downloads.insert("att_csv".into(), Download::Failed("the connection to the host closed".into()));
     }),
     ("connector-search", |s| {
         base(s);

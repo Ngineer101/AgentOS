@@ -2240,6 +2240,16 @@ impl Renderer {
                 println!("\x1b[2m(btw) {}\x1b[0m", p["text"].as_str().unwrap_or(""));
             }
             EventType::SideEnd => {}
+            EventType::AgentFile => {
+                if let Ok(f) = serde_json::from_value::<AgentFile>(p.clone()) {
+                    let what = if f.kind == AgentFileKind::Recording { "a recording" } else { "a file" };
+                    let kb = f.attachment.size.div_ceil(1024);
+                    println!("[sent you {what}] {} ({kb} KB, {})", f.attachment.name, f.attachment.attachment_id);
+                    if let Some(c) = f.caption.filter(|c| !c.is_empty()) {
+                        println!("  {}", first_lines(&c, 3));
+                    }
+                }
+            }
             EventType::SubagentMessage => {
                 // A subagent's words, under its call (one level: subagents
                 // don't start subagents).

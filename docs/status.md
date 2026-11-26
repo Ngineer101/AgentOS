@@ -270,9 +270,37 @@ is refused. The host listened on no TCP port throughout.
   form, the panel gets frames and typing, localhost refused, sign-ins outlive
   a restart and clearing forgets them, example.com through the proxy) but only
   runs with `AGENTHOST_TEST_BROWSER=1` outside an agent sandbox (Chromium
-  can't start inside one), and **has not been run yet**. Not seen as pixels,
+  can't start inside one); it passes against Chromium 158 on Linux. Not seen as pixels,
   not run on macOS. Not built: reaching a dev server in a session's sandbox
   (it has its own network namespace), iOS, file uploads, cursor shapes, IME.
+
+- **Files from agents, and recordings of the browser** (26 Nov 2026,
+  protocol 13). `agenthost__send_file` sends the user a file from the
+  session's folder, its temp folder or a quick task's scratch folder
+  (resolved through links; anything else is refused), up to 25 MB, without
+  asking. `agenthost__browser_record_start` / `_stop` record the session's
+  browser tab: the tab's screencast runs while recording (watched or not),
+  a thread decodes the JPEG frames, encodes H.264 with OpenH264 (built from
+  source; screen-content mode, at most 10 pictures a second, ~0.9 Mbps, a key
+  frame every 5 s) and `crate::mp4` writes the MP4 (index first, variable
+  frame rate). At most 3 minutes; it follows the agent to another tab, and is
+  thrown away if the session ends first. "Record the browser" in Settings
+  defaults to not asking and can be set to ask. Both become an `agent.file`
+  event (`AgentFile`: the attachment, kind, caption, a JPEG poster, length,
+  size) kept with the session's attachments and read with `attachment.read`,
+  so paired devices get them too (they still can't open the live browser).
+  Desktop: inline images, a poster with a play glyph for videos, chips for
+  the rest; a click saves to `~/Downloads/AgentOS` and opens it with the
+  system's opener (only documents and media open by themselves). iOS: inline
+  images, AVKit `VideoPlayer` for recordings, QuickLook for files, ShareLink.
+  Tested here: the muxer, the encoder end to end (ffprobe reads the MP4 as
+  H.264 with the expected frames and length), path rules, the desktop items
+  headless in both looks and their download loop. On the host (26 Nov):
+  `tests/agent_files.rs` (send_file through the gateway with the fake agent:
+  sent, read back, refused outside its folders and through a link) and a
+  real-Chromium recording in `tests/browser_core.rs` (1280×800 H.264 that
+  ffprobe reads, a viewer coming and going) pass. iOS **never compiled**;
+  no pixels seen on desktop or iOS; not played on a real iPhone.
 
 ## Known issues
 
