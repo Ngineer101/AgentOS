@@ -3,6 +3,7 @@
 //! sheet (macOS) or dialog (GNOME) like New Session. Each run is an ordinary session, opened
 //! from its row.
 
+use crate::look::MEDIUM;
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
 use crate::model::{auto_approve_title, login_key, outcome_word, run_trigger_word, span_label, trigger_line, App, Menu, Preset, TriggerKind, WEEKDAYS};
@@ -92,7 +93,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
             .gap(10.0)
             .px(24.0)
             .child(icon(&ic::CLOCK, 40.0).color(t.text3))
-            .child(text("Update AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("Update AgentOS").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
             .child(t.small("This host has no automations. Update agenthostd to run sessions on a schedule or from a webhook.").wrap().align(rune::Align::Center).max_w(420.0));
     }
     if s.automations.is_empty() {
@@ -143,7 +144,7 @@ fn empty(t: &Theme) -> El {
         .gap(10.0)
         .px(24.0)
         .child(icon(&ic::CLOCK, 40.0).color(t.text3))
-        .child(text("No Automations").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+        .child(text("No Automations").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
         .child(
             t.small("An automation is a session that starts by itself: on a schedule, when a webhook arrives (a Sentry alert, a GitHub event), or when you run it. Each run is a session you can open and ask follow-up questions in.")
                 .wrap()
@@ -162,7 +163,7 @@ fn list_row(s: &App, t: &Theme, a: &Automation, selected: bool, now: i64) -> El 
         .grow(1.0)
         .min_w(0.0)
         .gap(1.0)
-        .child(text(a.name.clone()).font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(ink).truncate())
+        .child(text(a.name.clone()).font(TextStyle { weight: if selected && !mac { MEDIUM } else { 400.0 }, ..t.font() }).color(ink).truncate())
         .child(text(trigger_line(a)).font(t.font_small()).color(sub).truncate())
         .child(text(status_line(s, a, now)).font(t.font_small()).color(t.text3).truncate());
     let ids = id.clone();
@@ -214,7 +215,7 @@ fn detail(s: &App, t: &Theme, a: &Automation, now: i64) -> El {
                 .grow(1.0)
                 .min_w(0.0)
                 .gap(2.0)
-                .child(text(a.name.clone()).key("automation-name").font(TextStyle::new(15.0, t.w_bold)).color(t.text).truncate())
+                .child(text(a.name.clone()).key("automation-name").font(TextStyle::new(15.0, MEDIUM)).color(t.text).truncate())
                 .child(t.small(format!("{} · {}", trigger_line(a), place_line(s, a))).truncate()),
         )
         .child(actions);
@@ -357,7 +358,7 @@ fn run_row(s: &App, t: &Theme, r: &AutomationRun, now: i64) -> El {
         .gap(6.0)
         .center_y()
         .min_w(0.0)
-        .child(text(outcome_word(r.outcome)).font(TextStyle { weight: t.w_bold, ..t.font() }).color(if r.outcome == RunOutcome::Running { t.text } else { outcome_color(t, r.outcome) }))
+        .child(text(outcome_word(r.outcome)).font(TextStyle { weight: MEDIUM, ..t.font() }).color(if r.outcome == RunOutcome::Running { t.text } else { outcome_color(t, r.outcome) }))
         .child(text(format!("· {}", meta.join(" · "))).font(t.font_small()).color(t.text2).truncate().shrink());
     let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(head);
     if let Some(d) = r.detail.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -816,7 +817,7 @@ pub fn editor(s: &App, t: &Theme) -> El {
                     .px(20.0)
                     .pt(18.0)
                     .pb(6.0)
-                    .child(text(title).font(TextStyle::new(15.0, 600.0)).color(t.text))
+                    .child(text(title).font(TextStyle::new(15.0, MEDIUM)).color(t.text))
                     .child(text("A session that starts by itself. Each run's transcript is its output.").font(TextStyle::new(12.0, 400.0)).color(t.text2)),
             )
             .child(col().w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(editor_body(s, t).px(20.0).pt(10.0).pb(4.0)))
@@ -830,7 +831,7 @@ pub fn editor(s: &App, t: &Theme) -> El {
         .px(8.0)
         .center_y()
         .child(t.button("Cancel", Btn::Default, None, close).key("cancel-automation"))
-        .child(row().grow(1.0).justify_center().child(text(title).font(TextStyle::new(14.5, 700.0)).color(t.text)))
+        .child(row().grow(1.0).justify_center().child(text(title).font(TextStyle::new(14.5, MEDIUM)).color(t.text)))
         .child(t.button(save_label, Btn::Primary, None, |s| s.save_automation()).key("save-automation").default_button());
     let mut body = editor_body(s, t).px(24.0).pt(12.0).pb(24.0);
     body = body.child(t.small("Ctrl+Enter saves").font(TextStyle::new(13.0, 400.0)));
@@ -888,7 +889,7 @@ pub fn confirm(s: &App, t: &Theme) -> Option<El> {
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, cancel)
-        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
+        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap())
         .child(t.small(msg).wrap())
         .child(buttons);
     panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };

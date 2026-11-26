@@ -2,6 +2,7 @@
 //! tab per side conversation. Closing a tab hides it here only: the conversation stays in
 //! the session's events.
 
+use crate::look::MEDIUM;
 use crate::icons as ic;
 use crate::look::Theme;
 use crate::model::{App, SideThread};
@@ -85,7 +86,7 @@ fn tab(t: &Theme, session: &str, side_id: &str, title: &str, on: bool, busy: boo
             }
         })
         .child(glyph)
-        .child(text(clip(title, 60)).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, if on && !mac { 700.0 } else { 400.0 })).color(if on { t.text } else { t.text2 }).truncate().shrink().min_w(0.0));
+        .child(text(clip(title, 60)).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, if on && !mac { MEDIUM } else { 400.0 })).color(if on { t.text } else { t.text2 }).truncate().shrink().min_w(0.0));
     if side_id != PENDING {
         r = r.child(
             row()

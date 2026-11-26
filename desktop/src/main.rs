@@ -39,6 +39,7 @@ fn setup(s: &mut App, waker: Waker) {
         s.collapsed = p.collapsed;
         s.sidebar_w = p.sidebar_w.map(|w| w.clamp(model::SIDEBAR_MIN_W, model::SIDEBAR_MAX_W));
         s.panel_w = p.panel_w;
+        s.seen = p.seen;
         s.save_prefs = true;
     }
 }
@@ -51,8 +52,12 @@ fn hostname() -> String {
 
 fn poll(s: &mut App, _clock: f64, tx: &mut Tx) -> bool {
     let changed = s.drain();
+    // A terminal you asked for wins over the composer of the session it opened in.
+    let prompt = s.take_prompt_focus();
     if s.take_terminal_focus() {
         tx.focus("term-view", false);
+    } else if prompt {
+        tx.focus_when_shown("prompt", false);
     }
     s.fetch_images();
     s.browser_tick();
@@ -119,7 +124,14 @@ pub(crate) fn app() -> rune::App<App> {
     // macOS: content under a transparent titlebar, the traffic lights centred in the 52 pt
     // toolbar band. GNOME keeps the window manager's frame.
     let chrome = if look.mac() { Chrome { full_size_content: true, traffic_lights: Some((20.0, 20.0)), drag_regions: true } } else { Chrome::DEFAULT };
-    let families = if look.mac() { (".SF NS, SF Pro Text, Inter", "ui-monospace, SF Mono, Menlo") } else { ("Adwaita Sans, Cantarell, Inter", "Adwaita Mono, ui-monospace, monospace") };
+    let (sans, mono) = if look.mac() { (".SF NS, SF Pro Text, Inter", "ui-monospace, SF Mono, Menlo") } else { ("Adwaita Sans, Cantarell, Inter", "Adwaita Mono, ui-monospace, monospace") };
+    // `AGENTHOST_DESKTOP_FONT="Liberation Sans"` puts an installed family first, the look's
+    // own after it for anything it lacks. Read once at launch.
+    let sans: &'static str = match std::env::var("AGENTHOST_DESKTOP_FONT").ok().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()) {
+        Some(f) => Box::leak(format!("{f}, {sans}").into_boxed_str()),
+        None => sans,
+    };
+    let families = (sans, mono);
     let mut app = rune::App::new(AppSpec {
         setup: Some(setup),
         poll: Some(poll),

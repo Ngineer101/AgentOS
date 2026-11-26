@@ -3,6 +3,7 @@
 //! small floating panels under the toolbar's trailing end; GNOME draws AdwToast pills at the
 //! bottom centre. System notifications are separate and stay.
 
+use crate::look::MEDIUM;
 use crate::icons as ic;
 use crate::look::Theme;
 use crate::model::{App, Screen, ToastAction, ToastKind};
@@ -164,7 +165,7 @@ fn gnome_toast(t: &Theme, sh: &Shown) -> El {
                 .hover(Color::WHITE.alpha(0.08))
                 .press(Color::WHITE.alpha(0.14))
                 .on_press_tx(act(sh))
-                .child(text(a).font(TextStyle::new(14.5, 700.0)).color(t.text)),
+                .child(text(a).font(TextStyle::new(14.5, MEDIUM)).color(t.text)),
         );
     }
     r.child(

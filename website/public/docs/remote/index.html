@@ -57,6 +57,12 @@
 <p>Or use Settings → Devices → Pair iPhone in the desktop app. Scan the code in the iPhone app and confirm the short code shown on both screens. A pairing code works once and expires after 2 minutes.</p>
 <p>Paired devices are listed under Settings → Devices, where you can rename or revoke them. A revoked phone deletes its keys and cached transcripts.</p>
 
+<h3 id="laptop">The desktop app on another computer</h3>
+<p>A laptop can drive your host too. Install the desktop app on its own, without a host, CLI or background service. It needs only <a href="https://rustup.rs">Rust</a>:</p>
+<pre><code><span class="p">$ </span>git clone https://github.com/Ngineer101/AgentOS.git &amp;&amp; cd AgentOS
+<span class="p">$ </span>scripts/install.sh --desktop-only</code></pre>
+<p>Open AgentOS, choose Pair with a Remote Host…, paste the link <code>agenthost device pair</code> prints on the host and compare the 6-digit code. The laptop reconnects at every launch. It gets sessions and approvals; workspaces, connectors, devices and automations stay managed on the host. Run the same command again to update the app.</p>
+
 <h2 id="ios">Build the iPhone app</h2>
 <p>There is no App Store build. You need an Apple Silicon Mac with Xcode 15 or newer, <a href="https://rustup.rs">rustup</a> and <a href="https://github.com/yonaskolb/XcodeGen">XcodeGen</a> (<code>brew install xcodegen</code>).</p>
 <pre><code><span class="p">$ </span>cd ios

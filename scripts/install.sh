@@ -3,6 +3,7 @@
 #
 #   scripts/install.sh                     build, install and (re)start everything
 #   scripts/install.sh --relay wss://…     also set the relay for phone pairing (remembered)
+#   scripts/install.sh --desktop-only      only the desktop app, to pair with a host on another machine
 #   scripts/install.sh --restart           restart the host service only (e.g. after scripts/dev.sh)
 #   scripts/install.sh --uninstall         remove the service, binaries and app; keeps your data
 #
@@ -17,6 +18,11 @@
 # The host starts at login and restarts if it crashes. Log: <data dir>/logs/host.log
 # The relay comes from --relay, else AGENTHOST_RELAY_URL, else the last install, else
 # the URL scripts/dev.sh remembered (.dev/relay-url).
+#
+# --desktop-only installs just the app: no host, CLI, adapters or service, and it needs
+# only Rust. With no host on this computer the app opens on its offline screen; "Pair with
+# a Remote Host…" there pairs it with your host through the relay (`agenthost device pair`
+# on the host shows the link and code). Run it again to update the app.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,9 +32,10 @@ while (( $# )); do
   case "$a" in
     --relay) relay="${1:?--relay needs a URL}"; shift ;;
     --relay=*) relay="${a#--relay=}" ;;
+    --desktop-only) mode=desktop ;;
     --restart) mode=restart ;;
     --uninstall) mode=uninstall ;;
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -68,14 +75,17 @@ put() {
   mv -f "$tmp" "$dst"
 }
 
-desktop_running() { pgrep -x agenthost-desktop >/dev/null; }
+# By command line: Linux cuts process names to 15 characters, so -x never matched the
+# 17-character agenthost-desktop there.
+desktop_pat='(^|/)agenthost-desktop( |$)'
+desktop_running() { pgrep -f "$desktop_pat" >/dev/null; }
 
 stop_desktop() {
   desktop_running || return 0
   echo "==> quitting the desktop app"
-  pkill -TERM -x agenthost-desktop || true
+  pkill -TERM -f "$desktop_pat" || true
   for _ in $(seq 50); do desktop_running || return 0; sleep 0.1; done
-  pkill -KILL -x agenthost-desktop 2>/dev/null || true
+  pkill -KILL -f "$desktop_pat" 2>/dev/null || true
 }
 
 stop_service() {
@@ -120,6 +130,75 @@ start_service() {
   tail -n 20 "$log" >&2 2>/dev/null || true
 }
 
+# The desktop app: the macOS bundle, or the Linux binary with its launcher entry and icon.
+install_app() {
+  if [[ "$os" == Darwin ]]; then
+    echo "==> installing $app"
+    rm -rf "$old_app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    cp "$root/desktop/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+    put "$root/desktop/target/release/agenthost-desktop" "$app/Contents/MacOS/agenthost-desktop"
+    # The desktop looks for agenthostd next to itself before PATH (apps get a bare PATH).
+    # With --desktop-only there is none; the app then offers pairing with a remote host.
+    if [[ -x "$bin_dir/agenthostd" ]]; then
+      ln -sfn "$bin_dir/agenthostd" "$app/Contents/MacOS/agenthostd"
+    else
+      rm -f "$app/Contents/MacOS/agenthostd"
+    fi
+    cat >"$app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>AgentOS</string>
+  <key>CFBundleDisplayName</key><string>AgentOS</string>
+  <key>CFBundleIdentifier</key><string>dev.agenthost.desktop</string>
+  <key>CFBundleExecutable</key><string>agenthost-desktop</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>AgentOS records your voice to turn it into text.</string>
+</dict>
+</plist>
+EOF
+    # Ad-hoc signature with a stable identifier, so macOS can attach permissions to the app.
+    codesign --force --sign - --identifier dev.agenthost.desktop "$app" >/dev/null 2>&1 || true
+    # Finder and the Dock cache icons: tell Launch Services the bundle changed.
+    touch "$app"
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" >/dev/null 2>&1 || true
+  else
+    echo "==> installing desktop app"
+    put "$root/desktop/target/release/agenthost-desktop" "$bin_dir/agenthost-desktop"
+    mkdir -p "$(dirname "$desktop_file")" "$(dirname "$icon_file")"
+    cp "$root/desktop/assets/app-icon.png" "$icon_file"
+    cat >"$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=AgentOS
+Comment=Run coding agents on this computer
+Exec=$bin_dir/agenthost-desktop
+Icon=agenthost
+Terminal=false
+Categories=Development;
+EOF
+  fi
+}
+
+# Reopen the app if the install quit it, else say where to find it.
+reopen_or_say_done() {
+  if (( was_running )); then
+    echo "==> reopening the desktop app"
+    if [[ "$os" == Darwin ]]; then open "$app"; else nohup "$bin_dir/agenthost-desktop" >/dev/null 2>&1 & fi
+  elif [[ "$os" == Darwin ]]; then
+    echo "==> done. Open AgentOS from ~/Applications (or: open \"$app\")"
+  else
+    echo "==> done. Open AgentOS from your app launcher (or run agenthost-desktop)"
+  fi
+}
+
 if [[ "$mode" == uninstall ]]; then
   stop_desktop
   stop_service
@@ -140,6 +219,21 @@ fi
 if [[ "$mode" == restart ]]; then
   stop_service
   start_service
+  exit 0
+fi
+
+if [[ "$mode" == desktop ]]; then
+  echo "==> building desktop (release)"
+  cargo build --release --manifest-path "$root/desktop/Cargo.toml"
+  was_running=0
+  desktop_running && was_running=1
+  stop_desktop
+  install_app
+  if [[ ! -x "$bin_dir/agenthostd" ]]; then
+    echo "==> to connect: on your host run \`agenthost device pair\` (or Settings → Devices there),"
+    echo "    then open AgentOS here, choose \"Pair with a Remote Host…\" and paste the link"
+  fi
+  reopen_or_say_done
   exit 0
 fi
 
@@ -180,37 +274,7 @@ run_args=("$bin_dir/agenthostd" run)
 [[ -n "$relay" ]] && run_args+=(--relay-url "$relay")
 
 if [[ "$os" == Darwin ]]; then
-  echo "==> installing $app"
-  rm -rf "$old_app"
-  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  cp "$root/desktop/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
-  put "$root/desktop/target/release/agenthost-desktop" "$app/Contents/MacOS/agenthost-desktop"
-  # The desktop looks for agenthostd next to itself before PATH (apps get a bare PATH).
-  ln -sfn "$bin_dir/agenthostd" "$app/Contents/MacOS/agenthostd"
-  cat >"$app/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>AgentOS</string>
-  <key>CFBundleDisplayName</key><string>AgentOS</string>
-  <key>CFBundleIdentifier</key><string>dev.agenthost.desktop</string>
-  <key>CFBundleExecutable</key><string>agenthost-desktop</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>AgentOS records your voice to turn it into text.</string>
-</dict>
-</plist>
-EOF
-  # Ad-hoc signature with a stable identifier, so macOS can attach permissions to the app.
-  codesign --force --sign - --identifier dev.agenthost.desktop "$app" >/dev/null 2>&1 || true
-  # Finder and the Dock cache icons: tell Launch Services the bundle changed.
-  touch "$app"
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" >/dev/null 2>&1 || true
+  install_app
 
   echo "==> installing launch agent $plist"
   mkdir -p "$(dirname "$plist")"
@@ -240,20 +304,7 @@ $args_xml  </array>
 </plist>
 EOF
 else
-  echo "==> installing desktop app"
-  put "$root/desktop/target/release/agenthost-desktop" "$bin_dir/agenthost-desktop"
-  mkdir -p "$(dirname "$desktop_file")" "$(dirname "$icon_file")"
-  cp "$root/desktop/assets/app-icon.png" "$icon_file"
-  cat >"$desktop_file" <<EOF
-[Desktop Entry]
-Type=Application
-Name=AgentOS
-Comment=Run coding agents on this computer
-Exec=$bin_dir/agenthost-desktop
-Icon=agenthost
-Terminal=false
-Categories=Development;
-EOF
+  install_app
 
   echo "==> installing systemd user service $unit"
   mkdir -p "$unit_dir"
@@ -288,11 +339,4 @@ if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
   echo "note: $bin_dir is not on your PATH; add it to use the AgentOS CLI (agenthost)"
 fi
 
-if (( was_running )); then
-  echo "==> reopening the desktop app"
-  if [[ "$os" == Darwin ]]; then open "$app"; else nohup "$bin_dir/agenthost-desktop" >/dev/null 2>&1 & fi
-elif [[ "$os" == Darwin ]]; then
-  echo "==> done. Open AgentOS from ~/Applications (or: open \"$app\")"
-else
-  echo "==> done. Open AgentOS from your app launcher (or run agenthost-desktop)"
-fi
+reopen_or_say_done

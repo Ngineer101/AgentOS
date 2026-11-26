@@ -461,11 +461,21 @@ pub fn sent_images(payload: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The composer chip's picture of an attached image, in points.
+pub const PREVIEW_PT: f32 = 32.0;
+
+/// Images the app decodes itself (not HEIC): those get a picture in the composer.
+fn name_decodes(name: &str) -> bool {
+    matches!(guess_mime(name), "image/png" | "image/jpeg" | "image/gif" | "image/webp")
+}
+
 /// A file picked for the next message.
 pub struct PendingFile {
     pub local_id: u64,
     pub name: String,
     pub state: FileState,
+    /// An image's picture, for the composer's chip: which pasted image is which.
+    pub preview: Option<rune::Image>,
 }
 
 pub enum FileState {
@@ -571,6 +581,9 @@ pub struct App {
     /// The session whose message `prompt` holds, and the unsent messages of the others:
     /// each session keeps what you typed in it while you look at another.
     pub prompt_for: Option<String>,
+    /// A session was just opened: give its composer the keyboard once it shows, whatever
+    /// had it (the sidebar row clicked, the sheet's Start button).
+    pub prompt_focus_wanted: bool,
     pub drafts: HashMap<String, TextEdit>,
     pub ws_path: TextEdit,
     pub custom_host: TextEdit,
@@ -729,6 +742,9 @@ pub struct App {
     pub save_prefs: bool,
     /// The sidebar's width as dragged by its edge; `None` is the look's own.
     pub sidebar_w: Option<f32>,
+    /// Per session, the newest event seen while it was open (see [`App::unread`]). `None`
+    /// until the first session list, which marks every session seen so nothing starts unread.
+    pub seen: Option<HashMap<String, i64>>,
 }
 
 /// A sidebar group shows this many sessions until "Show N more".
@@ -794,6 +810,7 @@ pub fn init() -> App {
         expanded: HashSet::new(),
         prompt: TextEdit::new(""),
         prompt_for: None,
+        prompt_focus_wanted: false,
         drafts: HashMap::new(),
         images: HashMap::new(),
         image_cache: None,
@@ -884,6 +901,7 @@ pub fn init() -> App {
         jump_held: false,
         save_prefs: false,
         sidebar_w: None,
+        seen: None,
     }
 }
 
@@ -1098,13 +1116,13 @@ impl App {
         l
     }
 
-    /// Sessions as the sidebar lists them under Workspaces: workspaces in order with Quick
-    /// tasks first, newest first inside each, filtered by the search field. Pinned sessions
-    /// are in the Pinned section instead.
+    /// Sessions as the sidebar lists them under Workspaces: Quick tasks first, then the
+    /// rest by name so groups stay put while agents work, newest first inside each,
+    /// filtered by the search field. Pinned sessions are in the Pinned section instead.
     pub fn sidebar_groups(&self) -> Vec<(&Workspace, Vec<&Session>)> {
         let q = self.search_query();
         let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
-        ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
+        ws.sort_by_cached_key(|w| (w.kind != WorkspaceKind::Scratch, w.name.to_lowercase(), w.workspace_id.clone()));
         let mut out = vec![];
         for w in ws {
             let mut list: Vec<&Session> = self
@@ -1577,6 +1595,8 @@ impl App {
     /// Open a session: subscribe from what we already have, so nothing is lost
     /// or repeated when switching or reconnecting.
     pub fn open_session(&mut self, id: &str) {
+        // What arrived in the session being left was on screen.
+        self.mark_seen(false);
         if self.screen == Screen::Notes {
             self.save_note();
         }
@@ -1588,11 +1608,63 @@ impl App {
         self.swap_draft(id);
         self.screen = Screen::Session(id.to_string());
         self.prompt.focused = true;
+        self.prompt_focus_wanted = true;
         if self.agent_open.as_ref().is_some_and(|(s, _)| s != id) {
             self.agent_open = None;
         }
         self.ensure_subscribed(id);
         self.files_sync();
+        self.mark_seen(false);
+    }
+
+    /// A session was just opened and its composer is what should take the keyboard.
+    pub fn take_prompt_focus(&mut self) -> bool {
+        let want = std::mem::take(&mut self.prompt_focus_wanted);
+        want && matches!(&self.screen, Screen::Session(id) if self.session(id).is_some_and(|x| !x.state.is_terminal() && x.archived_at.is_none()))
+    }
+
+    /// The agent finished a turn since you last had the session open: its dot says so until
+    /// you open it.
+    pub fn unread(&self, x: &Session) -> bool {
+        if Status::of(x.state) != Status::YourTurn || matches!(&self.screen, Screen::Session(id) if *id == x.session_id) {
+            return false;
+        }
+        let Some(seen) = &self.seen else { return false };
+        x.last_seq > seen.get(&x.session_id).copied().unwrap_or(0)
+    }
+
+    /// Mark the open session seen up to its newest event, remembered between launches. The
+    /// first full session list (`listed`) ever marks every session seen.
+    pub(crate) fn mark_seen(&mut self, listed: bool) {
+        if self.seen.is_none() && !listed {
+            return;
+        }
+        let mut changed = false;
+        let seen = self.seen.get_or_insert_with(|| {
+            changed = true;
+            self.sessions.iter().map(|x| (x.session_id.clone(), x.last_seq)).collect()
+        });
+        if let Screen::Session(id) = &self.screen {
+            // The list's number, or the transcript's when events have come in since.
+            let newest = self.sessions.iter().find(|x| &x.session_id == id).map(|x| x.last_seq).max(self.transcripts.get(id).map(|t| t.last_seq));
+            if let Some(newest) = newest {
+                let at = seen.entry(id.clone()).or_insert(0);
+                if *at < newest {
+                    *at = newest;
+                    changed = true;
+                }
+            }
+        }
+        if changed && self.save_prefs {
+            // Kept across hosts (a paired one and this computer's); only a long history is
+            // cut back to the sessions listed now.
+            if seen.len() > 2000 {
+                seen.retain(|id, _| self.sessions.iter().any(|x| &x.session_id == id));
+            }
+            let mut p = crate::prefs::load();
+            p.seen = Some(seen.clone());
+            crate::prefs::save(&p);
+        }
     }
 
     /// Put the composer's text away with its session and bring back `id`'s.
@@ -1764,7 +1836,10 @@ impl App {
             }
             let local_id = self.next_local_id;
             self.next_local_id += 1;
-            list.push(PendingFile { local_id, name, state: FileState::Uploading });
+            // Read and decoded off the UI thread; formats it can't decode keep the plain chip.
+            let preview = self.image_cache.as_ref().filter(|_| name_decodes(&name)).map(|c| c.file(p, PREVIEW_PT, 2.0));
+            let list = self.files.entry(id.clone()).or_default();
+            list.push(PendingFile { local_id, name, state: FileState::Uploading, preview });
             if let Some(b) = &self.bridge {
                 b.send(crate::bridge::ToHost::Upload { local_id, path: p.clone() });
             }
@@ -1799,7 +1874,7 @@ impl App {
             self.notice = Some(format!("That image is too large: files can be up to {} MB.", MAX_ATTACHMENT_BYTES / (1024 * 1024)));
             return;
         }
-        let list = self.files.entry(id).or_default();
+        let list = self.files.entry(id.clone()).or_default();
         if list.len() >= MAX_ATTACHMENTS_PER_PROMPT {
             self.notice = Some(format!("A message can carry up to {MAX_ATTACHMENTS_PER_PROMPT} files."));
             return;
@@ -1808,7 +1883,9 @@ impl App {
         let name = pasted_image_name(&taken);
         let local_id = self.next_local_id;
         self.next_local_id += 1;
-        list.push(PendingFile { local_id, name: name.clone(), state: FileState::Uploading });
+        let preview = self.image_cache.as_ref().map(|c| c.load(data.clone()));
+        let list = self.files.entry(id).or_default();
+        list.push(PendingFile { local_id, name: name.clone(), state: FileState::Uploading, preview });
         if let Some(b) = &self.bridge {
             b.send(crate::bridge::ToHost::UploadBytes { local_id, name, mime: mime.to_string(), data });
         }
@@ -2127,6 +2204,7 @@ impl App {
                 (Tag::Sessions, Ok(v)) => {
                     let all: Vec<Session> = parse(v).unwrap_or_default();
                     self.sessions = all.into_iter().filter(|s| s.archived_at.is_none()).collect();
+                    self.mark_seen(true);
                 }
                 (Tag::Archived, Ok(v)) => {
                     let mut all: Vec<Session> = parse(v).unwrap_or_default();
@@ -3037,6 +3115,7 @@ impl App {
             Some(x) => *x = s,
             None => self.sessions.push(s),
         }
+        self.mark_seen(false);
     }
 
     fn on_note(&mut self, n: agenthost_proto::jsonrpc::Notification) {

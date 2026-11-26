@@ -349,8 +349,8 @@ final class AppModel: ObservableObject {
         closedSides.insert(sideId)
     }
 
-    /// Sessions grouped by workspace: Quick tasks first, then most recent
-    /// activity first.
+    /// Sessions grouped by workspace: Quick tasks first, then by name so groups
+    /// stay put while agents work; newest first inside each.
     var groupedSessions: [SessionGroup] {
         let listed = sessions.filter { !archiving.contains($0.sessionId) }
         let groups = Dictionary(grouping: listed, by: { $0.workspaceId })
@@ -365,7 +365,9 @@ final class AppModel: ObservableObject {
             .sorted {
                 let q0 = isQuickTasks($0.workspaceId), q1 = isQuickTasks($1.workspaceId)
                 if q0 != q1 { return q0 }
-                return ($0.sessions.first?.updatedAt ?? 0) > ($1.sessions.first?.updatedAt ?? 0)
+                let order = $0.workspaceName.localizedStandardCompare($1.workspaceName)
+                if order != .orderedSame { return order == .orderedAscending }
+                return $0.workspaceId < $1.workspaceId
             }
     }
 

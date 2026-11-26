@@ -84,7 +84,9 @@ pairing once, reconnecting on its own, keeping its keys in `remote.json`
 (`$AGENTHOST_REMOTE` to choose the file, the same one the CLI's `--state`
 writes). A paired app gets no policy rights by design: workspaces,
 connectors, devices and webhook automations are read-only over the tunnel
-and stay managed from the host's own desktop.
+and stay managed from the host's own desktop. On a computer that only
+connects, `scripts/install.sh --desktop-only` installs the app without a host,
+CLI or background service.
 
 ## Notifications
 

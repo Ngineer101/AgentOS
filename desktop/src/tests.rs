@@ -488,7 +488,7 @@ fn sidebar_groups_numbers_and_search() {
     scene(&mut app);
     let mut tx = rune::Tx::default();
     let names: Vec<&str> = app.sidebar_groups().iter().map(|(w, _)| w.name.as_str()).collect();
-    assert_eq!(names, ["Quick tasks", "relay", "notes"], "Quick tasks first; empty workspaces left out");
+    assert_eq!(names, ["Quick tasks", "notes", "relay"], "Quick tasks first, then by name; empty workspaces left out");
     // Ended and failed sessions get no number.
     assert_eq!(app.numbered(), ["ses_q", "ses_1", "ses_2", "ses_3"]);
     // One status vocabulary.
@@ -572,6 +572,28 @@ fn archiving_and_default_logins() {
     assert!(app.confirm_archive.is_none());
     pump(&mut app, |a| !a.sessions.iter().any(|s| s.session_id == first));
     assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+/// A finished turn you haven't looked at is unread (a green dot) until you open the
+/// session; the first list ever marks everything seen, and leaving a session doesn't make it
+/// unread again.
+#[test]
+fn a_finished_turn_is_unread_until_opened() {
+    let mut app = demo("home");
+    let unread = |app: &model::App, id: &str| app.unread(app.session(id).unwrap());
+    assert!(!unread(&app, "ses_q"), "nothing is unread before the first list");
+    app.mark_seen(true);
+    assert!(!unread(&app, "ses_q"), "the first list marks every session seen");
+    // The agent works on ses_q and finishes while another session is open.
+    app.open_session("ses_1");
+    let x = app.sessions.iter_mut().find(|x| x.session_id == "ses_q").unwrap();
+    x.last_seq += 5;
+    assert!(unread(&app, "ses_q"));
+    assert!(!unread(&app, "ses_1"), "only an idle session is unread: ses_1 needs you");
+    app.open_session("ses_q");
+    assert!(!unread(&app, "ses_q"), "open is seen");
+    app.open_session("ses_1");
+    assert!(!unread(&app, "ses_q"), "and stays seen");
 }
 
 fn demo(scene: &str) -> model::App {
@@ -3241,4 +3263,195 @@ fn the_browser_against_a_real_host() {
             assert!(b.error.as_deref().is_some_and(|m| m.contains("did not start")), "{b:?}");
         }
     }
+}
+
+/// Opening a session, from the sidebar or as a new one starts, puts the keyboard in its
+/// composer: no click needed before typing.
+#[test]
+fn opening_a_session_focuses_its_composer() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let focused = |ui: &rune::Runtime<model::App>, key: &str| ui.elements().iter().any(|e| e.key.as_deref() == Some(key) && e.focused);
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "session").unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+            s.approvals.clear();
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+
+        // From the sidebar, with the composer focused before, and not.
+        click(&mut ui, "prompt");
+        assert!(focused(&ui, "prompt"), "{look:?}: a click focuses the composer");
+        click(&mut ui, "ses_3");
+        assert!(read(&mut ui, &|s| s.screen == Screen::Session("ses_3".into())), "{look:?}");
+        assert!(focused(&ui, "prompt"), "{look:?}: opening ses_3 focused its composer");
+        click(&mut ui, "ses_2");
+        assert!(focused(&ui, "prompt"), "{look:?}: opening ses_2 focused its composer");
+        ui.key(rune::KeyEvent { key: rune::Key::Text("h".into()), mods: rune::Mods::default() });
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.prompt.text == "h"), "{look:?}: typing goes into the composer");
+        ui.update(|s, _| s.prompt.replace_text(""));
+
+        // A new session, once the host has made it (a moment after the sheet closed).
+        click(&mut ui, "nav-new");
+        assert!(ui.find("start-session").is_some(), "{look:?}: the sheet is open");
+        click(&mut ui, "start-session");
+        assert!(ui.find("start-session").is_none(), "{look:?}: Start closed the sheet");
+        for _ in 0..30 {
+            ui.frame(0.016);
+        }
+        // The reply comes through the bridge, so the app takes it in `poll`.
+        let (fake, from_host, _to_host) = bridge::Bridge::fake();
+        let new = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let new2 = new.clone();
+        ui.update(move |s, _| {
+            let mut x = s.sessions.iter().find(|x| x.session_id == "ses_3").unwrap().clone();
+            x.session_id = "ses_new".into();
+            x.state = SessionState::Starting;
+            x.title = None;
+            x.pinned_at = None;
+            *new2.borrow_mut() = Some(x);
+            s.bridge = Some(fake);
+        });
+        let new = new.borrow_mut().take().unwrap();
+        from_host.send(bridge::FromHost::Reply { tag: bridge::Tag::SessionCreated, result: Ok(serde_json::to_value(&new).unwrap()) }).unwrap();
+        for _ in 0..5 {
+            ui.frame(0.016);
+        }
+        assert!(read(&mut ui, &|s| s.screen == Screen::Session("ses_new".into())), "{look:?}");
+        assert!(focused(&ui, "prompt"), "{look:?}: the new session's composer has the keyboard");
+        ui.key(rune::KeyEvent { key: rune::Key::Text("h".into()), mods: rune::Mods::default() });
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.prompt.text == "h"), "{look:?}: typing goes into the new session's composer");
+    }
+}
+
+/// A session's pull request icon says where it stands: green open, purple merged, red
+/// closed without merging, grey before the host has looked; the tooltip says it in words.
+#[test]
+fn pull_request_icons_follow_their_state() {
+    use crate::look::{Look, Theme};
+    for look in [Look::Mac, Look::Gnome] {
+        let t = Theme::new(look);
+        assert_eq!(crate::view::pr_color(&t, Some(PullRequestState::Open)), t.ok);
+        assert_eq!(crate::view::pr_color(&t, Some(PullRequestState::Merged)), t.pr);
+        assert_eq!(crate::view::pr_color(&t, Some(PullRequestState::Closed)), t.danger);
+        assert_eq!(crate::view::pr_color(&t, None), t.text2);
+    }
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let mut ui = crate::app().headless_runtime((1280.0, 1000.0), rune::Env::default());
+    let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "sidebar").unwrap().1;
+    ui.update(move |s, _| f(s));
+    ui.frame(0.016);
+    ui.frame(0.016);
+    let help = |id: &str| ui.elements().into_iter().find(|e| e.key.as_deref() == Some(id)).and_then(|e| e.label).unwrap_or_default();
+    assert!(help("ses_s5").contains("Pull request #25, merged"), "{}", help("ses_s5"));
+    assert!(help("ses_s6").contains("Pull request #26, closed"), "{}", help("ses_s6"));
+    assert!(help("ses_3").contains("Pull request #48483, open"), "{}", help("ses_3"));
+}
+
+/// Stopping a turn is the composer's stop button (and ⌘. / Ctrl+.), not the toolbar's nor
+/// the session menu's.
+#[test]
+fn no_stop_button_in_the_toolbar_or_the_session_menu() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "session-menu").unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+            // ses_1 working, so a stop would be on offer.
+            let x = s.sessions.iter_mut().find(|x| x.session_id == "ses_1").unwrap();
+            x.state = SessionState::Running;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(ui.find("stop-turn").is_none(), "{look:?}: the toolbar has no stop button");
+        assert!(ui.find("session-menu").is_some(), "{look:?}");
+        let labels: Vec<String> = ui.elements().into_iter().filter_map(|e| e.label.or(e.text)).collect();
+        assert!(labels.iter().any(|l| l == "Show Session Folder"), "{look:?}: the menu is open: {labels:?}");
+        assert!(!labels.iter().any(|l| l.contains("Stop the Turn") && l != "Stop the Turn"), "{look:?}: {labels:?}");
+        // The composer's send button is the one stop left.
+        let send = ui.elements().into_iter().find(|e| e.key.as_deref() == Some("send")).unwrap();
+        assert_eq!(send.label.as_deref(), Some("Stop the Turn"), "{look:?}");
+        assert_eq!(labels.iter().filter(|l| l.contains("Stop the Turn")).count(), 1, "{look:?}: only the composer's: {labels:?}");
+    }
+}
+
+/// An attached image shows a small picture of itself in its chip, so two pasted images can
+/// be told apart; other files keep the file mark.
+#[test]
+fn attached_images_show_a_picture_in_the_composer() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+    let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "composer-paste").unwrap().1;
+    // Decoded off the UI thread; waited for here, as the app's waker would redraw.
+    let decoded = |s: &mut model::App| {
+        for f in s.files.values().flatten() {
+            if let Some(img) = &f.preview {
+                let _ = img.wait();
+            }
+        }
+    };
+    ui.update(move |s, _| {
+        f(s);
+        decoded(s);
+    });
+    ui.frame(0.016);
+    ui.frame(0.016);
+    assert!(ui.find("file-preview-1").is_some() && ui.find("file-preview-2").is_some(), "both pasted images show a picture");
+    let rect = |key: &str| ui.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+    let (pic, chip) = (rect("file-preview-1"), rect("file-1"));
+    assert!(pic[2] <= 56.0 && pic[3] <= 32.0 && pic[2] >= 12.0 && pic[3] >= 12.0, "{pic:?}");
+    assert!(pic[0] >= chip[0] && pic[1] >= chip[1] && pic[1] + pic[3] <= chip[1] + chip[3], "{pic:?} in {chip:?}");
+
+    // Pasting makes one too; a picked text file doesn't.
+    ui.update(|s, _| {
+        s.info.as_mut().unwrap().protocol_version = 7;
+        s.files.clear();
+        s.attach_bytes(crate::brand::APP_ICON_PNG.to_vec(), "image/png");
+        s.attach(&[std::path::PathBuf::from("Cargo.toml")]);
+        decoded(s);
+    });
+    let ids: Vec<u64> = {
+        let r = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let r2 = r.clone();
+        ui.update_if(move |s, _| {
+            *r2.borrow_mut() = s.files.get("ses_1").unwrap().iter().map(|f| f.local_id).collect();
+            false
+        });
+        let v = r.borrow().clone();
+        v
+    };
+    assert_eq!(ids.len(), 2);
+    ui.frame(0.016);
+    assert!(ui.find(&format!("file-preview-{}", ids[0])).is_some(), "the pasted image shows a picture");
+    assert!(ui.find(&format!("file-{}", ids[1])).is_some());
+    assert!(ui.find(&format!("file-preview-{}", ids[1])).is_none(), "a text file has no picture");
 }

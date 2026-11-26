@@ -79,6 +79,7 @@
 <h2 id="update">Update, restart, uninstall</h2>
 <pre><code><span class="p">$ </span>git pull &amp;&amp; scripts/install.sh<span class="c">    # rebuild, replace the binaries, restart the host</span>
 <span class="p">$ </span>scripts/install.sh --restart<span class="c">    # restart the host service only</span>
+<span class="p">$ </span>scripts/install.sh --desktop-only<span class="c">    # just the app, for a laptop that pairs with your host</span>
 <span class="p">$ </span>scripts/install.sh --uninstall<span class="c">    # remove the service, binaries and app; keeps your data</span></code></pre>
 <p class="note">Restarting the host stops running agent sessions. They resume where they can.</p>
 

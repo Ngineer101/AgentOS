@@ -9,24 +9,32 @@ relay (see [Remote access](#remote-access) below).
 Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
 patterns, Linux gets GNOME / libadwaita. The look follows the OS;
 `AGENTHOST_DESKTOP_LOOK=macos|gnome` picks one, so both render on one machine.
+`AGENTHOST_DESKTOP_FONT="Liberation Sans"` sets the interface font to any
+installed family (the look's own font fills in what it lacks).
 
 - **Sidebar** (compact, nano page "Desktop sidebar v3"): New Session and
   Automations at the top, then Pinned and the workspaces (Quick tasks first),
   each a collapsible group with a "+" for a new session there; the newest 8
   show, "Show N more" the rest. A row is one line: status, title, a pull
-  request or automation icon and its age; a second line only when it needs
-  you, failed or has agents running. Hover a row for Pin and Archive (pins
+  request icon (green open, purple merged, red closed; the host checks open
+  ones every 5 minutes with your `gh`) or automation icon and its age; a second line only when it needs
+  you, failed or has agents running. A session whose agent finished a turn you
+  haven't looked at has a green dot until you open it (remembered between
+  launches). Hover a row for Pin and Archive (pins
   need a host on protocol 8). Search sits behind the header's magnifier
   (⌘F / Ctrl+F; Escape clears, then closes). Live sessions are numbered
   ⌘1…⌘9 (Alt+1…9), shown while you hold the key. Collapsed groups are
   remembered in `desktop.json` (`~/Library/Application Support/AgentHost/`,
   or `~/.config/agenthost/`). The host line at the bottom opens status.
-- **Session**: the transcript in a 700 pt (GNOME 720 px) column: prompts,
+- **Session**: the transcript in a 780 pt (GNOME 800 px) column: prompts,
   Markdown replies (streaming), thoughts, tool calls (expand for output),
   blocked hosts with "Allow for <workspace>", approvals inline with
   Deny ⌥⌘D / Approve ⌥⌘A (Alt+D / Alt+A). The toolbar has a status capsule
-  (macOS) or the window an approval banner (GNOME), Stop turn and a session
-  menu. The composer attaches files, dictates, and shows its keys; ↑ in an
+  (macOS) or the window an approval banner (GNOME), and a session menu.
+  Opening a session puts the keyboard in its composer. While the agent works
+  the composer's send button stops the turn (⌘. / Ctrl+.). The composer
+  attaches files (an image shows a small picture of itself, so pasted ones
+  can be told apart), dictates, and shows its keys; ↑ in an
   empty composer brings back your last message. Each session keeps what you
   typed in it while you look at another. Images you sent show as
   pictures in the transcript (hosts on protocol 7); click one to see it in
@@ -115,7 +123,8 @@ The keys land in `remote.json` in the config folder (`$AGENTHOST_REMOTE` picks
 the file, the same one `agenthost remote pair --state` writes), and a laptop
 with no host of its own connects there at every launch — a tiny `desktop.json`
 in the same folder remembers that choice, and "Use this computer" in the same
-place undoes it.
+place undoes it. `scripts/install.sh --desktop-only` installs just the app for
+such a laptop (no host, CLI or service); `--uninstall` removes it again.
 
 A paired connection gets sessions and approvals, never policy: workspaces,
 connectors, devices, webhook automations and built-in tool policies render

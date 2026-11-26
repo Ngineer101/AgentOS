@@ -5,6 +5,7 @@
 //! A terminal is a shell as you, outside every sandbox: the host gives it only to the app
 //! on its own computer (the admin connection), not to a paired device.
 
+use crate::look::MEDIUM;
 use crate::bridge::{Tag, TermCmd, ToHost};
 use crate::commands::{label as keys, Cmd};
 use crate::icons as ic;
@@ -603,7 +604,7 @@ fn chip(s: &App, t: &Theme, tab: &TermTab) -> El {
             tx.focus("term-view", false);
         })
         .child(icon(&ic::TERMINAL, 12.0).color(if on { t.text } else { t.text2 }))
-        .child(text(clip(&title, 40)).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, if on && !mac { 700.0 } else { 400.0 })).color(if on { t.text } else { t.text2 }).truncate().shrink().min_w(0.0))
+        .child(text(clip(&title, 40)).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, if on && !mac { MEDIUM } else { 400.0 })).color(if on { t.text } else { t.text2 }).truncate().shrink().min_w(0.0))
         .child(
             row()
                 .key(format!("term-close-{id2}"))

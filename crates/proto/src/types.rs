@@ -430,6 +430,33 @@ pub struct Session {
 pub struct SessionPullRequest {
     pub number: u64,
     pub url: String,
+    /// Whether it is still open, as the host last saw it on GitHub (it
+    /// checks open ones every few minutes). Unknown until the first check,
+    /// and from hosts before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<PullRequestState>,
+}
+
+/// Where a pull request stands. A draft is open.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestState {
+    Open,
+    Merged,
+    /// Closed without merging.
+    Closed,
+}
+
+impl PullRequestState {
+    /// gh's `state` ("OPEN", "MERGED", "CLOSED").
+    pub fn from_gh(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "OPEN" => Some(Self::Open),
+            "MERGED" => Some(Self::Merged),
+            "CLOSED" => Some(Self::Closed),
+            _ => None,
+        }
+    }
 }
 
 impl SessionPullRequest {
@@ -448,7 +475,7 @@ impl SessionPullRequest {
                 if [host, owner, repo].iter().any(|p| p.is_empty()) || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
                     return None;
                 }
-                Some(Self { number: n.parse().ok()?, url: w.to_string() })
+                Some(Self { number: n.parse().ok()?, url: w.to_string(), state: None })
             })
     }
 }

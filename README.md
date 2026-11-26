@@ -113,7 +113,16 @@ agenthost device pair         # shows a QR code (or use Settings → Devices on 
 Any paired device — the iPhone app, the CLI (`agenthost remote pair`), or the
 desktop app on another computer (Settings → General → Connection) — gets
 sessions and approvals through the relay, never policy: management stays on
-the host's own screen. See [docs/usage.md](docs/usage.md#remote-access) for
+the host's own screen.
+
+For a laptop that only connects to your host, install the app alone (needs
+only Rust: no host, CLI or background service), then choose "Pair with a
+Remote Host…" when it opens and paste the link `agenthost device pair` prints:
+
+```sh
+scripts/install.sh --desktop-only
+```
+ See [docs/usage.md](docs/usage.md#remote-access) for
 the CLI and desktop pairing in one place.
 
 See [relay/README.md](relay/README.md) for what the relay stores and logs. No

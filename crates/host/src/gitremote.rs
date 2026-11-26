@@ -55,6 +55,73 @@ async fn output(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The repository a push, fetch or pull request works in: the session's
+/// folder, or `repo`, a folder inside it (a workspace that holds
+/// repositories rather than being one). Never a folder outside the
+/// session's, through `..` or a symlink.
+///
+/// With no `repo` and a session folder that isn't in a repository, the error
+/// names the repositories inside it, so the agent can pick one.
+pub async fn repo_dir(session_dir: &Path, repo: Option<&str>) -> Result<PathBuf, String> {
+    let Some(asked) = repo.map(str::trim).filter(|r| !r.is_empty() && *r != ".") else {
+        if output(session_dir, &["rev-parse", "--git-dir"]).await.is_ok() {
+            return Ok(session_dir.to_path_buf());
+        }
+        let inside = repos_inside(session_dir);
+        if inside.is_empty() {
+            return Err("this session's folder is not a git repository".into());
+        }
+        return Err(format!(
+            "this session's folder is not a git repository, but it holds {}: pass that folder as `repo`",
+            inside.join(", ")
+        ));
+    };
+    let base = std::fs::canonicalize(session_dir)
+        .map_err(|e| format!("this session's folder can't be read ({e})"))?;
+    let dir = std::fs::canonicalize(base.join(asked))
+        .ok()
+        .filter(|d| d.starts_with(&base) && d.is_dir())
+        .ok_or_else(|| format!("{asked:?} is not a folder inside this session's folder"))?;
+    if output(&dir, &["rev-parse", "--git-dir"]).await.is_err() {
+        return Err(format!("{asked:?} is not a git repository"));
+    }
+    Ok(dir)
+}
+
+/// Repositories up to two folders down from `dir`, as relative paths.
+pub fn repos_inside(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || name == "node_modules" || name == "target" {
+                continue;
+            }
+            // Not following symlinks: only folders really inside.
+            if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let p = e.path();
+            if p.join(".git").exists() {
+                if let Ok(rel) = p.strip_prefix(base) {
+                    out.push(rel.to_string_lossy().into_owned());
+                }
+            } else if depth < 2 {
+                walk(base, &p, depth + 1, out);
+            }
+            if out.len() >= 10 {
+                return;
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(dir, dir, 1, &mut out);
+    out
+}
+
 /// A name git accepts as a branch, and that can't be read as a flag or a
 /// refspec (`:` deletes, `+` forces).
 async fn valid_branch(dir: &Path, name: &str) -> bool {
@@ -344,6 +411,35 @@ mod tests {
         let out = run(&plan_push(&w, None, None, None, false, false).await.unwrap()).await;
         assert!(out.ok, "{}", out.output);
         assert!(run(&plan_fetch(&w, None).await.unwrap()).await.ok);
+    }
+
+    #[tokio::test]
+    async fn finds_the_repository_inside_a_plain_folder() {
+        let (t, w) = repo();
+        // The temp folder holds `work` (a repository) and `remote.git` (bare,
+        // so not listed: no `.git` inside).
+        let folder = t.path();
+        let err = repo_dir(folder, None).await.unwrap_err();
+        assert!(err.contains("holds work") && err.contains("`repo`"), "{err}");
+        let dir = repo_dir(folder, Some("work")).await.unwrap();
+        assert_eq!(dir, std::fs::canonicalize(&w).unwrap());
+        assert_eq!(plan_push(&dir, None, None, None, false, false).await.unwrap().command(), "git push origin main");
+        // The session's own repository, and folders inside it, need no `repo`.
+        assert_eq!(repo_dir(&w, None).await.unwrap(), w);
+        assert_eq!(repo_dir(&w, Some(".")).await.unwrap(), w);
+        // Nothing outside the session's folder.
+        for bad in ["..", "../remote.git", "/", "nope", "remote.git/../.."] {
+            assert!(repo_dir(&w, Some(bad)).await.is_err(), "{bad}");
+        }
+        // A symlink inside that points outside.
+        let inner = folder.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::os::unix::fs::symlink(&w, inner.join("out")).unwrap();
+        assert!(repo_dir(&inner, Some("out")).await.is_err());
+        // A folder inside, but not a repository.
+        std::fs::create_dir_all(inner.join("plain")).unwrap();
+        let err = repo_dir(&inner, Some("plain")).await.unwrap_err();
+        assert!(err.contains("not a git repository"), "{err}");
     }
 
     #[tokio::test]

@@ -41,13 +41,21 @@ impl Principal {
     }
 }
 
+/// Fail if another host answers on `path`. A second host must find this out
+/// before it touches any socket: replacing the gateway's socket and then
+/// exiting would leave the running host's MCP gateway unreachable.
+pub async fn ensure_no_other_host(path: &Path) -> anyhow::Result<()> {
+    if path.exists() && UnixStream::connect(path).await.is_ok() {
+        anyhow::bail!("another host is already listening on {}", path.display());
+    }
+    Ok(())
+}
+
 /// Serve the Unix socket until the listener fails.
 pub async fn serve_unix(host: Arc<Host>, path: &Path) -> anyhow::Result<JoinHandle<()>> {
+    ensure_no_other_host(path).await?;
     if path.exists() {
-        // A stale socket from a previous run; refuse if another host answers.
-        if UnixStream::connect(path).await.is_ok() {
-            anyhow::bail!("another host is already listening on {}", path.display());
-        }
+        // A stale socket from a previous run.
         std::fs::remove_file(path)?;
     }
     let listener = UnixListener::bind(path)?;

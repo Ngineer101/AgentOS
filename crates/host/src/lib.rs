@@ -21,6 +21,7 @@ pub mod installer;
 pub mod mcp;
 pub mod notes;
 pub mod profiles;
+pub mod prstate;
 pub mod projects;
 pub mod proxy;
 pub mod push;
@@ -47,6 +48,7 @@ use std::sync::Arc;
 /// Start serving: resume live sessions and listen on the Unix socket.
 pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let socket = host.ctx.cfg.socket_path.clone();
+    api::ensure_no_other_host(&socket).await?;
     let gw = mcp::Gateway::start(host.ctx.clone(), host.secrets.clone(), &host.sessions, host.browsers.clone()).await?;
     let _ = host.ctx.gateway.set(gw.clone());
     let _ = host.connectors.set(Arc::new(gw));
@@ -57,6 +59,7 @@ pub async fn start(host: Arc<Host>) -> anyhow::Result<tokio::task::JoinHandle<()
     remote.spawn();
     host.push.spawn();
     host.automations.spawn();
+    host.pr_states.spawn();
     let task = api::serve_unix(host.clone(), &socket).await?;
     let resumed = host.sessions.resume_all()?;
     tracing::info!(socket = %socket.display(), resumed, "host listening");

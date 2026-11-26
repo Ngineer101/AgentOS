@@ -100,7 +100,7 @@ fn base(s: &mut App) {
         sess("ses_4", "ws_notes", AgentKind::Claude, None, SessionState::Ended, "Weekly summary", 90_000_000),
     ];
     if let Some(r) = s.sessions.iter_mut().find(|x| x.session_id == "ses_3") {
-        r.pull_request = Some(SessionPullRequest { number: 48483, url: "https://github.com/nico/relay/pull/48483".into() });
+        r.pull_request = Some(SessionPullRequest { number: 48483, url: "https://github.com/nico/relay/pull/48483".into(), state: Some(PullRequestState::Open) });
     }
     if let Some(f) = s.sessions.iter_mut().find(|x| x.session_id == "ses_5") {
         f.state_reason = Some("codex exited with status 1: model rate limit reached".into());
@@ -521,7 +521,7 @@ fn chip(s: &mut App) {
     use crate::model::{FileState, PendingFile};
     s.files.insert(
         "ses_1".into(),
-        vec![PendingFile { local_id: 1, name: "ci-run-4812.log".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "ci-run-4812.log".into(), mime: "text/plain".into(), size: 49_152 }) }],
+        vec![PendingFile { local_id: 1, name: "ci-run-4812.log".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "ci-run-4812.log".into(), mime: "text/plain".into(), size: 49_152 }), preview: None }],
     );
 }
 
@@ -872,7 +872,8 @@ fn sidebar(s: &mut App) {
             "ses_3" => x.pinned_at = Some(t - 86_400_000),
             "ses_s2" => x.automation_id = Some("auto_deps".into()),
             "ses_s4" => x.state_reason = Some("agent exited (code 1)".into()),
-            "ses_s5" | "ses_s6" => x.pull_request = Some(SessionPullRequest { number: 25, url: "https://github.com/nico/relay/pull/25".into() }),
+            "ses_s5" => x.pull_request = Some(SessionPullRequest { number: 25, url: "https://github.com/nico/relay/pull/25".into(), state: Some(PullRequestState::Merged) }),
+            "ses_s6" => x.pull_request = Some(SessionPullRequest { number: 26, url: "https://github.com/nico/relay/pull/26".into(), state: Some(PullRequestState::Closed) }),
             _ => {}
         }
     }
@@ -913,8 +914,8 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.files.insert(
             "ses_1".into(),
             vec![
-                PendingFile { local_id: 1, name: "crash-report.txt".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "crash-report.txt".into(), mime: "text/plain".into(), size: 18_400 }) },
-                PendingFile { local_id: 2, name: "recording of the bug.mov".into(), state: FileState::Uploading },
+                PendingFile { local_id: 1, name: "crash-report.txt".into(), state: FileState::Ready(Attachment { attachment_id: "att_9".into(), name: "crash-report.txt".into(), mime: "text/plain".into(), size: 18_400 }), preview: None },
+                PendingFile { local_id: 2, name: "recording of the bug.mov".into(), state: FileState::Uploading, preview: None },
             ],
         );
     }),
@@ -1290,11 +1291,14 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         use crate::model::{FileState, PendingFile};
         session(s);
         s.approvals.clear();
+        // Each pasted image shows a picture of itself.
+        let pic = || s.image_cache.as_ref().map(|c| c.load(crate::brand::APP_ICON_PNG));
+        let (p1, p2) = (pic(), pic());
         s.files.insert(
             "ses_1".into(),
             vec![
-                PendingFile { local_id: 1, name: "Pasted image.png".into(), state: FileState::Ready(Attachment { attachment_id: "att_p1".into(), name: "Pasted image.png".into(), mime: "image/png".into(), size: 284_102 }) },
-                PendingFile { local_id: 2, name: "Pasted image 2.png".into(), state: FileState::Uploading },
+                PendingFile { local_id: 1, name: "Pasted image.png".into(), state: FileState::Ready(Attachment { attachment_id: "att_p1".into(), name: "Pasted image.png".into(), mime: "image/png".into(), size: 284_102 }), preview: p1 },
+                PendingFile { local_id: 2, name: "Pasted image 2.png".into(), state: FileState::Uploading, preview: p2 },
             ],
         );
     }),
