@@ -253,3 +253,100 @@ async fn pull_requests_and_pushes_can_run_without_asking_but_force_pushes_and_in
     let audit = std::fs::read_to_string(th.host.ctx.cfg.logs_dir().join("audit.jsonl")).unwrap();
     assert!(audit.contains("builtin.policy") && audit.contains("\"auto\":true"));
 }
+
+/// H1: a repository whose config the session can write must not be able to
+/// make the host run a command, and a fetch there is not automatic.
+///
+/// The agent's own repository (`git init` inside its worktree) is not the
+/// protected worktree the host made, so its `.git/config` is the agent's.
+/// `core.sshCommand`, `credential.helper` and `remote.<n>.uploadpack` each
+/// name a program git would otherwise run as the user, outside the sandbox.
+#[tokio::test]
+async fn a_repository_the_session_writes_cannot_make_git_run_a_command() {
+    let th = TestHost::start().await;
+    let (c, mut n) = th.client().await;
+    let ws = th.workspace_id(&c).await;
+
+    // The workspace has to be a repository for the session to get a worktree,
+    // so the host's own protected repository is the outer one.
+    git(&th.workspace, &["init", "-q", "-b", "main"]);
+    std::fs::write(th.workspace.join("README.md"), "hello\n").unwrap();
+    git(&th.workspace, &["add", "."]);
+    git(&th.workspace, &["commit", "-q", "-m", "first"]);
+    // A real remote, so the trusted fetch at the end has somewhere to go.
+    let own_remote = th.workspace.parent().unwrap().join("own.git");
+    git(th.workspace.parent().unwrap(), &["init", "--bare", "-q", "-b", "main", own_remote.to_str().unwrap()]);
+    git(&th.workspace, &["remote", "add", "origin", own_remote.to_str().unwrap()]);
+
+    let s = c.create_session(&ws, AgentKind::Fake).await.unwrap();
+    let sid = s.session_id.clone();
+    wait_state(&c, &sid, SessionState::Idle, T).await;
+    c.subscribe(&sid, 0).await.unwrap();
+    let wt = std::path::PathBuf::from(
+        c.call::<Session>(m::SESSION_GET, json!({"session_id": sid}))
+            .await
+            .unwrap()
+            .worktree
+            .expect("a worktree")
+            .path,
+    );
+
+    // A repository of the agent's own, inside its worktree, with a bare
+    // remote that really exists (so only the config decides what runs) and
+    // every config hook that turns a fetch into a command.
+    let sub = wt.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let bare = wt.join("bare.git");
+    git(&wt, &["init", "--bare", "-q", "-b", "main", bare.to_str().unwrap()]);
+    git(&sub, &["init", "-q", "-b", "main"]);
+    git(&sub, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    let marker = wt.join("RAN");
+    let fire = format!("sh -c 'touch {}' #", marker.display());
+    for (k, v) in [
+        ("core.sshCommand", fire.as_str()),
+        ("credential.helper", fire.as_str()),
+        ("remote.origin.uploadpack", fire.as_str()),
+        ("core.gitProxy", fire.as_str()),
+        ("core.fsmonitor", fire.as_str()),
+    ] {
+        git(&sub, &["config", k, v]);
+    }
+
+    // A fetch there asks, because the host can't vouch for that config.
+    c.prompt(&sid, r#"mcp agenthost__git_fetch {"repo":"sub","reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, |e| e.kind == EventType::ApprovalRequested).await;
+    let req = ev.last().unwrap().payload.clone();
+    assert_eq!(req["arguments"]["approve_label"], "Fetch", "a fetch in an unprotected repo must ask");
+    // And it says where it really goes, not just "origin".
+    assert_eq!(req["arguments"]["url"], bare.display().to_string());
+    c.request(m::APPROVAL_RESPOND, json!({"approval_id": req["approval_id"], "decision": "approve"}))
+        .await
+        .unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    let result = ev.iter().find(|e| e.kind == EventType::ToolResult && e.payload["name"] == "git_fetch").unwrap();
+    assert_eq!(result.payload["status"], "completed", "{}", result.payload["output"]);
+    assert!(!marker.exists(), "the repository's config made the host run a command");
+
+    // A remote that points at a transport helper is a program, not a host:
+    // it never reaches an approval.
+    git(&sub, &["remote", "add", "helper", "ext::sh -c touch% /tmp/x"]);
+    c.prompt(&sid, r#"mcp agenthost__git_fetch {"repo":"sub","remote":"helper","reason":"x"}"#)
+        .await
+        .unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(!ev.iter().any(|e| e.kind == EventType::ApprovalRequested), "a helper URL must not be offered");
+    assert!(ev
+        .iter()
+        .any(|e| e.kind == EventType::ToolResult && e.payload["status"] == "failed"));
+    assert!(!marker.exists());
+
+    // The session's own worktree is still trusted: no approval there.
+    c.prompt(&sid, r#"mcp agenthost__git_fetch {"reason":"x"}"#).await.unwrap();
+    let (ev, _) = collect_until(&mut n, T, turn_end).await;
+    assert!(
+        !ev.iter().any(|e| e.kind == EventType::ApprovalRequested),
+        "the host's own worktree protects its config, so a fetch there still runs"
+    );
+    let result = ev.iter().find(|e| e.kind == EventType::ToolResult && e.payload["name"] == "git_fetch").unwrap();
+    assert_eq!(result.payload["status"], "completed", "{}", result.payload["output"]);
+}

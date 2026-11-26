@@ -5,6 +5,7 @@ import {
   decodeFixed,
   hex,
   randomBytes,
+  readLimited,
   relayIdFor,
   sha256,
   signedMessage,
@@ -729,32 +730,6 @@ function parseJson(text: string): Record<string, unknown> | null {
 
 function hookFrame(deliveryId: string, sealed: string): string {
   return JSON.stringify({ type: "hook", delivery_id: deliveryId, sealed });
-}
-
-/** Reads the whole body, or returns null as soon as it exceeds `limit` bytes. */
-async function readLimited(request: Request, limit: number): Promise<Uint8Array | null> {
-  if (!request.body) return new Uint8Array(0);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
-    total += chunk.length;
-    if (total > limit) {
-      void reader.cancel().catch(() => {});
-      return null;
-    }
-    chunks.push(chunk);
-  }
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
 }
 
 export function jsonResponse(status: number, body: unknown, headers?: HeadersInit): Response {

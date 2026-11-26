@@ -3455,3 +3455,37 @@ fn attached_images_show_a_picture_in_the_composer() {
     assert!(ui.find(&format!("file-{}", ids[1])).is_some());
     assert!(ui.find(&format!("file-preview-{}", ids[1])).is_none(), "a text file has no picture");
 }
+
+/// H1: a push approval says where the remote really points, because a
+/// repository's own git settings can send an approved "push to origin"
+/// somewhere else. An approval that carries no resolved URL (an older host,
+/// or a tool where it doesn't apply) shows no such line.
+#[test]
+fn a_push_approval_shows_where_the_remote_really_points() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look| {
+        let mut ui = crate::app().headless_runtime((1280.0, 1000.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        ui
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let ui = open("push-approval", look);
+        assert!(ui.find("approve").is_some(), "{look:?}: no approval on screen");
+        assert!(
+            ui.find("approval-url").is_some(),
+            "{look:?}: the push approval must show the remote's resolved URL"
+        );
+        // Installing a tool has no remote, so there is nothing to resolve.
+        let ui = open("install-approval", look);
+        assert!(ui.find("approve").is_some(), "{look:?}: no approval on screen");
+        assert!(ui.find("approval-url").is_none(), "{look:?}: nothing to show there");
+    }
+}

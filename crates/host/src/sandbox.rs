@@ -42,28 +42,134 @@ pub const GITHUB_HOSTS: &[&str] = &[
     "uploads.github.com",
 ];
 
-/// Home-relative folders no sandbox may read.
+/// Home-relative paths no sandbox may read.
+///
+/// Your home folder is otherwise readable: an agent needs to see your tools'
+/// configuration to work in your repositories, and listing everything it may
+/// read is not something anyone could keep correct. So this is a list of what
+/// it may not, and it has to cover everything a session could sell or sign in
+/// with — not just the obvious credential folders but the places a logged-in
+/// browser, a chat app or a shell keeps the same power: a cookie store is a
+/// live session, and shell history is full of tokens people pasted once.
+///
+/// Entries that don't exist (another platform's, a tool you don't use) are
+/// harmless. macOS paths are listed alongside the Linux ones.
+///
+/// If you add one, add it here rather than anywhere else: this is the list
+/// `docs/security.md` describes and `tests/m3_escape.rs` checks.
 pub const SECRET_DIRS: &[&str] = &[
+    // Keys, clouds and credential helpers.
     ".ssh",
     ".aws",
     ".gnupg",
     ".azure",
     ".kube",
     ".docker",
+    ".oci",
     ".config/gcloud",
     ".config/gh",
+    ".config/glab-cli",
+    ".config/hub",
     ".config/doctl",
     ".config/op",
+    ".config/flyctl",
+    ".config/heroku",
+    ".config/netlify",
+    ".config/supabase",
+    ".config/wrangler",
+    ".config/railway",
+    ".config/pulumi",
+    ".config/sops",
+    ".config/rclone",
+    ".config/restic",
+    ".config/keybase",
+    ".vercel",
+    ".cloudflared",
+    ".pulumi",
+    ".scaleway",
+    ".aliyun",
     ".password-store",
     ".local/share/keyrings",
+    ".gnome2/keyrings",
     ".netrc",
     ".git-credentials",
     ".npmrc",
     ".pypirc",
     ".cargo/credentials",
     ".cargo/credentials.toml",
+    ".gem/credentials",
+    ".composer/auth.json",
+    ".m2/settings.xml",
+    ".gradle/gradle.properties",
     ".terraform.d",
     ".vault-token",
+    ".subversion/auth",
+    // Tokens that command-line tools park in a shared store.
+    ".config/configstore",
+    // Databases and file shares.
+    ".pgpass",
+    ".my.cnf",
+    ".mylogin.cnf",
+    ".smbcredentials",
+    ".dbeaver",
+    ".dbeaver4",
+    // Shell and tool history: tokens, connection strings, whole commands.
+    ".bash_history",
+    ".zsh_history",
+    ".sh_history",
+    ".local/share/fish/fish_history",
+    ".python_history",
+    ".node_repl_history",
+    ".psql_history",
+    ".mysql_history",
+    ".sqlite_history",
+    ".irb_history",
+    ".Renviron",
+    ".ipython",
+    // Browser profiles: cookies are live logins, and the key that decrypts
+    // the saved ones sits next to them.
+    ".mozilla",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/microsoft-edge",
+    ".config/BraveSoftware",
+    ".config/vivaldi",
+    ".config/opera",
+    ".config/epiphany",
+    ".local/share/qutebrowser",
+    ".var/app/org.mozilla.firefox",
+    ".var/app/com.google.Chrome",
+    ".var/app/com.brave.Browser",
+    "snap/firefox",
+    "snap/chromium",
+    // Chat and mail apps: the token is the account.
+    ".config/discord",
+    ".config/discordcanary",
+    ".config/Slack",
+    ".config/Signal",
+    ".config/Element",
+    ".config/teams",
+    ".config/Mattermost",
+    ".local/share/TelegramDesktop",
+    ".thunderbird",
+    ".purple",
+    // macOS: the keychain, and the same browsers, chat apps and mail.
+    "Library/Keychains",
+    "Library/Cookies",
+    "Library/Safari",
+    "Library/Messages",
+    "Library/Mail",
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Application Support/Firefox",
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/Chromium",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Slack",
+    "Library/Application Support/discord",
+    "Library/Application Support/Signal",
+    "Library/Application Support/Telegram Desktop",
 ];
 
 /// Everything a session may read, write and reach.
@@ -162,6 +268,9 @@ pub fn policy_for(
         cfg.tools_dir.clone(),
         temp_dir.with_extension("codex"),
         temp_dir.with_extension("cfg"),
+        // Files the user attached to a prompt: the host writes them, the
+        // agent only reads them.
+        crate::session::attach_dir(temp_dir),
     ];
     // A writable folder inside a denied one (a quick task's own folder in
     // the scratch folder) must be readable too: Seatbelt does not re-allow
@@ -743,6 +852,41 @@ mod tests {
             &NetworkProfile::default(),
         );
         assert!(p.deny_read.contains(&PathBuf::from("/home/u/.ssh")));
+        // H5: the home folder is readable, so the list of what isn't has to
+        // cover everything that is a login in its own right — a browser's
+        // cookie store, a chat app's token, the history of what you pasted
+        // into a shell — not only the obvious credential folders.
+        for secret in [
+            ".mozilla",
+            ".config/google-chrome",
+            ".config/chromium",
+            ".config/discord",
+            ".config/Slack",
+            ".local/share/TelegramDesktop",
+            ".bash_history",
+            ".zsh_history",
+            ".pgpass",
+            ".my.cnf",
+            ".config/rclone",
+            ".config/configstore",
+            ".gem/credentials",
+            ".netrc",
+            "Library/Keychains",
+            "Library/Cookies",
+            "Library/Application Support/Firefox",
+        ] {
+            assert!(
+                p.deny_read.contains(&PathBuf::from("/home/u").join(secret)),
+                "{secret} is readable from inside the sandbox"
+            );
+        }
+        // H2: attached files are staged beside the temp folder, where the
+        // agent reads them and cannot write (so it cannot put a symlink
+        // where the host is about to write).
+        let att = crate::session::attach_dir(Path::new("/tmp/ah/s1"));
+        assert!(p.allow_read.contains(&att), "the agent must be able to read its attachments");
+        assert!(!p.write.contains(&att), "the agent must not be able to write the attachments folder");
+        assert!(!att.starts_with(Path::new("/tmp/ah/s1")), "and it must not be inside the writable temp folder");
         assert!(p.deny_read.contains(&PathBuf::from("/home/u/.claude")));
         assert!(p
             .deny_read

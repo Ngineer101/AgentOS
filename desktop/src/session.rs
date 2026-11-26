@@ -1285,7 +1285,15 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
                 .child(text(details.to_string()).font(t.font()).color(t.text).wrap()),
         );
     }
-    card = card.child(col().w_full().px(11.0).py(9.0).radius(t.box_radius).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}"))));
+    let mut box_ = col().w_full().px(11.0).py(9.0).radius(t.box_radius).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}")));
+    // Where a push or fetch really goes. The command only names the remote,
+    // and a repository's git settings can point that name somewhere else, so
+    // the host resolves it and we show the answer.
+    if let Some(url) = a["url"].as_str().map(str::trim).filter(|u| !u.is_empty()) {
+        let remote = a["remote"].as_str().unwrap_or("remote");
+        box_ = box_.child(pre(t, format!("{remote} → {url}")).color(t.text2).key("approval-url"));
+    }
+    card = card.child(box_);
     card = card.child(
         text(note)
             .font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0))

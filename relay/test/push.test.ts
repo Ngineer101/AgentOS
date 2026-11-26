@@ -156,6 +156,70 @@ describe("push", () => {
     expect(get.status).toBe(405);
   });
 
+  it("refuses an oversized body as it streams, and the headers decide first", async () => {
+    // H4: a sender that leaves out content-length and keeps writing must not
+    // get the Worker (or one host's Durable Object) to hold the whole body
+    // first and measure it after. The stream is cancelled at the limit, so
+    // only a bounded prefix of what was offered is ever read.
+    const CHUNK = 65536;
+    const CHUNKS = 64; // 4 MB offered to routes whose limit is 4-8 KB
+    let written = 0;
+    const flood = (): ReadableStream =>
+      new ReadableStream({
+        pull(controller) {
+          if (written >= CHUNKS * CHUNK) return controller.close();
+          written += CHUNK;
+          controller.enqueue(new Uint8Array(CHUNK).fill(65));
+        },
+      });
+    const post = (url: string, headers: Record<string, string> = {}): Promise<Response> =>
+      exports.default.fetch(
+        new Request(url, { method: "POST", headers, body: flood(), duplex: "half" } as RequestInit),
+      );
+
+    const host = await newIdentity();
+    const rid = await relayId(host);
+    const time = String(Date.now());
+    const sig = b64urlEncode(
+      new Uint8Array(
+        await crypto.subtle.sign(
+          "Ed25519",
+          host.privateKey,
+          sendMessage(rid, time, await sha256(new Uint8Array(0))),
+        ),
+      ),
+    );
+    written = 0;
+    expect(
+      (
+        await post(`${BASE}/v1/push/${rid}/send`, {
+          "x-agenthost-key": host.publicKey,
+          "x-agenthost-time": time,
+          "x-agenthost-signature": sig,
+        })
+      ).status,
+    ).toBe(413);
+    expect(written).toBeLessThan(CHUNKS * CHUNK);
+
+    // Registration is open to anyone, so it is the one that most needs this.
+    written = 0;
+    expect((await post(`${BASE}/v1/push/register`)).status).toBe(400);
+    expect(written).toBeLessThan(CHUNKS * CHUNK);
+
+    // Headers that aren't even the right shape settle it before the body is
+    // read at all: 401, not the 413 a drained body would have produced.
+    written = 0;
+    expect(
+      (
+        await post(`${BASE}/v1/push/${rid}/send`, {
+          "x-agenthost-key": "nonsense",
+          "x-agenthost-time": "x",
+          "x-agenthost-signature": "no",
+        })
+      ).status,
+    ).toBe(401);
+  });
+
   it("verifies a host's signature from Rust", async () => {
     // crates/proto/src/tunnel.rs, push_signature_vector.
     const key = decodeFixed("6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw", 32)!;

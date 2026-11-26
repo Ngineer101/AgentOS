@@ -740,7 +740,8 @@ fn builtin_approval(s: &mut App, tool: &str, force: bool) {
         a.summary = Some(format!("{} agenthost/fix-flaky-resume to origin", if force { "Force-push" } else { "Push" }));
         a.arguments = json!({
             "command": format!("git push{flag} origin agenthost/fix-flaky-resume"),
-            "remote": "origin", "branch": "agenthost/fix-flaky-resume", "force": force,
+            "remote": "origin", "url": "git@github.com:you/agenthost.git",
+            "branch": "agenthost/fix-flaky-resume", "force": force,
             "reason": if force { "I rebased the branch on main." } else { "Pushing the fix so I can open the pull request." },
             "approve_label": if force { "Force-Push" } else { "Push" }, "ask_title": "Push?",
             "note": if force { "Replaces the remote branch if nobody else pushed to it since your last fetch. Uses your git credentials. Nothing from the repository runs (its hooks are skipped)." } else { "Uses your git credentials. Nothing from the repository runs (its hooks are skipped)." },

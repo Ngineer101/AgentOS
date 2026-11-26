@@ -13,17 +13,103 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 
+/// Settings that stop a repository's own config from making git run
+/// something: each of these can name a command (or a transport helper that
+/// is one) that git executes as the user, outside the sandbox, and a session
+/// writes its repository's config whenever that repository isn't the
+/// protected worktree the host made for it (a folder the agent ran `git
+/// init` in, a shared folder, a quick task).
+///
+/// `-c` wins over every config file, so these hold whatever the repository
+/// says. They are also passed on to the git commands git itself starts
+/// (through `GIT_CONFIG_PARAMETERS`), so a local `upload-pack` gets them
+/// too. `remote.<name>.uploadpack` and `.receivepack` can't be pinned here —
+/// their key contains the remote's name, and a `-c` for a key the repository
+/// also sets only competes with it — so
+/// [`crate::gitremote::Plan::run_args`] pins those on the command line.
+const FIXED_GIT_CONFIG: &[&str] = &[
+    // Hooks the repository points at files the agent writes. Yours are
+    // skipped too: nothing from a repository runs here, by design.
+    "core.hooksPath=/dev/null",
+    // A filesystem monitor command.
+    "core.fsmonitor=false",
+    // `ext::sh -c …` as a remote URL is a command by design.
+    "protocol.ext.allow=never",
+    // A submodule brings its own config and URLs, from inside the worktree.
+    "fetch.recurseSubmodules=no",
+];
+
+/// The three of these that you might legitimately set yourself, with the
+/// default to fall back on. A repository's value is ignored; yours is kept.
+const USER_GIT_CONFIG: &[(&str, &str)] = &[
+    // Run through `sh -c` for an ssh remote.
+    ("core.sshCommand", "ssh"),
+    // A `!command` helper is a shell command git runs to "ask" for a
+    // password. An empty value resets the list, so yours are added back
+    // after it and the repository's are left out.
+    ("credential.helper", ""),
+    // A proxy command for `git://`. `none` means no proxy, for every domain.
+    ("core.gitProxy", "none"),
+];
+
+/// Every `-c` setting the host passes git.
+///
+/// For the settings you might have set yourself, the value comes from your
+/// own config — global and system scope, neither of which any sandbox can
+/// write — rather than a flat default, so a `core.sshCommand` that picks a
+/// key, or a credential helper you rely on, keeps working while the
+/// repository's copy of the same setting is ignored. Read once.
+pub(crate) fn safe_git_config() -> &'static [String] {
+    static CONFIG: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let mut out: Vec<String> = FIXED_GIT_CONFIG.iter().map(|c| c.to_string()).collect();
+        for (key, default) in USER_GIT_CONFIG {
+            // Reset first: this drops whatever the repository set.
+            out.push(format!("{key}={default}"));
+            // Then yours, in git's own order of precedence.
+            let mine = ["--system", "--global"]
+                .iter()
+                .flat_map(|scope| user_git_config(scope, key))
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<_>>();
+            for value in mine {
+                out.push(format!("{key}={value}"));
+            }
+        }
+        out
+    })
+}
+
+/// One config key's values from a scope outside any repository.
+fn user_git_config(scope: &str, key: &str) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .args(["config", scope, "--get-all", key])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        _ => vec![],
+    }
+}
+
 /// `git -C <dir> <args>` as the host runs it, outside any sandbox: nothing
 /// from the repository runs (no hooks, e.g. `post-checkout` on `worktree
 /// add` or `pre-push`, which a repository can point into files the agent
-/// writes; no fsmonitor command), and the host's own environment can't point
-/// git somewhere else or make it prompt.
+/// writes; no fsmonitor command, no command from its config at all, see
+/// [`safe_git_config`]), and the host's own environment can't point git
+/// somewhere else or make it prompt.
 pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(dir)
-        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"])
-        .args(args);
+    cmd.arg("-C").arg(dir);
+    for c in safe_git_config() {
+        cmd.arg("-c").arg(c);
+    }
+    cmd.args(args);
     for v in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -227,4 +313,46 @@ pub async fn access(root: &Path) -> Result<GitAccess> {
         common_dir: PathBuf::from(common),
         admin_dir: PathBuf::from(admin),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H1: the settings that hold a repository's config can't be a flat
+    /// override, or a `core.sshCommand` you set yourself (to pick a key, say)
+    /// would stop working. Yours is read from a scope no sandbox can write;
+    /// the repository's is dropped either way.
+    #[test]
+    fn your_own_config_is_kept_while_a_repository_s_is_dropped() {
+        let c = safe_git_config();
+        let value_of = |key: &str| -> Vec<&str> {
+            c.iter()
+                .filter_map(|s| s.strip_prefix(&format!("{key}=")))
+                .collect()
+        };
+        // Each of these is reset before anything is added back, so whatever
+        // a repository says for them never survives.
+        for (key, default) in USER_GIT_CONFIG {
+            let vals = value_of(key);
+            assert_eq!(vals.first(), Some(default), "{key} must be reset first");
+        }
+        // The flat safety settings are there once and are not negotiable.
+        for fixed in FIXED_GIT_CONFIG {
+            assert!(c.iter().any(|s| s == fixed), "{fixed}");
+        }
+        // The lookup itself works: this machine has a global user.email, and
+        // the same call shape is what reads the settings above.
+        let scoped = user_git_config("--global", "user.email");
+        let global_set = std::process::Command::new("git")
+            .args(["config", "--global", "--get", "user.email"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert_eq!(
+            !scoped.is_empty(),
+            global_set,
+            "reading your own config is broken, so your settings would be silently dropped"
+        );
+    }
 }
