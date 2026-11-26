@@ -28,8 +28,8 @@ impl Look {
     }
 }
 
-/// The heaviest weight the app draws text in: titles, headings, Markdown's **strong**, a
-/// selected row. Never bold (600 and up), which looks heavy in Linux's fonts.
+/// The heaviest weight the app's own labels use: titles, headings, a selected row. Content
+/// keeps its bold (Markdown, the terminal). Never bold (600 and up): heavy in Linux's fonts.
 pub const MEDIUM: f32 = 500.0;
 
 fn c(h: &str) -> Color {

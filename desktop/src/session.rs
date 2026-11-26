@@ -28,12 +28,7 @@ pub(crate) fn reply(src: &str, streaming: bool, t: &Theme, k: &Kit) -> El {
         .body_font(TextStyle::new(t.fs_msg, 400.0).lh((t.fs_msg * 1.6).round()))
         .inline_code_bg(Color::WHITE.alpha(if t.mac() { 0.08 } else { 0.10 }))
         .code_block(Color::BLACK.alpha(0.22), t.card_border)
-        .code_block_font(TextStyle::new(t.fs_mono, 400.0).mono().lh((t.fs_mono * 1.55).round()))
-        .strong_weight(MEDIUM)
-        // The kit's heading sizes, at the medium weight rather than its semibold.
-        .heading_font(1, TextStyle::new(17.0, MEDIUM).lh(24.0))
-        .heading_font(2, TextStyle::new(15.0, MEDIUM).lh(24.0))
-        .heading_font(3, TextStyle::new(13.0, MEDIUM).lh(20.0));
+        .code_block_font(TextStyle::new(t.fs_mono, 400.0).mono().lh((t.fs_mono * 1.55).round()));
     Markdown::new(src)
         .style(st)
         .selectable(true)
