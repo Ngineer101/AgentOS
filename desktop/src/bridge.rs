@@ -423,7 +423,26 @@ fn daemon_path() -> PathBuf {
     PathBuf::from("agenthostd")
 }
 
+/// The host runs as a service (scripts/install.sh): the service manager
+/// starts and restarts it. The app starting one too races it at login, and
+/// the app's copy runs without the service's settings (its relay).
+fn host_service_installed() -> bool {
+    let Ok(home) = std::env::var("HOME") else { return false };
+    let unit = if cfg!(target_os = "macos") {
+        PathBuf::from(&home).join("Library/LaunchAgents/dev.agenthost.host.plist")
+    } else {
+        std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".config"))
+            .join("systemd/user/agenthost.service")
+    };
+    unit.is_file()
+}
+
 fn start_daemon() -> bool {
+    if host_service_installed() {
+        return false;
+    }
     std::process::Command::new(daemon_path())
         .arg("run")
         .stdin(std::process::Stdio::null())
