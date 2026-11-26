@@ -193,6 +193,11 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.menu = None;
         return true;
     }
+    // Escape leaves Settings when nothing over them takes the key (a sheet has its own).
+    if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.settings.is_some() && s.pairing.is_none() && !s.new_open && !s.shortcuts_open && s.confirm_archive.is_none() && !s.auto_open && s.viewing.is_none() {
+        crate::settings::close(s);
+        return true;
+    }
     // Escape closes the agent panel when nothing over it takes the key.
     if ev.key == rune::Key::Escape && ev.mods == rune::Mods::default() && s.agent_visible() && !s.new_open && s.settings.is_none() && !s.shortcuts_open && s.confirm_archive.is_none() && !s.auto_open && s.viewing.is_none() {
         s.close_agent();
@@ -290,6 +295,8 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
             s.open_search();
         }
         Cmd::ToggleSidebar => s.sidebar_open = !s.sidebar_open,
+        // Their own key leaves Settings too, as it does the search field.
+        Cmd::Settings if s.settings.is_some() => crate::settings::close(s),
         Cmd::Settings => s.open_settings(Tab::General),
         Cmd::ToggleSide => {
             if session.is_some_and(|x| s.has_side(&x.session_id)) {

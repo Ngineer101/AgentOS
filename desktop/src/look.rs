@@ -81,7 +81,6 @@ pub struct Theme {
     pub row_selected: Color,
     pub row_hover: Color,
     pub sheet: Color,
-    pub panel: Color,
     pub field: Color,
     pub field_border: Color,
     pub focus: Color,
@@ -111,7 +110,7 @@ pub struct Theme {
     pub box_radius: f32,
     /// A card that stands on its own: approvals, toasts.
     pub card_radius: f32,
-    /// Sheets, dialogs and the Settings window.
+    /// Sheets and dialogs.
     pub dialog_radius: f32,
 }
 
@@ -148,7 +147,6 @@ impl Theme {
                 row_selected: white(0.10),
                 row_hover: white(0.06),
                 sheet: c("#2a2a2c"),
-                panel: c("#262628"),
                 field: black(0.25),
                 field_border: white(0.14),
                 focus: c("#0a84ff").alpha(0.35),
@@ -198,7 +196,6 @@ impl Theme {
                 row_selected: white(0.10),
                 row_hover: white(0.05),
                 sheet: c("#242428"),
-                panel: c("#222226"),
                 field: white(0.08),
                 field_border: c("#3584e4"),
                 focus: c("#3584e4").alpha(0.5),

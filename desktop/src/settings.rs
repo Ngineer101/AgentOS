@@ -1,8 +1,10 @@
-//! Settings (⌘,) with toolbar tabs on macOS, Preferences (Ctrl+,) with a view switcher on
-//! GNOME: General (host status), Agents, Workspaces, Connectors and Devices.
+//! Settings (⌘,) on macOS, Preferences (Ctrl+,) on GNOME: General (host status), Agents,
+//! Workspaces, Connectors, Devices and Archived.
 //!
-//! Drawn in the main window, over it: Rune windows each own their state, and Settings edits
-//! the same state as the main window (it would need a second copy kept in step).
+//! They fill the main window while open: a sidebar of the pages in the session sidebar's
+//! place, and the page in the rest (nano page "Desktop settings (full window)"). Not a
+//! window of their own: Rune windows each own their state, and Settings edits the same
+//! state as the main window (it would need a second copy kept in step).
 
 use crate::look::MEDIUM;
 use crate::bridge::{Refresh, Tag};
@@ -28,160 +30,173 @@ fn tab_icon(tab: Tab) -> &'static Icon {
     }
 }
 
-pub fn view(s: &App, tab: Tab, t: &Theme) -> El {
-    let body = match tab {
-        Tab::General => general(s, t),
-        Tab::Agents => agents(s, t),
-        Tab::Workspaces => workspaces(s, t),
-        Tab::Connectors => connectors(s, t),
-        Tab::Devices => devices(s, t),
-        Tab::Archived => archived(s, t),
-    };
-    if t.mac() {
-        mac_window(s, tab, t, body)
-    } else {
-        gnome_window(s, tab, t, body)
-    }
-}
+/// The pane's least width: under it the sidebar gives way first.
+const PANE_MIN_W: f32 = 540.0;
+/// A pane narrower than this stacks a page's list over its detail.
+pub const STACK_BELOW: f32 = 688.0;
 
-fn close(s: &mut App) {
+/// Leave Settings: back to the window as it was.
+pub(crate) fn close(s: &mut App) {
     s.settings = None;
     s.pairing = None;
 }
 
-fn mac_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
-    let dot = |c: Color| el().size(12.0, 12.0).radius(6.0).fill(c);
-    let lights = row()
-        .w(52.0)
-        .gap(8.0)
-        .center_y()
-        .child(
-            row()
-                .size(12.0, 12.0)
-                .role("button")
-                .label("Close Settings")
-                .on_press(close)
-                .child(dot(rune::color::hex("#ff5f57").unwrap_or(t.danger))),
-        )
-        .child(dot(Color::WHITE.alpha(0.18)))
-        .child(dot(Color::WHITE.alpha(0.18)));
-    let mut tabs = row().gap(4.0).justify_center().role("tablist").focus_group();
-    for tb in Tab::ALL {
-        let on = tb == tab;
-        let color = if on { t.accent } else { t.text2 };
-        let mut b = col()
-            .key(format!("tab-{}", tb.title().to_lowercase()))
-            .size(76.0, 48.0)
-            .center()
-            .gap(3.0)
-            .radius(t.btn_radius)
-            .role("tab")
-            .label(tb.title())
-            .checked(on)
-            .focusable(true)
-            .on_press(move |s: &mut App| s.open_settings(tb))
-            .child(icon(tab_icon(tb), 22.0).color(color))
-            .child(text(tb.title()).font(TextStyle::new(11.0, 400.0)).color(color));
-        b = if on { b.fill(Color::WHITE.alpha(0.1)) } else { b.hover(Color::WHITE.alpha(0.05)) };
-        tabs = tabs.child(b);
-    }
-    let header = col()
+/// A row in the settings sidebar: the session sidebar's nav row, as a tab.
+fn page_row(t: &Theme, tb: Tab, on: bool) -> El {
+    let mac = t.mac();
+    let mut r = row()
+        .key(format!("tab-{}", tb.title().to_lowercase()))
         .w_full()
-        .fill(t.toolbar)
-        .border_sides([0.0, 0.0, 0.5, 0.0], Color::BLACK.alpha(0.6))
-        .child(row().w_full().h(28.0).px(12.0).center_y().child(lights).child(row().grow(1.0).justify_center().child(text(tab.title()).font(TextStyle::new(13.0, MEDIUM)).color(t.text))).child(el().w(52.0)))
-        .child(row().w_full().justify_center().pt(6.0).pb(8.0).child(tabs));
-    let mut panel = col()
-        .key("settings")
-        .w(760.0)
-        .max_w(760.0)
-        .shrink()
-        .min_h(0.0)
-        .radius(t.dialog_radius)
-        .fill(t.panel)
-        .border(0.5, Color::WHITE.alpha(0.18))
-        .shadow(30.0, 80.0, Color::BLACK.alpha(0.55))
-        .clip_rounded(12.0)
-        .child(header)
-        .child(col().key("settings-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(body.px(24.0).pt(20.0).pb(24.0)));
-    let pairing = tab == Tab::Devices && s.pairing.is_some();
-    if pairing {
-        // The sheet hangs from the tab bar, over a dimmed tab.
-        panel = panel.min_h(640.0).child(el().pin(Some(0.0), Some(94.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.3)));
-    } else {
-        panel = panel.modal(true, close);
-    }
-    // Settings windows keep their top edge where it is as tabs change height.
-    let mut layer = scrim("settings-layer", 0.32, close).pt(40.0).px(24.0).pb(24.0).items_center().child(panel);
-    if pairing {
-        layer = layer.child(col().key("pair-layer").pin(Some(0.0), Some(40.0 + 94.0), Some(0.0), None).items_center().child(pairing_sheet(s, t)));
-    }
-    layer
+        .h(if mac { 28.0 } else { 34.0 })
+        .gap(if mac { 8.0 } else { 10.0 })
+        .px(if mac { 10.0 } else { 12.0 })
+        .center_y()
+        .radius(t.row_radius)
+        .role("tab")
+        .label(tb.title())
+        .checked(on)
+        .focusable(true)
+        .on_press(move |s: &mut App| s.open_settings(tb))
+        .child(row().size(16.0, 16.0).center().child(icon(tab_icon(tb), if mac { 15.0 } else { 16.0 }).color(if on || !mac { t.text } else { t.text2 })))
+        .child(text(tb.title()).font(TextStyle { weight: if on && !mac { MEDIUM } else { 400.0 }, ..t.font() }).color(if on && mac { Color::WHITE } else { t.text }).grow(1.0));
+    r = if on { r.fill(t.row_selected) } else { r.hover(t.row_hover) };
+    r
 }
 
-fn gnome_window(s: &App, tab: Tab, t: &Theme, body: El) -> El {
-    let mut switcher = row().gap(6.0).role("tablist").focus_group();
-    for tb in Tab::ALL {
-        let on = tb == tab;
-        let mut b = row()
-            .key(format!("tab-{}", tb.title().to_lowercase()))
-            .h(34.0)
-            .px(14.0)
+/// The settings sidebar, in the session sidebar's place while Settings is open: the way
+/// back, the pages, and the host line.
+pub fn sidebar(s: &App, tab: Tab, t: &Theme) -> El {
+    let mac = t.mac();
+    let mut header = row().key("settings-top").w_full().h(t.toolbar_h).center_y().window_drag();
+    let mut pages = col().key("settings-pages").w_full().px(if mac { 10.0 } else { 6.0 }).pb(10.0).gap(if mac { 1.0 } else { 2.0 }).role("tablist").focus_group();
+    if mac {
+        // The window's traffic lights sit in the header. Back is a row, its key beside it
+        // as New Session has ⌘N.
+        let back = row()
+            .key("settings-back")
+            .w_full()
+            .h(28.0)
             .gap(8.0)
+            .px(10.0)
             .center_y()
-            .radius(t.btn_radius)
-            .role("tab")
-            .label(tb.title())
-            .checked(on)
+            .radius(t.row_radius)
+            .role("button")
+            .label("Back")
+            .help("Back (Esc)")
             .focusable(true)
-            .on_press(move |s: &mut App| s.open_settings(tb))
-            .child(icon(tab_icon(tb), 16.0).color(if on { t.text } else { t.text2 }))
-            .child(text(tb.title()).font(TextStyle::new(14.5, MEDIUM)).color(if on { t.text } else { t.text2 }));
-        b = if on { b.fill(Color::WHITE.alpha(0.1)) } else { b.hover(Color::WHITE.alpha(0.05)) };
-        switcher = switcher.child(b);
-    }
-    let header = row()
-        .w_full()
-        .h(54.0)
-        .px(10.0)
-        .center_y()
-        .child(el().w(24.0))
-        .child(row().grow(1.0).justify_center().child(switcher))
-        .child(
-            row()
-                .size(24.0, 24.0)
-                .radius(12.0)
-                .center()
-                .fill(Color::WHITE.alpha(0.1))
-                .role("button")
-                .label("Close Preferences")
-                .on_press(close)
-                .child(icon(&ic::CLOSE, 10.0).color(t.text)),
-        );
-    let mut panel = col()
-        .key("settings")
-        .w(880.0)
-        .max_w(880.0)
-        .shrink()
-        .min_h(0.0)
-        .radius(t.dialog_radius)
-        .fill(t.panel)
-        .border(1.0, Color::BLACK.alpha(0.6))
-        .shadow(20.0, 60.0, Color::BLACK.alpha(0.5))
-        .clip_rounded(14.0)
-        .child(header)
-        .child(col().key("settings-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(row().w_full().px(40.0).pt(10.0).pb(32.0).justify_center().child(body.max_w(680.0))));
-    let pairing = tab == Tab::Devices && s.pairing.is_some();
-    if pairing {
-        panel = panel.min_h(640.0).child(el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.4)));
+            .hover(t.row_hover)
+            .on_press(close)
+            .child(row().size(16.0, 16.0).center().child(icon(&ic::CHEVRON_L, 11.0).color(t.text2)))
+            .child(text("Back").font(t.font()).color(t.text).grow(1.0))
+            .child(text("esc").font(TextStyle::new(11.0, 400.0)).color(t.text3));
+        pages = pages.child(back).child(crate::view::heading(t, "Settings", None));
     } else {
-        panel = panel.modal(true, close);
+        // An AdwNavigationSplitView's sidebar: back and the title in its header bar.
+        header = header
+            .px(6.0)
+            .gap(2.0)
+            .child(t.icon_button(&ic::CHEVRON_L, 12.0, "Back (Esc)", |s, _| close(s)).key("settings-back"))
+            .child(row().grow(1.0).min_w(0.0).justify_center().child(text("Preferences").font(TextStyle::new(t.fs, MEDIUM)).color(t.text).truncate()))
+            .child(el().w(34.0));
     }
-    let mut layer = scrim("settings-layer", 0.5, close).padding(30.0).center().child(panel);
-    if pairing {
-        layer = layer.child(col().key("pair-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).center().child(pairing_sheet(s, t)));
+    for tb in Tab::ALL {
+        pages = pages.child(page_row(t, tb, tb == tab));
     }
-    layer
+    let mut sb = col()
+        .key("settings-sidebar")
+        .w(t.sidebar_w)
+        .min_w(crate::model::SIDEBAR_MIN_W)
+        .shrink()
+        .h_full()
+        .min_h(0.0)
+        .child(header)
+        .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(pages))
+        .child(crate::view::host_line(s, t));
+    sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
+    sb.child(crate::view::sidebar_grip(t))
+}
+
+/// The open page, filling the rest of the window: a toolbar that names it over the page in
+/// a centred column. `stacked` is a pane too narrow for a list beside its detail.
+pub fn pane(s: &App, tab: Tab, t: &Theme, stacked: bool) -> El {
+    let mac = t.mac();
+    // Workspaces and Connectors hold a list beside a detail, and take the width for it.
+    let wide = matches!(tab, Tab::Workspaces | Tab::Connectors);
+    let body = match tab {
+        Tab::General => general(s, t),
+        Tab::Agents => agents(s, t),
+        Tab::Workspaces => workspaces(s, t, stacked),
+        Tab::Connectors => connectors(s, t, stacked),
+        Tab::Devices => devices(s, t),
+        Tab::Archived => archived(s, t),
+    };
+    let toolbar = if mac {
+        let small = TextStyle::new(t.fs_small, 400.0).lh((t.fs_small * 1.2).round());
+        row()
+            .key("settings-toolbar")
+            .w_full()
+            .h(t.toolbar_h)
+            .pl(20.0)
+            .pr(14.0)
+            .center_y()
+            .fill(t.toolbar)
+            .border_sides([0.0, 0.0, 0.5, 0.0], Color::BLACK.alpha(0.6))
+            .window_drag()
+            .child(col().min_w(0.0).shrink().child(text(tab.title()).key("settings-title").font(TextStyle::new(t.fs, MEDIUM).lh((t.fs * 1.2).round())).color(t.text).truncate()).child(text("Settings").font(small).color(t.text2)))
+    } else {
+        let buttons = crate::view::window_buttons(t);
+        let mut bar = row()
+            .key("settings-toolbar")
+            .w_full()
+            .h(t.toolbar_h)
+            .px(6.0)
+            .gap(4.0)
+            .center_y()
+            .fill(t.toolbar)
+            .box_shadow(rune::Shadow { y: 1.0, color: Color::BLACK.alpha(0.3), ..Default::default() })
+            .window_drag();
+        // Keeps the title centred against the window's buttons.
+        if buttons.is_some() {
+            bar = bar.child(el().w(crate::view::WINDOW_BUTTONS_W));
+        }
+        bar.child(row().grow(1.0).min_w(0.0).justify_center().child(text(tab.title()).key("settings-title").font(TextStyle::new(t.fs, MEDIUM)).color(t.text).truncate())).children(buttons)
+    };
+    let max = match (wide, mac) {
+        (true, true) => 960.0,
+        (true, false) => 920.0,
+        (false, _) => 680.0,
+    };
+    let page = row().w_full().px(if mac || wide { 24.0 } else { 40.0 }).pt(if mac { 20.0 } else { 22.0 }).pb(if mac { 28.0 } else { 32.0 }).justify_center().child(body.w_full().max_w(max));
+    let mut c = col()
+        .key("settings")
+        .grow(1.0)
+        .min_w(PANE_MIN_W)
+        .h_full()
+        .min_h(0.0)
+        .fill(t.content)
+        .child(toolbar)
+        .child(col().key("settings-body").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(page));
+    if !mac {
+        c = c.border_sides([0.0, 0.0, 0.0, 1.0], Color::BLACK.alpha(0.35));
+    }
+    c
+}
+
+fn cancel_pairing(s: &mut App) {
+    s.pairing = None;
+}
+
+/// Pairing a phone, over the whole window: a sheet from the toolbar on macOS, a dialog on
+/// GNOME, placed as New Session's is.
+pub fn pairing(s: &App, t: &Theme) -> Option<El> {
+    if s.settings != Some(Tab::Devices) || s.pairing.is_none() {
+        return None;
+    }
+    Some(if t.mac() {
+        scrim("pair-layer", 0.32, cancel_pairing).pt(t.toolbar_h).pb(20.0).items_center().child(pairing_sheet(s, t))
+    } else {
+        scrim("pair-layer", 0.5, cancel_pairing).padding(30.0).center().child(pairing_sheet(s, t))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -296,9 +311,16 @@ pub(crate) fn popup_button(t: &Theme, key: String, label: &str) -> El {
         .child(icon(if mac { &ic::UPDOWN } else { &ic::CHEVRON_DOWN }, 10.0).color(t.text2))
 }
 
-/// A selectable row in a source list (Workspaces, Connectors).
-fn source_row(t: &Theme, key: String, selected: bool, glyph: El, name: &str, detail: El, f: impl Fn(&mut App) + 'static) -> El {
+/// A selectable row in a source list (Workspaces, Connectors). `stacked` puts its detail
+/// at the end of the name's line, for a list as wide as the page.
+fn source_row(t: &Theme, key: String, selected: bool, stacked: bool, glyph: El, name: &str, detail: El, f: impl Fn(&mut App) + 'static) -> El {
     let mac = t.mac();
+    let title = text(name.to_string()).font(t.font()).color(if selected && mac { Color::WHITE } else { t.text }).truncate();
+    let names = if stacked {
+        row().grow(1.0).min_w(0.0).gap(8.0).center_y().child(title.grow(1.0).min_w(0.0)).child(detail)
+    } else {
+        col().grow(1.0).min_w(0.0).gap(1.0).child(title).child(detail)
+    };
     let mut r = row()
         .key(key)
         .w_full()
@@ -312,19 +334,23 @@ fn source_row(t: &Theme, key: String, selected: bool, glyph: El, name: &str, det
         .focusable(true)
         .on_press(f)
         .child(row().w(22.0).center().child(glyph))
-        .child(col().grow(1.0).min_w(0.0).gap(1.0).child(text(name.to_string()).font(t.font()).color(if selected && mac { Color::WHITE } else { t.text }).truncate()).child(detail));
+        .child(names);
     r = if selected { r.fill(if mac { t.accent } else { Color::WHITE.alpha(0.1) }) } else { r.hover(Color::WHITE.alpha(0.04)) };
     r
 }
 
-/// The two-pane layout: a source list on the left, the detail on the right.
-fn split(t: &Theme, list: El, detail: El) -> El {
+/// A source list beside its detail, or over it when `stacked` (a pane too narrow for both).
+fn split(t: &Theme, list: El, detail: El, stacked: bool) -> El {
     let mac = t.mac();
-    let mut l = col().w(220.0).min_h(300.0).radius(t.box_radius).fill(t.boxed).clip_rounded(t.box_radius).child(list.grow(1.0));
+    let mut l = col().key("source-list").radius(t.box_radius).fill(t.boxed).clip_rounded(t.box_radius);
     if mac {
         l = l.border(0.5, t.sep);
     }
-    row().w_full().gap(16.0).child(l).child(detail.grow(1.0).min_w(0.0))
+    if stacked {
+        col().w_full().gap(16.0).child(l.w_full().child(list)).child(detail.w_full())
+    } else {
+        row().w_full().gap(16.0).child(l.w(if mac { 240.0 } else { 250.0 }).min_h(300.0).child(list.grow(1.0))).child(detail.grow(1.0).min_w(0.0))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -849,12 +875,15 @@ pub(crate) fn pick_workspace_folder(tx: &mut Tx) {
     });
 }
 
-fn workspaces(s: &App, t: &Theme) -> El {
+fn workspaces(s: &App, t: &Theme, stacked: bool) -> El {
     let mac = t.mac();
     let mut ws: Vec<&Workspace> = s.workspaces.iter().collect();
     ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
     let selected = s.sel_ws.clone().filter(|id| s.workspace(id).is_some()).or_else(|| ws.iter().find(|w| w.kind != WorkspaceKind::Scratch).or(ws.first()).map(|w| w.workspace_id.clone()));
-    let mut list = col().w_full().grow(1.0).padding(4.0).gap(2.0).role("list");
+    let mut list = col().w_full().padding(4.0).gap(2.0).role("list");
+    if !stacked {
+        list = list.grow(1.0);
+    }
     for w in &ws {
         let on = selected.as_deref() == Some(w.workspace_id.as_str());
         let quick = w.kind == WorkspaceKind::Scratch;
@@ -866,7 +895,7 @@ fn workspaces(s: &App, t: &Theme) -> El {
         };
         let id = w.workspace_id.clone();
         let detail = text(kind.to_string()).font(t.font_small()).color(if on && mac { Color::WHITE.alpha(0.8) } else { t.text2 });
-        list = list.child(source_row(t, format!("ws-{}", w.workspace_id), on, glyph, if quick { "Quick tasks" } else { &w.name }, detail, move |s| s.sel_ws = Some(id.clone())));
+        list = list.child(source_row(t, format!("ws-{}", w.workspace_id), on, stacked, glyph, if quick { "Quick tasks" } else { &w.name }, detail, move |s| s.sel_ws = Some(id.clone())));
     }
     let sel = selected.as_ref().and_then(|id| s.workspace(id));
     let remove: Option<Box<dyn Fn(&mut App)>> = if s.admin {
@@ -918,7 +947,7 @@ fn workspaces(s: &App, t: &Theme) -> El {
             0.0,
         ));
     }
-    c = c.child(split(t, left, detail));
+    c = c.child(split(t, left, detail, stacked));
     if !s.admin {
         c = c.child(local_only(t, "Workspace settings"));
     }
@@ -1179,16 +1208,19 @@ fn conn_status(s: &App, c: &Connector) -> (String, bool) {
     }
 }
 
-fn connectors(s: &App, t: &Theme) -> El {
+fn connectors(s: &App, t: &Theme, stacked: bool) -> El {
     let mac = t.mac();
     let selected = s.sel_conn.clone().filter(|id| s.connectors.iter().any(|c| &c.connector_id == id)).or_else(|| s.connectors.first().map(|c| c.connector_id.clone()));
-    let mut list = col().w_full().grow(1.0).padding(4.0).gap(2.0).role("list");
+    let mut list = col().w_full().padding(4.0).gap(2.0).role("list");
+    if !stacked {
+        list = list.grow(1.0);
+    }
     for c in &s.connectors {
         let on = !s.adding_connector && selected.as_deref() == Some(c.connector_id.as_str());
         let (st, warn) = conn_status(s, c);
         let detail = text(st).font(t.font_small()).color(if warn { t.warn } else if on && mac { Color::WHITE.alpha(0.8) } else { t.text2 }).truncate();
         let id = c.connector_id.clone();
-        list = list.child(source_row(t, format!("conn-{}", c.connector_id), on, conn_badge(t, c, 22.0), &c.name, detail, move |s| {
+        list = list.child(source_row(t, format!("conn-{}", c.connector_id), on, stacked, conn_badge(t, c, 22.0), &c.name, detail, move |s| {
             if s.sel_conn.as_deref() != Some(id.as_str()) {
                 s.renaming = None;
                 s.rename_error = None;
@@ -1231,7 +1263,7 @@ fn connectors(s: &App, t: &Theme) -> El {
             None => col(),
         }
     };
-    let mut c = col().key("connectors").w_full().gap(18.0).child(split(t, left, detail));
+    let mut c = col().key("connectors").w_full().gap(18.0).child(split(t, left, detail, stacked));
     if !s.admin {
         c = c.child(local_only(t, "Connector settings"));
     }

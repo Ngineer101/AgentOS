@@ -3616,3 +3616,121 @@ fn a_push_approval_shows_where_the_remote_really_points() {
         assert!(ui.find("approval-url").is_none(), "{look:?}: nothing to show there");
     }
 }
+
+/// Settings fill the window: their sidebar in the sessions' place and the page in the rest,
+/// a list beside its detail where there's room and over it where there isn't. Back, Escape
+/// and the Settings key give the window back as it was.
+#[test]
+fn settings_take_the_window_and_give_it_back() {
+    use crate::look::Look;
+    use crate::model::Tab;
+    use rune::{Key, KeyEvent, Mods};
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let open = |scene: &'static str, look: Look, size: (f32, f32)| {
+        let mut ui = crate::app().headless_runtime(size, rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+            s.screen = Screen::Session("ses_1".into());
+        });
+        for _ in 0..4 {
+            ui.frame(0.016);
+        }
+        ui
+    };
+    let rect = |ui: &rune::Runtime<model::App>, key: &str| ui.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key} is not on screen")).rect;
+    let read = |ui: &mut rune::Runtime<model::App>, f: &dyn Fn(&model::App) -> bool| {
+        let r = std::rc::Rc::new(std::cell::Cell::new(false));
+        let r2 = r.clone();
+        ui.update_if(|s, _| {
+            r2.set(f(s));
+            false
+        });
+        r.get()
+    };
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let escape = |ui: &mut rune::Runtime<model::App>| {
+        ui.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let shown = ["settings-sidebar", "settings-back", "settings-pages", "tab-general", "tab-agents", "tab-workspaces", "tab-connectors", "tab-devices", "tab-archived", "host-line", "settings", "settings-toolbar", "settings-title", "settings-body"];
+    let gone = ["sidebar", "session-list", "main", "toolbar", "panel", "settings-layer"];
+    for look in [Look::Mac, Look::Gnome] {
+        let side_w = crate::look::Theme::new(look).sidebar_w;
+        let list_w = if look.mac() { 240.0 } else { 250.0 };
+        let mut ui = open("settings-connectors", look, (1280.0, 800.0));
+        for k in shown {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        for k in gone {
+            assert!(ui.find(k).is_none(), "{look:?}: {k} should not be on screen");
+        }
+        // The sidebar keeps the session sidebar's place and width; the page has the rest.
+        let (side, pane) = (rect(&ui, "settings-sidebar"), rect(&ui, "settings"));
+        assert_eq!(side, [0.0, 0.0, side_w, 800.0], "{look:?}");
+        assert_eq!((pane[0], pane[0] + pane[2], pane[3]), (side_w, 1280.0, 800.0), "{look:?}: {pane:?}");
+        // With room, the connectors are listed beside the chosen one's detail.
+        let (list, name) = (rect(&ui, "source-list"), rect(&ui, "conn-name"));
+        assert_eq!(list[2], list_w, "{look:?}: {list:?}");
+        assert!(name[0] >= list[0] + list[2] && name[1] < list[1] + list[3], "{look:?}: the detail is beside the list: {name:?} {list:?}");
+        // The rows are the pages.
+        click(&mut ui, "tab-devices");
+        assert!(read(&mut ui, &|s| s.settings == Some(Tab::Devices)), "{look:?}");
+        assert!(ui.find("devices").is_some() && ui.find("connectors").is_none(), "{look:?}: the page follows the row");
+        // Escape gives the window back as it was: the sessions, and the one that was open.
+        escape(&mut ui);
+        assert!(read(&mut ui, &|s| s.settings.is_none() && s.screen == Screen::Session("ses_1".into())), "{look:?}: Escape leaves Settings");
+        for k in ["sidebar", "session-list", "main", "toolbar"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is back");
+        }
+        assert!(ui.find("settings-sidebar").is_none() && ui.find("settings").is_none(), "{look:?}");
+        // The Settings key opens them, and leaves them.
+        ui.update(|s, tx| commands::run(s, Cmd::Settings, tx));
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.settings == Some(Tab::General)), "{look:?}");
+        ui.update(|s, tx| commands::run(s, Cmd::Settings, tx));
+        ui.frame(0.016);
+        assert!(read(&mut ui, &|s| s.settings.is_none()), "{look:?}: the key leaves Settings too");
+        // And so does Back.
+        ui.update(|s, tx| commands::run(s, Cmd::Settings, tx));
+        ui.frame(0.016);
+        ui.frame(0.016);
+        click(&mut ui, "settings-back");
+        assert!(read(&mut ui, &|s| s.settings.is_none() && s.screen == Screen::Session("ses_1".into())), "{look:?}: Back leaves Settings");
+
+        // Pairing is a sheet over the whole window. Escape puts it away first, then Settings.
+        let mut ui = open("pairing", look, (1280.0, 800.0));
+        let (layer, sheet) = (rect(&ui, "pair-layer"), rect(&ui, "pairing"));
+        assert_eq!(layer, [0.0, 0.0, 1280.0, 800.0], "{look:?}");
+        assert!(((sheet[0] + sheet[2] / 2.0) - 640.0).abs() < 1.0, "{look:?}: the sheet is centred in the window: {sheet:?}");
+        assert!(ui.find("settings-sidebar").is_some(), "{look:?}");
+        escape(&mut ui);
+        assert!(read(&mut ui, &|s| s.pairing.is_none() && s.settings == Some(Tab::Devices)), "{look:?}: Escape closes the sheet, not Settings");
+        assert!(ui.find("pair-layer").is_none(), "{look:?}");
+        escape(&mut ui);
+        assert!(read(&mut ui, &|s| s.settings.is_none()), "{look:?}");
+
+        // The smallest window: the sidebar gives way so the page keeps its width, and the
+        // list sits over the detail.
+        for (scene, row, detail) in [("settings-connectors", "conn-con_gh", "conn-name"), ("settings-workspaces", "ws-ws_relay", "workspaces")] {
+            let ui = open(scene, look, (760.0, 520.0));
+            let (side, pane) = (rect(&ui, "settings-sidebar"), rect(&ui, "settings"));
+            assert_eq!((side[2], pane[0], pane[2]), (220.0, 220.0, 540.0), "{look:?} {scene}");
+            let (list, item) = (rect(&ui, "source-list"), rect(&ui, row));
+            assert!(list[2] > 400.0 && item[3] > 20.0 && item[1] >= list[1] && item[1] + item[3] <= list[1] + list[3], "{look:?} {scene}: the list is as wide as the page and holds its rows: {list:?} {item:?}");
+            if detail == "conn-name" {
+                let name = rect(&ui, detail);
+                assert!(name[1] >= list[1] + list[3], "{look:?} {scene}: the detail is under the list: {name:?} {list:?}");
+            }
+        }
+    }
+}
