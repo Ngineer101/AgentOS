@@ -221,6 +221,7 @@ pub fn status_glyph(t: &Theme, st: Status, on_accent: bool) -> El {
     let e = match st {
         Status::Working => icon(&ic::SPINNER, if t.mac() { 14.0 } else { 16.0 }).color(if on_accent { Color::WHITE } else if t.mac() { t.text2 } else { t.text }).looping(rune::LoopSpec::rotation(0.9)),
         Status::Ended if on_accent => t.dot(Color::WHITE.alpha(0.6), size),
+        Status::YourTurn if !on_accent => t.dot(t.your_turn, size),
         _ => t.dot(c, size),
     };
     row().size(14.0, 14.0).center().child(e)

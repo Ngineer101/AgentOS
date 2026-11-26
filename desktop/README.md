@@ -9,6 +9,8 @@ relay (see [Remote access](#remote-access) below).
 Design v2 (nano.design `dohse26rb`): one codebase, two looks. macOS gets AppKit
 patterns, Linux gets GNOME / libadwaita. The look follows the OS;
 `AGENTHOST_DESKTOP_LOOK=macos|gnome` picks one, so both render on one machine.
+`AGENTHOST_DESKTOP_FONT="Liberation Sans"` sets the interface font to any
+installed family (the look's own font fills in what it lacks).
 
 - **Sidebar** (compact, nano page "Desktop sidebar v3"): New Session and
   Automations at the top, then Pinned and the workspaces (Quick tasks first),

@@ -745,7 +745,7 @@ fn prompt_column(s: &App, p: &Value, t: &Theme) -> El {
         c = c.child(strip);
     }
     if !body.is_empty() {
-        c = c.child(col().px(13.0).py(9.0).radius(16.0).fill(Color::WHITE.alpha(0.09)).gap(6.0).children(body));
+        c = c.child(col().px(13.0).py(9.0).radius(16.0).fill(t.bubble).gap(6.0).children(body));
     }
     c
 }

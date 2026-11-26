@@ -60,6 +60,11 @@ pub struct Theme {
     pub bolt: Color,
     /// A pull request's mark in the sidebar.
     pub pr: Color,
+    /// The "your turn" dot by a session: the accent, toned down so a list of them stays quiet.
+    pub your_turn: Color,
+    /// The user's message bubble: a muted blue, so prompts stand out from the agent's text
+    /// when scrolling.
+    pub bubble: Color,
     pub control: Color,
     /// A grouped box (Settings forms, sheet lists), or an Adwaita card.
     pub boxed: Color,
@@ -126,6 +131,8 @@ impl Theme {
                 danger: c("#ff453a"),
                 bolt: c("#ff9f0a"),
                 pr: c("#bf5af2"),
+                your_turn: c("#0a84ff").alpha(0.55),
+                bubble: c("#2c3e60"),
                 control: white(0.10),
                 boxed: white(0.05),
                 card: white(0.04),
@@ -175,6 +182,8 @@ impl Theme {
                 danger: c("#ff7b63"),
                 bolt: c("#f8e45c"),
                 pr: c("#dc8add"),
+                your_turn: c("#3584e4").alpha(0.55),
+                bubble: c("#2c3e60"),
                 control: white(0.10),
                 boxed: white(0.08),
                 card: white(0.08),
