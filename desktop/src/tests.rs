@@ -574,6 +574,28 @@ fn archiving_and_default_logins() {
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 
+/// A finished turn you haven't looked at is unread (a green dot) until you open the
+/// session; the first list ever marks everything seen, and leaving a session doesn't make it
+/// unread again.
+#[test]
+fn a_finished_turn_is_unread_until_opened() {
+    let mut app = demo("home");
+    let unread = |app: &model::App, id: &str| app.unread(app.session(id).unwrap());
+    assert!(!unread(&app, "ses_q"), "nothing is unread before the first list");
+    app.mark_seen(true);
+    assert!(!unread(&app, "ses_q"), "the first list marks every session seen");
+    // The agent works on ses_q and finishes while another session is open.
+    app.open_session("ses_1");
+    let x = app.sessions.iter_mut().find(|x| x.session_id == "ses_q").unwrap();
+    x.last_seq += 5;
+    assert!(unread(&app, "ses_q"));
+    assert!(!unread(&app, "ses_1"), "only an idle session is unread: ses_1 needs you");
+    app.open_session("ses_q");
+    assert!(!unread(&app, "ses_q"), "open is seen");
+    app.open_session("ses_1");
+    assert!(!unread(&app, "ses_q"), "and stays seen");
+}
+
 fn demo(scene: &str) -> model::App {
     let mut app = model::init();
     (crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1)(&mut app);

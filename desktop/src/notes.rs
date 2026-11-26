@@ -3,6 +3,7 @@
 //! line is the title. Start Session opens the New Session sheet in the note's workspace and
 //! puts the note in the new session's composer; archiving that session marks the note done.
 
+use crate::look::MEDIUM;
 use crate::automations::{pick_menu, picker, Opt};
 use crate::icons as ic;
 use crate::look::{Btn, Theme};
@@ -48,7 +49,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
             .gap(10.0)
             .px(24.0)
             .child(icon(&ic::NOTE, 40.0).color(t.text3))
-            .child(text("Update AgentOS").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("Update AgentOS").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
             .child(t.small("This host has no notes. Update agenthostd to keep ideas and todos with your workspaces.").wrap().align(rune::Align::Center).max_w(420.0));
     }
     let mac = t.mac();
@@ -145,7 +146,7 @@ fn group_head(s: &App, t: &Theme, ws: &str) -> El {
         // The "+" shows while the pointer is on the heading: the pane's own "+" is the one
         // always in view.
         .hover_group()
-        .child(text(name.clone()).font(if mac { TextStyle::new(11.0, 600.0) } else { TextStyle::new(12.5, 700.0) }).color(if mac { t.text3 } else { t.text2 }).truncate().grow(1.0).min_w(0.0))
+        .child(text(name.clone()).font(if mac { TextStyle::new(11.0, MEDIUM) } else { TextStyle::new(12.5, MEDIUM) }).color(if mac { t.text3 } else { t.text2 }).truncate().grow(1.0).min_w(0.0))
         .child(
             row()
                 .key(format!("note-new-{ws}"))
@@ -187,7 +188,7 @@ fn note_row(s: &App, t: &Theme, n: &Note, now: i64) -> El {
     let selected = s.selected_note().is_some_and(|x| x.note_id == n.note_id);
     let done = n.done_at.is_some();
     let (ink, sub) = if done { (t.text2, t.text3) } else { (t.text, t.text2) };
-    let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(text(clip(n.title(), 120)).font(TextStyle { weight: if selected && !mac { 700.0 } else { 400.0 }, ..t.font() }).color(ink).truncate());
+    let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(text(clip(n.title(), 120)).font(TextStyle { weight: if selected && !mac { MEDIUM } else { 400.0 }, ..t.font() }).color(ink).truncate());
     if let Some(p) = preview(n) {
         names = names.child(text(p).font(t.font_small()).color(sub).truncate());
     }
@@ -244,7 +245,7 @@ fn editor(s: &App, t: &Theme) -> El {
             .center()
             .gap(10.0)
             .child(icon(&ic::NOTE, 40.0).color(t.text3))
-            .child(text("No Note Selected").font(TextStyle::new(15.0, t.w_bold)).color(t.text))
+            .child(text("No Note Selected").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
             .child(t.small("A note keeps an idea or a todo with its workspace until it's ready: the first line is its title. Start a session from it when you are.").wrap().align(rune::Align::Center).max_w(420.0))
             .child(row().pt(6.0).child(t.button("New Note", Btn::Primary, None, |s| s.new_note(None)).key("empty-new-note")));
     }
@@ -378,7 +379,7 @@ pub fn confirm(s: &App, t: &Theme) -> Option<El> {
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, cancel)
-        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, 700.0)).color(t.text).wrap())
+        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap())
         .child(t.small("The note is gone for good. Sessions started from it stay.").wrap())
         .child(buttons);
     panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };

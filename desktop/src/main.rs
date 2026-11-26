@@ -37,6 +37,7 @@ fn setup(s: &mut App, waker: Waker) {
         s.collapsed = p.collapsed;
         s.sidebar_w = p.sidebar_w.map(|w| w.clamp(model::SIDEBAR_MIN_W, model::SIDEBAR_MAX_W));
         s.panel_w = p.panel_w;
+        s.seen = p.seen;
         s.save_prefs = true;
     }
 }

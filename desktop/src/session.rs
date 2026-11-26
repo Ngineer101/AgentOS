@@ -1,6 +1,7 @@
 //! The open session: the transcript in a readable column (prompts, replies as Markdown,
 //! thoughts, tool calls, blocked hosts, approvals inline) and the composer under it.
 
+use crate::look::MEDIUM;
 use crate::bridge::Refresh;
 use crate::commands::{label as keys, run, Cmd};
 use crate::icons as ic;
@@ -27,7 +28,12 @@ pub(crate) fn reply(src: &str, streaming: bool, t: &Theme, k: &Kit) -> El {
         .body_font(TextStyle::new(t.fs_msg, 400.0).lh((t.fs_msg * 1.6).round()))
         .inline_code_bg(Color::WHITE.alpha(if t.mac() { 0.08 } else { 0.10 }))
         .code_block(Color::BLACK.alpha(0.22), t.card_border)
-        .code_block_font(TextStyle::new(t.fs_mono, 400.0).mono().lh((t.fs_mono * 1.55).round()));
+        .code_block_font(TextStyle::new(t.fs_mono, 400.0).mono().lh((t.fs_mono * 1.55).round()))
+        .strong_weight(MEDIUM)
+        // The kit's heading sizes, at the medium weight rather than its semibold.
+        .heading_font(1, TextStyle::new(17.0, MEDIUM).lh(24.0))
+        .heading_font(2, TextStyle::new(15.0, MEDIUM).lh(24.0))
+        .heading_font(3, TextStyle::new(13.0, MEDIUM).lh(20.0));
     Markdown::new(src)
         .style(st)
         .selectable(true)
@@ -326,7 +332,7 @@ fn slash_menu(s: &App, sess: &Session, t: &Theme) -> Option<El> {
                     s.prompt.replace_text(format!("{cmd} "));
                     s.prompt.focused = true;
                 })
-                .child(text(cmd).font(TextStyle::new(t.fs, 600.0).mono()).color(if i == 0 && mac { Color::WHITE } else { t.text }))
+                .child(text(cmd).font(TextStyle::new(t.fs, MEDIUM).mono()).color(if i == 0 && mac { Color::WHITE } else { t.text }))
                 .child(text(what.to_string()).font(t.font_small()).color(if i == 0 && mac { Color::WHITE.alpha(0.8) } else { t.text2 }).truncate().shrink())
                 .child(el().grow(1.0))
                 .child(text(if mac { "⇥" } else { "Tab" }).font(t.font_small()).color(if i == 0 && mac { Color::WHITE.alpha(0.7) } else { t.text3 })),
@@ -365,7 +371,7 @@ fn agent_mark(agent: AgentKind, size: f32, ink: Color) -> El {
         .center()
         .radius((size * 0.28).round())
         .border(1.0, ink.alpha(0.8))
-        .child(text(letter.to_string()).font(TextStyle::new((size * 0.6).round(), 700.0)).color(ink))
+        .child(text(letter.to_string()).font(TextStyle::new((size * 0.6).round(), MEDIUM)).color(ink))
 }
 
 /// The composer's model chip: the agent's mark, the model, a bolt with fast mode on. It opens
@@ -436,7 +442,7 @@ pub fn model_popover(s: &App, sess: &Session, t: &Theme) -> Vec<El> {
     let (pad, inset) = (6.0, if mac { 8.0 } else { 10.0 });
     let w = popover_w(t);
     let mut sections: Vec<El> = vec![];
-    let title = |l: &str| text(l.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, if mac { 600.0 } else { 700.0 })).color(if mac { t.text3 } else { t.text2 });
+    let title = |l: &str| text(l.to_string()).font(TextStyle::new(if mac { 11.0 } else { 12.5 }, MEDIUM)).color(if mac { t.text3 } else { t.text2 });
     if let Some(o) = App::config_option(sess, "model") {
         let mut list = col().key("model-list").w_full().gap(if mac { 0.0 } else { 2.0 }).role("listbox").label(o.name.clone()).focus_group();
         for v in &o.options {
@@ -607,7 +613,7 @@ fn media_controls(s: &App, t: &Theme) -> El {
                 .center_y()
                 .child(t.icon_button(&ic::STOP, 14.0, &format!("{} ({})", if s.live.is_some() { "Stop Dictating" } else { "Stop and Transcribe" }, keys(s.look, Cmd::Dictate)), |s, _| s.mic_press()))
                 .child(t.dot(t.danger, 8.0))
-                .child(text(format!("{}:{:02}", secs / 60, secs % 60)).font(TextStyle::new(t.fs, 600.0)).color(t.text))
+                .child(text(format!("{}:{:02}", secs / 60, secs % 60)).font(TextStyle::new(t.fs, MEDIUM)).color(t.text))
                 .child(row().w(60.0).h(4.0).radius(2.0).fill(Color::WHITE.alpha(0.12)).child(el().w(60.0 * level).h(4.0).radius(2.0).fill(t.text)))
                 .child(t.small_button("Discard", |s| s.mic_cancel()))
         }
@@ -829,7 +835,7 @@ pub fn image_viewer(s: &App, t: &Theme) -> Option<El> {
         .px(12.0)
         .gap(8.0)
         .center_y()
-        .child(text(format!("{name} · {w} × {h}")).font(TextStyle::new(13.0, 600.0)).color(Color::WHITE.alpha(0.9)).grow(1.0))
+        .child(text(format!("{name} · {w} × {h}")).font(TextStyle::new(13.0, MEDIUM)).color(Color::WHITE.alpha(0.9)).grow(1.0))
         .child(t.icon_button(&ic::CLOSE, 11.0, "Close (Esc)", move |s: &mut App, _: &mut Tx| close(s)).key("viewer-close"));
     let picture = el()
         .key("viewer-image")
@@ -1192,7 +1198,7 @@ fn tool_call(s: &App, e: &Event, results: &HashMap<&str, &Event>, t: &Theme) -> 
             body = body.child(pre(t, clip(&output, 8000)));
         }
         if res.is_some_and(|r| r.payload["sandbox_denied"] == true) {
-            body = body.child(text("Blocked by the sandbox").font(TextStyle::new(t.fs_small, 600.0)).color(t.warn));
+            body = body.child(text("Blocked by the sandbox").font(TextStyle::new(t.fs_small, MEDIUM)).color(t.warn));
         }
         c = c.child(body);
     }
@@ -1229,7 +1235,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
             .grow(1.0)
             .min_w(0.0)
             .gap(if mac { 1.0 } else { 2.0 })
-            .child(text(title).font(TextStyle::new(t.fs, t.w_bold)).color(t.text).wrap())
+            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap())
             .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap()),
     );
     let mut card = col()
@@ -1299,7 +1305,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
                 .hover(Color::WHITE.alpha(0.07))
                 .press(Color::WHITE.alpha(0.12))
                 .on_press(move |s: &mut App| s.approve_and_stop_asking(&a3))
-                .child(text(label).font(TextStyle::new(14.0, 700.0)).color(t.text))
+                .child(text(label).font(TextStyle::new(14.0, MEDIUM)).color(t.text))
         };
         buttons = buttons.child(b.key("approve-always").help(help));
     }
@@ -1357,7 +1363,7 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
             .grow(1.0)
             .min_w(0.0)
             .gap(if mac { 1.0 } else { 2.0 })
-            .child(text(title).font(TextStyle::new(t.fs, t.w_bold)).color(t.text).wrap())
+            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap())
             .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap()),
     );
     let mut card = col()

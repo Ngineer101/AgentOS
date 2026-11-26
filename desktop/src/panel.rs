@@ -5,6 +5,7 @@
 //! macOS draws it as an inspector (a hairline-separated trailing pane under its own toolbar
 //! band); GNOME as the end pane of an AdwOverlaySplitView.
 
+use crate::look::MEDIUM;
 use crate::icons as ic;
 use crate::look::Theme;
 use crate::model::{App, PanelTab, Screen};
@@ -115,7 +116,7 @@ fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
             }
         })
         .child(icon(tab.glyph(), 12.0).color(if on { t.text } else { t.text2 }))
-        .child(text(tab.title()).font(TextStyle::new(t.fs, if on { if mac { 600.0 } else { 700.0 } } else { 400.0 })).color(if on { t.text } else { t.text2 }));
+        .child(text(tab.title()).font(TextStyle::new(t.fs, if on { MEDIUM } else { 400.0 })).color(if on { t.text } else { t.text2 }));
     if let Some(n) = count {
         r = r.child(text(n.to_string()).key("count").font(TextStyle::new(t.fs, 400.0)).color(t.text2));
     }

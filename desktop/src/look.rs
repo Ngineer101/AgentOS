@@ -28,6 +28,10 @@ impl Look {
     }
 }
 
+/// The heaviest weight the app draws text in: titles, headings, Markdown's **strong**, a
+/// selected row. Never bold (600 and up), which looks heavy in Linux's fonts.
+pub const MEDIUM: f32 = 500.0;
+
 fn c(h: &str) -> Color {
     hex(h).unwrap_or(Color::BLACK)
 }
@@ -62,6 +66,8 @@ pub struct Theme {
     pub pr: Color,
     /// The "your turn" dot by a session: the accent, toned down so a list of them stays quiet.
     pub your_turn: Color,
+    /// The dot by a session whose agent finished a turn you haven't looked at yet.
+    pub unread: Color,
     /// The user's message bubble: a muted blue, so prompts stand out from the agent's text
     /// when scrolling.
     pub bubble: Color,
@@ -87,7 +93,6 @@ pub struct Theme {
     pub fs_mono: f32,
     pub fs_mono_small: f32,
     pub fs_msg: f32,
-    pub w_bold: f32,
     // Metrics.
     pub btn_h: f32,
     pub toolbar_h: f32,
@@ -132,6 +137,7 @@ impl Theme {
                 bolt: c("#ff9f0a"),
                 pr: c("#bf5af2"),
                 your_turn: c("#0a84ff").alpha(0.55),
+                unread: c("#32d74b"),
                 bubble: c("#2c3e60"),
                 control: white(0.10),
                 boxed: white(0.05),
@@ -153,7 +159,6 @@ impl Theme {
                 fs_mono: 12.0,
                 fs_mono_small: 11.5,
                 fs_msg: 13.5,
-                w_bold: 600.0,
                 btn_h: 24.0,
                 btn_radius: 6.0,
                 toolbar_h: 52.0,
@@ -183,6 +188,7 @@ impl Theme {
                 bolt: c("#f8e45c"),
                 pr: c("#dc8add"),
                 your_turn: c("#3584e4").alpha(0.55),
+                unread: c("#57e389"),
                 bubble: c("#2c3e60"),
                 control: white(0.10),
                 boxed: white(0.08),
@@ -203,7 +209,6 @@ impl Theme {
                 fs_mono: 13.0,
                 fs_mono_small: 12.5,
                 fs_msg: 14.5,
-                w_bold: 700.0,
                 btn_h: 34.0,
                 btn_radius: 7.0,
                 toolbar_h: 47.0,
@@ -255,7 +260,7 @@ impl Theme {
         text(t.into()).font(self.font()).color(self.text)
     }
     pub fn strong(&self, t: impl Into<String>) -> El {
-        text(t.into()).font(TextStyle { weight: self.w_bold, ..self.font() }).color(self.text)
+        text(t.into()).font(TextStyle { weight: MEDIUM, ..self.font() }).color(self.text)
     }
     pub fn small(&self, t: impl Into<String>) -> El {
         text(t.into()).font(self.font_small()).color(self.text2)
@@ -272,17 +277,17 @@ impl Theme {
     /// A group's heading over a box ("Workspace", "Network").
     pub fn group_title(&self, t: impl Into<String>) -> El {
         if self.mac() {
-            text(t.into()).font(TextStyle::new(12.0, 600.0)).color(self.text2)
+            text(t.into()).font(TextStyle::new(12.0, MEDIUM)).color(self.text2)
         } else {
-            text(t.into()).font(TextStyle::new(15.0, 700.0)).color(self.text)
+            text(t.into()).font(TextStyle::new(15.0, MEDIUM)).color(self.text)
         }
     }
     /// A section's heading in Settings ("Agent logins").
     pub fn section_title(&self, t: impl Into<String>) -> El {
         if self.mac() {
-            text(t.into()).font(TextStyle::new(13.0, 600.0)).color(self.text)
+            text(t.into()).font(TextStyle::new(13.0, MEDIUM)).color(self.text)
         } else {
-            text(t.into()).font(TextStyle::new(15.0, 700.0)).color(self.text)
+            text(t.into()).font(TextStyle::new(15.0, MEDIUM)).color(self.text)
         }
     }
 
@@ -303,7 +308,7 @@ impl Theme {
             Btn::Destructive => (c("#c01c28").alpha(0.35), c("#ff7b63"), self.text2),
             Btn::Flat => (Color::TRANSPARENT, self.accent_text, self.text3),
         };
-        let weight = if self.mac() { 400.0 } else { 700.0 };
+        let weight = if self.mac() { 400.0 } else { MEDIUM };
         let size = if self.mac() { 13.0 } else { 14.0 };
         let mut b = row()
             .h(self.btn_h)
@@ -527,7 +532,7 @@ impl Theme {
             .center()
             .radius((size * 0.24).round())
             .fill(bg)
-            .child(text(letter.to_string()).font(TextStyle::new((size * 0.5).round(), 700.0)).color(fg))
+            .child(text(letter.to_string()).font(TextStyle::new((size * 0.5).round(), MEDIUM)).color(fg))
     }
     /// A text field, bezelled per look.
     pub fn field(&self, edit: &rune::TextEdit, placeholder: &str, access: fn(&mut App) -> &mut rune::TextEdit) -> El {

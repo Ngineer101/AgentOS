@@ -2,6 +2,7 @@
 //! owns the shell itself), and this turns its cells into [`rune::GridRow`]s, keys into the
 //! bytes a terminal sends, and a drag into a selection.
 
+use crate::look::MEDIUM;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
@@ -468,7 +469,7 @@ fn build_row(cells: &[Drawn], style: TextStyle) -> GridRow {
             let fg = color(Rgb { r: c.fg.0, g: c.fg.1, b: c.fg.2 });
             let mut s = Span::new(start, end).color(fg);
             if c.bold {
-                s = s.weight(700.0);
+                s = s.weight(MEDIUM);
             }
             if c.italic {
                 s = s.italic();
@@ -500,7 +501,7 @@ fn build_row(cells: &[Drawn], style: TextStyle) -> GridRow {
     for (col, width, c) in pinned {
         let mut st = style;
         if c.bold {
-            st.weight = 700.0;
+            st.weight = MEDIUM;
         }
         st.italic = c.italic;
         row = row.cell(col, width, c.text.clone(), st, color(Rgb { r: c.fg.0, g: c.fg.1, b: c.fg.2 }));
