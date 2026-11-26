@@ -170,6 +170,19 @@ describe("push", () => {
     expect(await verifyEd25519(key, sig, sendMessage(rid, "1700000000001", await sha256(body)))).toBe(false);
   });
 
+  it("says which app it sends for, and when its key is broken", async () => {
+    const env = { APNS_KEY: "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----", APNS_KEY_ID: "KEY1234567", APNS_TEAM_ID: "TEAM123456", APNS_TOPIC: TOPIC };
+    const body = (topic: string) =>
+      JSON.stringify({ token: "a0".repeat(32), topic, environment: "sandbox", relay_id: "0".repeat(32) });
+    const other = await registerToken("0".repeat(32), "a0".repeat(32), { topic: "com.example.other" });
+    expect(await other.json()).toEqual({
+      error: "this relay sends notifications for dev.agenthost.ios only, not com.example.other",
+    });
+    const broken = await register(new Request(`${BASE}/v1/push/register`, { method: "POST", body: body(TOPIC) }), env);
+    expect(broken.status).toBe(503);
+    expect(((await broken.json()) as { error: string }).error).toContain("APNS_KEY");
+  });
+
   it("answers 404 where nobody set up an APNs key", async () => {
     const r = await register(
       new Request(`${BASE}/v1/push/register`, { method: "POST", body: "{}" }),

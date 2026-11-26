@@ -66,6 +66,8 @@ struct PushDeviceModel: Codable, Hashable {
     var registeredAt: Int64
     /// The last time APNs refused a notification for it, and why.
     var lastError: String?
+    /// `lastError` in words, from the host (newer hosts only).
+    var lastErrorText: String? = nil
     /// The relay that sends its notifications to Apple (protocol 6); nil:
     /// the host sends them with its own APNs key.
     var gateway: String? = nil
@@ -75,6 +77,7 @@ struct PushDeviceModel: Codable, Hashable {
         case name, environment, prefs
         case registeredAt = "registered_at"
         case lastError = "last_error"
+        case lastErrorText = "last_error_text"
         case gateway
     }
 }

@@ -712,7 +712,10 @@ async fn push_cmd(c: &Client, cmd: PushCmd, json_out: bool) -> Result<()> {
         };
         print!("{}  {}  {}  {}  {}", d.device_id, d.name, d.environment.as_str(), via, what);
         match &d.last_error {
-            Some(e) => println!("  (last refused: {e})"),
+            Some(e) => {
+                let text = d.last_error_text.clone().unwrap_or_else(|| push_error_text(e, d.gateway.is_some()));
+                println!("\n    last refused: {text}");
+            }
             None => println!(),
         }
     }

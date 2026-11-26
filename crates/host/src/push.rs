@@ -368,7 +368,11 @@ impl Push {
         for row in rows {
             match self.deliver(signer.as_ref(), &row, &content, None).await {
                 Ok(()) => out.sent += 1,
-                Err(e) => out.errors.push(format!("{}: {}", row.name, e.reason)),
+                Err(e) => out.errors.push(format!(
+                    "{}: {}",
+                    row.name,
+                    push_error_text(&e.reason, row.gateway.is_some())
+                )),
             }
         }
         Ok(out)
@@ -1045,7 +1049,8 @@ mod tests {
             assert_eq!((c.kind.as_str(), c.body.as_str()), ("failed", "Claude Code failed: not logged in"));
             push.register("dev_a", reg(&"dead".repeat(16), &ka, PushPrefs::default())).unwrap();
             let r = push.test(Some("dev_a")).await.unwrap();
-            assert_eq!((r.sent, r.errors), (0, vec!["Phone dev_a: Unregistered".to_string()]));
+            assert_eq!(r.sent, 0);
+            assert!(r.errors[0].starts_with("Phone dev_a: The app was removed") && r.errors[0].contains("(Unregistered)"), "{:?}", r.errors);
             assert!(ctx.store.push_get("dev_a").unwrap().is_none());
 
             // Revoked phones get nothing.
@@ -1228,7 +1233,10 @@ mod tests {
             direct.token = "c0".repeat(32);
             push.register("dev_c", direct).unwrap();
             let r = push.test(None).await.unwrap();
-            assert_eq!((r.sent, r.errors), (2, vec!["Phone dev_c: NoAPNsKey".to_string()]));
+            assert_eq!((r.sent, r.errors.len()), (2, 1));
+            assert!(r.errors[0].starts_with("Phone dev_c: Nothing was sent") && r.errors[0].contains("(NoAPNsKey)"), "{:?}", r.errors);
+            let dev_c = push.status(Some("dev_c")).unwrap().this_device.unwrap();
+            assert!(dev_c.last_error_text.unwrap().contains("no relay sends this iPhone's notifications"));
             assert_eq!(push.status(Some("dev_c")).unwrap().this_device.unwrap().last_error.as_deref(), Some("NoAPNsKey"));
             assert!(push.test(Some("dev_c")).await.is_err(), "only key-less phones: no APNs key yet");
 

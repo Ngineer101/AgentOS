@@ -112,11 +112,20 @@ extension AppModel {
         return url
     }
 
+    enum RelayRegistration {
+        case handle(url: String, handle: String)
+        /// Why the relay didn't take it, in words.
+        case refused(String)
+        /// No relay to ask (a host older than protocol 6, or not paired).
+        case notAsked
+    }
+
     /// `POST /v1/push/register` on the relay: this iPhone's token, sealed by
-    /// the relay for this host only. Nil when the relay doesn't send for
-    /// this build (or can't be reached): the host then needs its own key.
-    private func relayHandle(token: String) async -> (url: String, handle: String)? {
-        guard hostSupportsPushRelay, let base = pushRelayURL, let relayId = credentials?.relayId else { return nil }
+    /// the relay for this host only. When the relay doesn't send for this
+    /// build (or can't be reached) the host needs its own key instead.
+    private func relayHandle(token: String) async -> RelayRegistration {
+        guard hostSupportsPushRelay, let base = pushRelayURL, let relayId = credentials?.relayId else { return .notAsked }
+        let name = base.host ?? base.absoluteString
         var req = URLRequest(url: base.appendingPathComponent("v1/push/register"))
         req.httpMethod = "POST"
         req.timeoutInterval = 15
@@ -127,12 +136,26 @@ extension AppModel {
             "environment": Self.apnsEnvironment,
             "relay_id": relayId,
         ])
-        guard let reply = try? await URLSession.shared.data(for: req),
-              (reply.1 as? HTTPURLResponse)?.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: reply.0) as? [String: Any],
-              let handle = obj["handle"] as? String, !handle.isEmpty
-        else { return nil }
-        return (base.absoluteString, handle)
+        let reply: (Data, URLResponse)
+        do {
+            reply = try await URLSession.shared.data(for: req)
+        } catch {
+            return .refused("couldn’t reach \(name) (\(error.localizedDescription))")
+        }
+        let status = (reply.1 as? HTTPURLResponse)?.statusCode ?? 0
+        let obj = (try? JSONSerialization.jsonObject(with: reply.0)) as? [String: Any]
+        if status == 200, let handle = obj?["handle"] as? String, !handle.isEmpty {
+            return .handle(url: base.absoluteString, handle: handle)
+        }
+        if status == 404 {
+            return .refused("\(name) doesn’t send notifications (it has no APNs key)")
+        }
+        if let message = obj?["error"] as? String, !message.isEmpty {
+            // "this relay sends …" → "relay.example sends …".
+            let said = message.hasPrefix("this relay") ? String(message.dropFirst("this relay".count)) : " said: " + message
+            return .refused(name + said)
+        }
+        return .refused("\(name) answered HTTP \(status)")
     }
 
     // MARK: Status
@@ -263,10 +286,16 @@ extension AppModel {
             "key": PushCrypto.base64URLEncode(key),
             "prefs": pushPrefs.params,
         ]
-        if let relay = await relayHandle(token: token) {
-            params["gateway"] = ["url": relay.url, "handle": relay.handle]
-        } else {
+        switch await relayHandle(token: token) {
+        case let .handle(url, handle):
+            params["gateway"] = ["url": url, "handle": handle]
+            pushRelayProblem = nil
+        case let .refused(why):
             params["token"] = token
+            pushRelayProblem = why
+        case .notAsked:
+            params["token"] = token
+            pushRelayProblem = nil
         }
         let st: PushStatusModel = try await call(RPC.pushRegister, params)
         applyPushStatus(st)
@@ -318,7 +347,11 @@ extension AppModel {
         if r.sent > 0 && r.errors.isEmpty {
             return "Sent. It should arrive in a few seconds."
         }
-        let reasons = r.errors.map(Self.describeAPNsError)
+        // "<device name>: <why>": this iPhone tested only itself, so drop the name.
+        let reasons = r.errors.map { e -> String in
+            guard let i = e.range(of: ": ") else { return Self.describeAPNsError(e) }
+            return Self.describeAPNsError(String(e[i.upperBound...]))
+        }
         return reasons.isEmpty ? "Not sent." : reasons.joined(separator: " ")
     }
 
@@ -328,7 +361,11 @@ extension AppModel {
         case "BadDeviceToken":
             return "Apple refused this iPhone's token (BadDeviceToken): the app's build and the APNs server don't match. Reinstall from Xcode or TestFlight and try again."
         case "InvalidProviderToken":
-            return "Apple refused the key (InvalidProviderToken): check the key ID and the team ID."
+            return "Apple doesn’t accept the APNs key (InvalidProviderToken). Check that the key is still listed under Certificates, IDs & Profiles → Keys on developer.apple.com (a revoked key disappears from it), then the key ID, the team ID, and that the key is for Sandbox & Production."
+        case "BadEnvironmentKeyInToken":
+            return "The APNs key only works in the other environment (BadEnvironmentKeyInToken). Builds from Xcode use the sandbox, TestFlight and App Store builds production. Use a key for Sandbox & Production."
+        case "RelayKeyInvalid":
+            return "The relay’s APNS_KEY secret isn’t a .p8 key (RelayKeyInvalid). Paste the whole AuthKey_….p8 file into it, including the BEGIN and END lines."
         case "TopicDisallowed", "DeviceTokenNotForTopic":
             return "The APNs key belongs to another Apple Developer team than this app (\(reason))."
         case "Unregistered":
@@ -473,6 +510,7 @@ extension AppModel {
         UserDefaults.standard.removeObject(forKey: Self.offerPushKey)
         pushPrefs = PushPrefsModel()
         pushStatus = nil
+        pushRelayProblem = nil
         showPushOnboarding = false
         visibleSessionId = nil
         PushKeyStore.delete()

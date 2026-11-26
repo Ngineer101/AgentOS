@@ -1560,7 +1560,9 @@ pub struct PushTestParams {
 pub struct PushTestResult {
     /// Devices that got it.
     pub sent: u32,
-    /// Why it did not reach the others (APNs' reason, e.g. `BadDeviceToken`).
+    /// Why it did not reach the others: `<device name>: <push_error_text>`,
+    /// which ends with APNs' or the relay's reason in brackets (hosts before
+    /// this change sent the bare reason).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
 }
@@ -1576,10 +1578,78 @@ pub struct PushDevice {
     /// The last time APNs refused a notification for it, and why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// `last_error` in words ([`push_error_text`]), for clients to show as is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error_text: Option<String>,
     /// The relay that sends its notifications (protocol 6); none: the host
     /// sends them with its own APNs key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<String>,
+}
+
+/// Why a notification wasn't sent, in words: `reason` is what APNs, the
+/// relay or the host said (`InvalidProviderToken`, `BadHandle`,
+/// `NoAPNsKey`, …); `via_relay` says whose APNs key Apple saw (the relay's
+/// Worker secrets, or the host's own key).
+pub fn push_error_text(reason: &str, via_relay: bool) -> String {
+    let key = if via_relay {
+        "the relay's APNs key (its APNS_KEY, APNS_KEY_ID and APNS_TEAM_ID secrets)"
+    } else {
+        "the host's APNs key (`agenthost push status` shows its key and team id)"
+    };
+    match reason {
+        "InvalidProviderToken" => format!(
+            "Apple doesn't accept {key} (InvalidProviderToken). Check, in this order: the key is \
+             still listed under Certificates, IDs & Profiles → Keys on developer.apple.com (a \
+             revoked key disappears from that list, but its .p8 file still looks fine); the key \
+             id is that key's; the team id is the team the key belongs to; the key's environment \
+             is Sandbox & Production."
+        ),
+        "BadEnvironmentKeyInToken" | "BadCertificateEnvironment" => format!(
+            "{key} only works in the other APNs environment ({reason}). Builds from Xcode use the \
+             sandbox, TestFlight and App Store builds production. Use a key for Sandbox & Production."
+        ),
+        "ExpiredProviderToken" | "TooManyProviderTokenUpdates" | "MissingProviderToken" => {
+            format!("Apple refused the sign-in with {key} ({reason}). Try again in a minute.")
+        }
+        "TopicDisallowed" | "DeviceTokenNotForTopic" | "BadTopic" => format!(
+            "{key} isn't for this app ({reason}): it must belong to the team that signs the app, \
+             and a topic-specific key must list the app's bundle id."
+        ),
+        "BadDeviceToken" => "Apple doesn't recognise this iPhone's token in either environment \
+            (BadDeviceToken). Turn notifications off and on again in the app; if that doesn't \
+            help, reinstall it."
+            .into(),
+        "Unregistered" => "The app was removed from the iPhone, or its notifications turned off \
+            (Unregistered), so the host forgot it. Turn notifications on again in the app."
+            .into(),
+        "NoAPNsKey" => "Nothing was sent: no relay sends this iPhone's notifications, and the host \
+            has no APNs key (NoAPNsKey). Add the key on the iPhone (Settings → Notifications) or \
+            with `agenthost push setup`."
+            .into(),
+        "RelayKeyInvalid" => "The relay's APNS_KEY secret isn't a .p8 key (RelayKeyInvalid). Paste \
+            the whole AuthKey_….p8 file into it, including the BEGIN and END lines."
+            .into(),
+        "BadSignature" => "The relay didn't accept the host's signature (BadSignature). Check that \
+            the host's clock is right."
+            .into(),
+        "BadHandle" | "PushUnavailable" => format!(
+            "The relay no longer takes this iPhone's registration ({reason}). Open the app again \
+             so it registers anew."
+        ),
+        "TooManyRequests" => "Too many notifications in a short time (TooManyRequests); some were \
+            held back."
+            .into(),
+        "ApnsUnreachable" | "InternalServerError" | "ServiceUnavailable" | "Shutdown" => {
+            format!("Apple's push service didn't answer ({reason}). Try again later.")
+        }
+        "BadPayload" | "BadCollapseId" | "PayloadTooLarge" => format!(
+            "The relay refused the notification ({reason}), which is a bug in AgentHost."
+        ),
+        // Already a sentence (e.g. "could not reach the relay …").
+        r if r.contains(' ') => r.to_string(),
+        r => format!("Not sent ({r})."),
+    }
 }
 
 /// `push.status`.
@@ -1617,6 +1687,16 @@ pub struct PushContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_errors_say_whose_key_and_what_to_check() {
+        let relay = push_error_text("InvalidProviderToken", true);
+        assert!(relay.contains("relay's APNs key") && relay.contains("Keys on developer.apple.com"), "{relay}");
+        assert!(push_error_text("InvalidProviderToken", false).contains("host's APNs key"));
+        assert_eq!(push_error_text("could not reach the relay: timeout", true), "could not reach the relay: timeout");
+        assert_eq!(push_error_text("Weird", true), "Not sent (Weird).");
+        assert!(!push_error_text("BadDeviceToken", true).contains("  "), "no stray spaces from line breaks");
+    }
 
     /// Gemini CLI sessions and profiles, stored and sent as `gemini`, load as Antigravity.
     #[test]
