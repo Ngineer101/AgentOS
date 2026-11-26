@@ -73,21 +73,38 @@ Developer team that signs it. If you sign the app that others install
 (TestFlight, App Store, or your own phone), give your relay that key once
 and nobody's host needs one:
 
-1. developer.apple.com → Certificates, Identifiers & Profiles → Keys → +,
-   enable "Apple Push Notifications service (APNs)", download
-   `AuthKey_<KEY ID>.p8` (only once). One key works for the sandbox and
-   production.
-2. Set the secrets and deploy:
+1. Create the key, signed in to the team that signs the app (the team name
+   is in the top right of developer.apple.com):
+   - [Certificates, IDs & Profiles → Keys](https://developer.apple.com/account/resources/authkeys/list) → **+**.
+   - Name it, tick **Apple Push Notifications service (APNs)**, and under
+     its **Configure** choose Environment **Sandbox & Production** and Key
+     Restriction **Team Scoped (All Topics)**. (Since 2025 a key can be
+     limited to one environment or to some bundle ids; a sandbox-only key
+     fails for TestFlight builds, a production-only key for builds from
+     Xcode.)
+   - **Continue** → **Register** → **Download** `AuthKey_<KEY ID>.p8`. Apple
+     lets you download it once; keep it.
+2. Note three values: the **Key ID** (the 10 characters in the file name),
+   the **Team ID** ([Membership details](https://developer.apple.com/account#MembershipDetailsCard)),
+   and the app's **bundle id** (Xcode → the AgentHost target → General;
+   `dev.agenthost.ios` unless you changed it).
+3. Set the four secrets and deploy, from this folder:
 
    ```sh
    npx wrangler secret put APNS_KEY < AuthKey_XXXXXXXXXX.p8
-   echo XXXXXXXXXX | npx wrangler secret put APNS_KEY_ID      # from the file name
-   echo YOURTEAMID | npx wrangler secret put APNS_TEAM_ID     # Membership details
-   echo dev.agenthost.ios | npx wrangler secret put APNS_TOPIC   # the app's bundle id
+   printf %s XXXXXXXXXX | npx wrangler secret put APNS_KEY_ID
+   printf %s YOURTEAMID | npx wrangler secret put APNS_TEAM_ID
+   printf %s dev.agenthost.ios | npx wrangler secret put APNS_TOPIC
    npx wrangler deploy
    ```
 
-3. Phones paired through this relay use it by themselves. For builds you
+   Or in the Cloudflare dashboard: Workers & Pages → agenthost-relay →
+   Settings → Variables and Secrets (for `APNS_KEY`, paste the whole file,
+   BEGIN and END lines included).
+
+4. Phones paired through this relay use it by themselves (they register
+   each time the app connects; close and reopen it after changing a
+   secret). For builds you
    hand out, set `AGENTHOST_PUSH_RELAY` (in `ios/project.yml` or Xcode's
    build settings) to `https://<this relay>`, so phones paired through
    someone else's relay still get their notifications from yours.
@@ -98,6 +115,27 @@ and the content it already encrypted to the phone; the relay adds the
 generic alert ("A session needs you") and passes it to Apple. Each host may
 send 60 a minute. See "Push notifications" in
 [`../docs/relay-protocol.md`](../docs/relay-protocol.md).
+
+### If no notification arrives
+
+Run `agenthost push test` on the host (or Send Test Notification on the
+phone) and `agenthost push status`; both say what went wrong. In order:
+
+1. **The phone shows "own key", not "via <relay>".** The relay didn't take
+   it; Settings → Notifications on the phone says why. "Sends notifications
+   for X only, not Y": `APNS_TOPIC` isn't the app's bundle id. "Doesn't send
+   notifications": the secrets aren't set or the relay wasn't deployed
+   after setting them. Fix it, then close and reopen the app.
+2. **`InvalidProviderToken`.** Apple doesn't accept the key. Check, in this
+   order: the key is still in the [Keys list](https://developer.apple.com/account/resources/authkeys/list)
+   (a revoked key disappears from it, but its `.p8` file still looks fine:
+   make a new one); `APNS_KEY_ID` is that key's ID; `APNS_TEAM_ID` is the
+   team it belongs to; its environment is Sandbox & Production.
+3. **`BadEnvironmentKeyInToken`.** The key only works in the other
+   environment: make one for Sandbox & Production.
+4. **`RelayKeyInvalid`.** `APNS_KEY` isn't a whole `.p8` file.
+5. **`TopicDisallowed` / `DeviceTokenNotForTopic`.** The key is from another
+   team than the one that signs the app, or limited to other bundle ids.
 
 ## Run locally
 

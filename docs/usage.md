@@ -105,7 +105,8 @@ it once per host, or run `agenthost push setup --key AuthKey_XXXXXXXXXX.p8 --tea
 
 What a notification says is encrypted to the phone; Apple (and the relay)
 only see "A session needs you". `agenthost push status` and `agenthost push
-test` show and check it.
+test` show and check it, and say in words what to fix; see also
+[If no notification arrives](../relay/README.md#if-no-notification-arrives).
 
 ## Notes
 

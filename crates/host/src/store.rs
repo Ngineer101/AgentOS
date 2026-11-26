@@ -223,6 +223,10 @@ impl PushRow {
             prefs: self.prefs,
             registered_at: self.registered_at,
             last_error: self.last_error.clone(),
+            last_error_text: self
+                .last_error
+                .as_deref()
+                .map(|r| push_error_text(r, self.gateway.is_some())),
             gateway: self.gateway.as_ref().map(|g| g.url.clone()),
         }
     }

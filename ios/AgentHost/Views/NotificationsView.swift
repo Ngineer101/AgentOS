@@ -95,8 +95,8 @@ struct NotificationsSettingsView: View {
                     if let testNote {
                         Text(testNote).font(.footnote).foregroundStyle(.secondary)
                     }
-                    if let last = model.pushStatus?.thisDevice?.lastError {
-                        Text("Last problem: \(AppModel.describeAPNsError(last))")
+                    if let device = model.pushStatus?.thisDevice, let last = device.lastError {
+                        Text("Last problem: \(device.lastErrorText ?? AppModel.describeAPNsError(last))")
                             .font(.footnote)
                             .foregroundStyle(Palette.red)
                     }
@@ -133,7 +133,12 @@ struct NotificationsSettingsView: View {
         } header: {
             GroupHeader("APNs key on \(model.hostName)")
         } footer: {
-            Text("This build of AgentOS has no relay that sends its notifications, so \(model.hostName) sends them through Apple itself, with the APNs key (.p8) of the Apple Developer account the app is signed with. It is stored on \(model.hostName) only.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("This build of AgentOS has no relay that sends its notifications, so \(model.hostName) sends them through Apple itself, with the APNs key (.p8) of the Apple Developer account the app is signed with. It is stored on \(model.hostName) only.")
+                if let why = model.pushRelayProblem {
+                    Text("The relay didn’t take this iPhone: \(why).")
+                }
+            }
         }
     }
 

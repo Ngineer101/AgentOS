@@ -86,9 +86,10 @@ leave the feature off and everything else works).
    `$(AppIdentifierPrefix)dev.agenthost.shared`, where the app keeps the
    notification key the extension reads. Automatic signing registers the
    App IDs and capabilities.
-2. Create an APNs key: developer.apple.com → Certificates, Identifiers &
-   Profiles → Keys → +, enable "Apple Push Notifications service (APNs)",
-   download `AuthKey_<KEYID>.p8` (it can be downloaded only once).
+2. Create an APNs key for Sandbox & Production, Team Scoped, exactly as in
+   [relay/README.md](../relay/README.md#push-notifications-if-you-publish-the-ios-app)
+   step 1 (a key limited to one environment fails for the other kind of
+   build).
 3. Give it to your relay once ([relay/README.md](../relay/README.md#push-notifications-if-you-publish-the-ios-app)).
    Phones paired through it get notifications with nothing to set up on the
    host: the app registers its APNs token with the relay

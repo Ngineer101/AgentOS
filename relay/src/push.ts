@@ -186,6 +186,16 @@ function validEnvironment(e: unknown): e is ApnsEnvironment {
 }
 
 /** ES256 provider token. `iat` is rounded so every instance uses the same one. */
+/** The APNs key secret parses as a P-256 private key. */
+async function keyUsable(c: Credentials): Promise<boolean> {
+  try {
+    await signingKey(c);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function providerToken(c: Credentials, nowS: number): Promise<string> {
   const iat = nowS - (nowS % TOKEN_PERIOD_S);
   const header = b64urlEncode(enc.encode(JSON.stringify({ alg: "ES256", kid: c.keyId })));
@@ -244,7 +254,12 @@ export async function register(request: Request, env: PushEnv): Promise<Response
   }
   if (msg.topic !== c.topic) {
     // Another build of the app (another bundle id): its own team's key is needed.
-    return reply(403, { error: "this relay does not send notifications for that app" });
+    return reply(403, {
+      error: `this relay sends notifications for ${c.topic} only, not ${String(msg.topic).slice(0, 200)}`,
+    });
+  }
+  if (!(await keyUsable(c))) {
+    return reply(503, { error: "this relay's APNS_KEY is not a valid .p8 key" });
   }
   const handle = await sealHandle(c, { v: 1, t: token, e: msg.environment, r: msg.relay_id });
   return reply(200, { handle });
@@ -354,8 +369,15 @@ export class PushSender {
     collapse: string | undefined,
   ): Promise<{ status: number; reason: string }> {
     const nowS = Math.floor(Date.now() / 1000);
+    let jwt: string;
+    try {
+      jwt = await providerToken(c, nowS);
+    } catch {
+      // APNS_KEY isn't a .p8 private key: Apple was never asked.
+      return { status: 500, reason: "RelayKeyInvalid" };
+    }
     const headers: Record<string, string> = {
-      authorization: `bearer ${await providerToken(c, nowS)}`,
+      authorization: `bearer ${jwt}`,
       "apns-topic": c.topic,
       "apns-push-type": "alert",
       "apns-priority": "10",

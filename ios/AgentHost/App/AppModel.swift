@@ -168,6 +168,9 @@ final class AppModel: ObservableObject {
     // Push notifications (protocol 4; see AppModel+Push.swift).
     /// `push.status` from the host (nil before it answers, or on older hosts).
     @Published var pushStatus: PushStatusModel?
+    /// Why the relay didn't take this iPhone's notifications at the last
+    /// registration (the host's own key is used instead); nil when it did.
+    @Published var pushRelayProblem: String?
     /// The user wants notifications on this iPhone (stored locally; the
     /// registration is renewed on every connection while on).
     @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: AppModel.notificationsEnabledKey)
@@ -1407,6 +1410,9 @@ final class AppModel: ObservableObject {
         notificationsEnabled = d.screen == .notifications || d.screen == .notificationsOwnKey
         pushPrefs = PushPrefsModel()
         pushStatus = d.pushStatus(for: d.screen)
+        pushRelayProblem = d.screen == .notificationsOwnKey
+            ? "relay.example.workers.dev sends notifications for dev.agenthost.ios only, not com.example.agenthost"
+            : nil
         pushAuthorization = .authorized
         showPushOnboarding = d.screen == .pairNotifications || d.screen == .pairAPNsKey
         link = .online
