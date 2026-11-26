@@ -24,6 +24,10 @@ pub struct Plan {
     pub dir: PathBuf,
     pub args: Vec<String>,
     pub remote: String,
+    /// Where the remote really points, with `insteadOf` rewrites applied, so
+    /// an approval shows the host this reaches rather than the remote's name
+    /// (see [`resolved_url`]).
+    pub url: String,
     pub branch: Option<String>,
     pub force: bool,
 }
@@ -34,6 +38,28 @@ impl Plan {
         format!("git {}", self.args.join(" "))
     }
 
+    /// The command as git is given it: the same, plus the program to run on
+    /// the other end pinned to the standard one.
+    ///
+    /// `remote.<name>.uploadpack` and `.receivepack` name a program git runs
+    /// as the user, and the repository's config is the agent's to write
+    /// whenever the repository isn't the protected worktree the host made.
+    /// They can't be held by [`crate::worktree::SAFE_GIT_CONFIG`] because
+    /// the key contains the remote's name, and a `-c` for the same key only
+    /// competes with the repository's value. On the command line it wins
+    /// outright. Not shown, for the same reason the `-c` settings are not:
+    /// it only ever narrows what the command the user approved can do.
+    pub fn run_args(&self) -> Vec<String> {
+        let mut args = self.args.clone();
+        let pin = match args.first().map(String::as_str) {
+            Some("fetch") => "--upload-pack=git-upload-pack",
+            Some("push") => "--receive-pack=git-receive-pack",
+            _ => return args,
+        };
+        args.insert(1, pin.to_string());
+        args
+    }
+
     /// "Push agenthost/fix-flaky to origin".
     pub fn summary(&self) -> String {
         match &self.branch {
@@ -42,6 +68,44 @@ impl Plan {
             None => format!("Fetch from {}", self.remote),
         }
     }
+}
+
+/// A transport helper prefix in a URL (`ext::sh -c …`, `fd::`, and anything
+/// else `git-remote-<x>` runs), as opposed to a scheme (`https://`) or a
+/// path. These name a program, so a repository's config must not reach one.
+fn is_transport_helper(url: &str) -> bool {
+    let Some((head, _)) = url.split_once("::") else { return false };
+    !head.is_empty()
+        && !head.contains(['/', '\\', ':', '@', '[', ' '])
+        && head.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+}
+
+/// Where a remote really points. `ls-remote --get-url` applies the
+/// `url.*.insteadOf` rewrites (which `remote get-url` does not), so an
+/// approval can't say "origin" while the fetch or push goes somewhere the
+/// repository's config chose. Reaches no network.
+///
+/// A URL that names a transport helper, or that git could read as an
+/// option, is refused rather than shown: those are a command, not a host.
+async fn resolved_url(dir: &Path, remote: &str) -> Result<String, String> {
+    let url = output(dir, &["ls-remote", "--get-url", remote])
+        .await
+        .map_err(|e| format!("could not read where {remote:?} points ({e})"))?;
+    let url = url.trim();
+    if url.is_empty() || url == remote {
+        return Err(format!("{remote:?} has no URL"));
+    }
+    if url.starts_with('-') || url.contains(['\n', '\r', '\0']) {
+        return Err(format!("{remote:?} points somewhere git can't be asked for safely"));
+    }
+    if is_transport_helper(url) {
+        return Err(format!(
+            "{remote:?} points at a transport helper ({:?}), which runs a program rather than reaching a host; \
+             fix the repository's remote URL",
+            url.split_once("::").map(|(h, _)| h).unwrap_or(url)
+        ));
+    }
+    Ok(url.to_string())
 }
 
 async fn output(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -132,6 +196,16 @@ async fn valid_branch(dir: &Path, name: &str) -> bool {
         && output(dir, &["check-ref-format", "--branch", name]).await.is_ok()
 }
 
+/// A remote name that can't be read as a flag, and that is safe to put in a
+/// `-c remote.<name>.…=…` setting (the repository's config names its own
+/// remotes, so the name is as untrusted as the rest of it).
+fn valid_remote(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+}
+
 /// The remote to use: the one asked for, else the branch's upstream, else
 /// `origin`; it must be one the repository has.
 async fn resolve_remote(dir: &Path, asked: Option<&str>, branch: Option<&str>) -> Result<String, String> {
@@ -139,6 +213,7 @@ async fn resolve_remote(dir: &Path, asked: Option<&str>, branch: Option<&str>) -
         .await
         .map_err(|e| format!("this folder is not a git repository with remotes ({e})"))?
         .lines()
+        .filter(|r| valid_remote(r))
         .map(str::to_string)
         .collect();
     if remotes.is_empty() {
@@ -192,6 +267,7 @@ pub async fn plan_push(
         return Err(format!("{target:?} is not a branch name"));
     }
     let remote = resolve_remote(dir, remote, Some(&branch)).await?;
+    let url = resolved_url(dir, &remote).await?;
     let mut args = vec!["push".to_string()];
     if force_with_lease {
         args.push("--force-with-lease".into());
@@ -201,19 +277,54 @@ pub async fn plan_push(
     }
     args.push(remote.clone());
     args.push(if target == branch { branch.clone() } else { format!("{branch}:{target}") });
-    Ok(Plan { dir: dir.to_path_buf(), args, remote, branch: Some(target), force: force_with_lease })
+    Ok(Plan {
+        dir: dir.to_path_buf(),
+        args,
+        remote,
+        url,
+        branch: Some(target),
+        force: force_with_lease,
+    })
 }
 
 /// Check a fetch request and build its command.
 pub async fn plan_fetch(dir: &Path, remote: Option<&str>) -> Result<Plan, String> {
     let remote = resolve_remote(dir, remote, None).await?;
+    let url = resolved_url(dir, &remote).await?;
     Ok(Plan {
         dir: dir.to_path_buf(),
         args: vec!["fetch".into(), remote.clone()],
         remote,
+        url,
         branch: None,
         force: false,
     })
+}
+
+/// Whether a session's sandbox can write this repository's config, and so
+/// choose what git runs: true for the protected worktree the host made for
+/// the session (its `config`, `hooks` and the rest are mounted read-only,
+/// see [`crate::worktree::PROTECTED_GIT_ENTRIES`]), false for any other
+/// repository — a folder the agent ran `git init` in, a repository inside
+/// the session's folder, a shared folder or a quick task.
+///
+/// [`crate::worktree::SAFE_GIT_CONFIG`] holds every setting we know of that
+/// turns config into a command; this decides whether the user is asked
+/// anyway, for the ones we don't.
+pub async fn config_is_protected(dir: &Path, session_worktree: Option<&Path>) -> bool {
+    let Some(wt) = session_worktree else { return false };
+    match (common_dir(dir).await, common_dir(wt).await) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// A repository's `.git` (the one shared by every worktree), resolved.
+async fn common_dir(dir: &Path) -> Option<PathBuf> {
+    let p = output(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .await
+        .ok()?;
+    std::fs::canonicalize(p).ok()
 }
 
 /// The outcome of running a plan.
@@ -225,7 +336,8 @@ pub struct Outcome {
 
 /// Run a plan as the user, outside any sandbox.
 pub async fn run(plan: &Plan) -> Outcome {
-    let args: Vec<&str> = plan.args.iter().map(String::as_str).collect();
+    let run_args = plan.run_args();
+    let args: Vec<&str> = run_args.iter().map(String::as_str).collect();
     let mut cmd = git_command(&plan.dir, &args);
     match tokio::time::timeout(GIT_TIMEOUT, cmd.output()).await {
         Err(_) => Outcome { ok: false, output: format!("stopped after {} minutes", GIT_TIMEOUT.as_secs() / 60) },
@@ -337,13 +449,17 @@ pub async fn run_pr(plan: &PrPlan) -> Outcome {
     }
     cmd.env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_CONFIG_COUNT", "2")
-        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
-        .env("GIT_CONFIG_VALUE_0", "/dev/null")
-        .env("GIT_CONFIG_KEY_1", "core.fsmonitor")
-        .env("GIT_CONFIG_VALUE_1", "false")
-        .stdin(std::process::Stdio::piped())
+        .env("GIT_TERMINAL_PROMPT", "0");
+    // The same protection the host's own git gets, for the git commands gh
+    // runs itself: the repository's config must not name a command.
+    let safe = crate::worktree::safe_git_config();
+    cmd.env("GIT_CONFIG_COUNT", safe.len().to_string());
+    for (i, setting) in safe.iter().enumerate() {
+        let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -440,6 +556,114 @@ mod tests {
         std::fs::create_dir_all(inner.join("plain")).unwrap();
         let err = repo_dir(&inner, Some("plain")).await.unwrap_err();
         assert!(err.contains("not a git repository"), "{err}");
+    }
+
+    /// H1: a repository's own config must not be able to make the host run
+    /// a command. Each of these settings names a program git would otherwise
+    /// execute as the user, outside the sandbox, during a plain fetch or
+    /// push — and a session writes its repository's config whenever that
+    /// repository isn't the protected worktree the host made for it.
+    #[tokio::test]
+    async fn the_repository_s_config_can_never_name_a_command() {
+        let (_t, w) = repo();
+        let marker = w.join("config-ran");
+        let fire = format!("sh -c 'touch {}' #", marker.display());
+        for (key, value) in [
+            ("core.sshCommand", fire.as_str()),
+            ("credential.helper", fire.as_str()),
+            ("core.gitProxy", fire.as_str()),
+            ("core.fsmonitor", fire.as_str()),
+            ("remote.origin.uploadpack", fire.as_str()),
+            ("remote.origin.receivepack", fire.as_str()),
+            ("core.hooksPath", w.join("planted").to_str().unwrap()),
+        ] {
+            sh(&w, &["config", key, value]);
+        }
+
+        // The remote is a local path, so `uploadpack` and `receivepack` are
+        // the programs git would really start for it.
+        let fetch = plan_fetch(&w, None).await.unwrap();
+        let out = run(&fetch).await;
+        assert!(out.ok, "{}", out.output);
+        assert!(!marker.exists(), "a fetch ran a command the repository's config named");
+        let push = plan_push(&w, None, None, None, false, false).await.unwrap();
+        let out = run(&push).await;
+        assert!(out.ok, "{}", out.output);
+        assert!(!marker.exists(), "a push ran a command the repository's config named");
+
+        // The pin is in what git is given, not in what the user is shown.
+        assert_eq!(fetch.command(), "git fetch origin");
+        assert_eq!(fetch.run_args(), ["fetch", "--upload-pack=git-upload-pack", "origin"]);
+        assert_eq!(push.run_args(), ["push", "--receive-pack=git-receive-pack", "origin", "main"]);
+    }
+
+    /// H1: the approval has to say where a push really goes, and a remote
+    /// that names a program rather than a host never reaches one.
+    #[tokio::test]
+    async fn a_remote_is_resolved_and_a_transport_helper_is_refused() {
+        let (_t, w) = repo();
+        let real = plan_fetch(&w, None).await.unwrap().url;
+        assert!(real.ends_with("remote.git"), "{real}");
+
+        // `insteadOf` rewrites where "origin" points, so the name alone is
+        // not what the user would be approving.
+        sh(&w, &["config", "url.https://elsewhere.example/.insteadOf", &real]);
+        let p = plan_push(&w, None, None, None, false, false).await.unwrap();
+        assert_eq!(p.command(), "git push origin main", "the command still names the remote");
+        assert_eq!(p.url, "https://elsewhere.example/", "but the approval shows where it goes");
+        sh(&w, &["config", "--unset", "url.https://elsewhere.example/.insteadOf"]);
+
+        // A transport helper is a command by another name.
+        for url in ["ext::sh -c touch% /tmp/pwn", "fd::7", "weird-helper::x"] {
+            sh(&w, &["remote", "set-url", "origin", url]);
+            let err = plan_fetch(&w, None).await.unwrap_err();
+            assert!(err.contains("transport helper"), "{url}: {err}");
+            assert!(plan_push(&w, None, None, None, false, false).await.is_err(), "{url}");
+        }
+        // Ordinary URLs are not mistaken for one (a scheme, a scp-style
+        // address, an IPv6 literal, a plain path).
+        for url in [
+            "https://github.com/o/r.git",
+            "git@github.com:o/r.git",
+            "ssh://git@[::1]:22/o/r.git",
+            "/srv/git/r.git",
+            "file:///srv/git/r.git",
+        ] {
+            assert!(!is_transport_helper(url), "{url}");
+        }
+        assert!(is_transport_helper("ext::sh -c x"));
+    }
+
+    /// H1: only the worktree the host made for the session has a config the
+    /// sandbox cannot write, so only there is a fetch automatic.
+    #[tokio::test]
+    async fn only_the_host_s_own_worktree_counts_as_protected() {
+        let (t, w) = repo();
+        // Its own repository: protected.
+        assert!(config_is_protected(&w, Some(&w)).await);
+        // No worktree at all (a shared folder, a quick task): never.
+        assert!(!config_is_protected(&w, None).await);
+        // A repository the agent made inside it: its own `.git`, its own
+        // config, so not the protected one.
+        let sub = w.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        sh(&sub, &["init", "-q", "-b", "main"]);
+        assert!(!config_is_protected(&sub, Some(&w)).await);
+        // Another repository entirely.
+        let other = t.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        sh(&other, &["init", "-q", "-b", "main"]);
+        assert!(!config_is_protected(&other, Some(&w)).await);
+    }
+
+    #[test]
+    fn remote_names_that_could_land_in_a_config_setting_are_refused() {
+        for ok in ["origin", "up-stream", "a.b", "fork/one", "O_2"] {
+            assert!(valid_remote(ok), "{ok}");
+        }
+        for bad in ["", "-x", "a=b", "a\nb", "a b", "a[b]", "a\"b", "a]b"] {
+            assert!(!valid_remote(bad), "{bad:?}");
+        }
     }
 
     #[tokio::test]

@@ -16,7 +16,15 @@
 // Nothing is stored: handles are self-contained, and what a notification
 // says is opened only on the phone.
 
-import { b64urlDecode, b64urlEncode, decodeFixed, relayIdFor, sha256, verifyEd25519 } from "./codec";
+import {
+  b64urlDecode,
+  b64urlEncode,
+  decodeFixed,
+  readLimited,
+  relayIdFor,
+  sha256,
+  verifyEd25519,
+} from "./codec";
 
 export interface PushEnv {
   /** The `.p8` key (PEM), a secret. */
@@ -231,8 +239,10 @@ async function readJson(request: Request, limit: number): Promise<Record<string,
 async function readText(request: Request, limit: number): Promise<string | null> {
   const declared = request.headers.get("content-length");
   if (declared !== null && !(Number(declared) <= limit)) return null;
-  const buf = new Uint8Array(await request.arrayBuffer());
-  return buf.length <= limit ? dec.decode(buf) : null;
+  // Streamed, so a body without a `content-length` is refused as it goes
+  // over the limit rather than after it has all arrived.
+  const buf = await readLimited(request, limit).catch(() => null);
+  return buf === null ? null : dec.decode(buf);
 }
 
 /**
@@ -285,8 +295,8 @@ export class PushSender {
     const c = credentials(this.env);
     if (!c) return reply(404, { reason: "PushUnavailable" });
 
-    const text = await readText(request, MAX_SEND_BODY);
-    if (text === null) return reply(413, { reason: "PayloadTooLarge" });
+    // The headers first: a sender that can't even shape them right never
+    // gets to hand this Durable Object a body to hold.
     const key = decodeFixed(request.headers.get("x-agenthost-key"), 32);
     const sig = decodeFixed(request.headers.get("x-agenthost-signature"), 64);
     const time = request.headers.get("x-agenthost-time") ?? "";
@@ -294,6 +304,8 @@ export class PushSender {
     if (Math.abs(Date.now() - Number(time)) > SEND_CLOCK_SKEW_MS) {
       return reply(401, { reason: "BadSignature", error: "the host's clock is off" });
     }
+    const text = await readText(request, MAX_SEND_BODY);
+    if (text === null) return reply(413, { reason: "PayloadTooLarge" });
     const body = enc.encode(text);
     if (
       (await relayIdFor(key)) !== relayId ||

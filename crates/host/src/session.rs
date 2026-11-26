@@ -826,20 +826,57 @@ fn human_size(b: u64) -> String {
     }
 }
 
-/// `dir/name`, or `dir/name (2).ext` and so on if taken.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let p = dir.join(name);
-    if !p.exists() {
-        return p;
-    }
+/// Where a session's attached files are staged: beside its temp folder, not
+/// in it. The agent reads them (the sandbox allows it, see
+/// [`crate::sandbox::policy_for`]) and cannot write the folder, so it can't
+/// put a symlink where the host is about to write — the same arrangement as
+/// the generated config in `<temp>.cfg`.
+pub fn attach_dir(temp_dir: &Path) -> PathBuf {
+    temp_dir.with_extension("att")
+}
+
+/// Copy an upload to `dir/name` (or `dir/name (2).ext`, and so on, if that
+/// name is taken) and hand back the path and the open file, rewound.
+///
+/// The folder is the host's, outside every sandbox's write set and
+/// read-only inside this one, so nothing of the agent's is in the way. The
+/// write is still `O_CREAT|O_EXCL|O_NOFOLLOW`, which refuses to follow a
+/// symlink of any kind (a dangling one included, which is what `exists()`
+/// reports as free), and the read-back comes from that same descriptor
+/// rather than the path, so the file the agent is told about is always the
+/// file the host wrote.
+fn stage_attachment(dir: &Path, name: &str, src: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    use std::os::unix::fs::OpenOptionsExt;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
         _ => (name.to_string(), String::new()),
     };
-    (2..)
-        .map(|i| dir.join(format!("{stem} ({i}){ext}")))
-        .find(|p| !p.exists())
-        .unwrap()
+    let mut last = None;
+    for i in 1..100 {
+        let path = if i == 1 {
+            dir.join(name)
+        } else {
+            dir.join(format!("{stem} ({i}){ext}"))
+        };
+        let open = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path);
+        match open {
+            Ok(mut dest) => {
+                let mut from = std::fs::File::open(src)?;
+                std::io::copy(&mut from, &mut dest)?;
+                use std::io::Seek;
+                dest.rewind()?;
+                return Ok((path, dest));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free name for the attachment")))
 }
 
 struct Actor {
@@ -1075,6 +1112,7 @@ impl Actor {
                 let _ = std::fs::remove_dir_all(&self.temp_dir);
                 let _ = std::fs::remove_file(self.temp_dir.with_extension("codex"));
                 let _ = std::fs::remove_dir_all(self.temp_dir.with_extension("cfg"));
+                let _ = std::fs::remove_dir_all(attach_dir(&self.temp_dir));
                 self.set_state(SessionState::Ended, Some("ended"), None);
             }
             Exit::Failed(reason, detail) => {
@@ -2054,14 +2092,14 @@ impl Actor {
     }
 
     /// ACP content for a prompt. Attached files are copied into the session's
-    /// temp folder, which the agent can read, and named in the text so every
-    /// agent sees them; images also go inline and small text files embedded
-    /// when the agent says it accepts those.
+    /// attachments folder, which the agent can read but not write, and named
+    /// in the text so every agent sees them; images also go inline and small
+    /// text files embedded when the agent says it accepts those.
     fn prompt_blocks(&self, q: Queued) -> Result<Vec<Value>> {
         if q.attachments.is_empty() {
             return Ok(vec![json!({"type": "text", "text": q.text})]);
         }
-        let dir = self.temp_dir.join("attachments");
+        let dir = attach_dir(&self.temp_dir);
         std::fs::create_dir_all(&dir)?;
         let image_ok = self.prompt_caps["image"].as_bool().unwrap_or(false);
         let embed_ok = self.prompt_caps["embeddedContext"].as_bool().unwrap_or(false);
@@ -2075,23 +2113,30 @@ impl Actor {
                     continue;
                 }
             };
-            let dest = unique_path(&dir, &a.name);
-            std::fs::copy(&src, &dest)?;
+            let (dest, mut staged) = stage_attachment(&dir, &a.name, &src)?;
             self.ctx.uploads.remove(&a.attachment_id);
             let path = dest.to_string_lossy().to_string();
             listing.push_str(&format!("\n- {path} ({}, {})", a.mime, human_size(a.size)));
             let uri = format!("file://{path}");
+            // Read back from the descriptor the copy wrote, never the path.
+            let read_back = |f: &mut std::fs::File, limit: u64| -> std::io::Result<Vec<u8>> {
+                use std::io::Read;
+                let mut buf = vec![];
+                f.take(limit).read_to_end(&mut buf)?;
+                Ok(buf)
+            };
             if a.is_image() && image_ok && a.size <= 5 * 1024 * 1024 && a.mime != "image/heic" {
                 use base64::Engine;
-                let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&dest)?);
+                let bytes = read_back(&mut staged, 5 * 1024 * 1024)?;
+                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
                 extra.push(json!({"type": "image", "mimeType": a.mime, "data": data, "uri": uri}));
             } else if embed_ok && is_text_mime(&a.mime) && a.size <= 256 * 1024 {
-                match std::fs::read_to_string(&dest) {
-                    Ok(text) => extra.push(json!({
+                match read_back(&mut staged, 256 * 1024).map(String::from_utf8) {
+                    Ok(Ok(text)) => extra.push(json!({
                         "type": "resource",
                         "resource": {"uri": uri, "mimeType": a.mime, "text": text}
                     })),
-                    Err(_) => extra.push(resource_link(&uri, a)),
+                    _ => extra.push(resource_link(&uri, a)),
                 }
             } else {
                 extra.push(resource_link(&uri, a));
@@ -2655,6 +2700,42 @@ impl From<StartFailure> for RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// H2: staging an attachment must never write through a name the agent
+    /// put there, and what the host reads back must be what it wrote.
+    #[test]
+    fn staging_an_attachment_refuses_a_planted_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, dest) = (dir.path().join("src.txt"), dir.path().join("dest"));
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(&src, b"the attachment").unwrap();
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, b"a file outside the sandbox").unwrap();
+
+        // A symlink pointing at a file outside: the write must not follow it.
+        std::os::unix::fs::symlink(&secret, dest.join("note.txt")).unwrap();
+        let (path, mut file) = stage_attachment(&dest, "note.txt", &src).unwrap();
+        assert_eq!(path, dest.join("note (2).txt"), "a taken name must not be written through");
+        assert_eq!(std::fs::read(&secret).unwrap(), b"a file outside the sandbox");
+
+        // The read-back comes from the descriptor, so swapping the path after
+        // the copy changes nothing the agent is told.
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&secret, &path).unwrap();
+        use std::io::Read;
+        let mut back = String::new();
+        file.read_to_string(&mut back).unwrap();
+        assert_eq!(back, "the attachment", "the host read a file the agent swapped in");
+
+        // A dangling symlink reports as free to `exists()`, and is the
+        // clobber this guards: `O_CREAT|O_EXCL` refuses it all the same.
+        let gone = dir.path().join("not-there.txt");
+        std::os::unix::fs::symlink(&gone, dest.join("x.txt")).unwrap();
+        assert!(!dest.join("x.txt").exists(), "a dangling link looks free");
+        let (path, _) = stage_attachment(&dest, "x.txt", &src).unwrap();
+        assert_eq!(path, dest.join("x (2).txt"));
+        assert!(!gone.exists(), "the copy was written through a dangling link");
+    }
 
     #[test]
     fn login_errors() {

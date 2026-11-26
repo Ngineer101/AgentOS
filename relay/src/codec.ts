@@ -71,3 +71,38 @@ export function randomBytes(n: number): Uint8Array {
   crypto.getRandomValues(b);
   return b;
 }
+
+/**
+ * Reads the whole request body, or returns null as soon as it goes over
+ * `limit` bytes — cancelling the stream rather than letting the rest arrive.
+ *
+ * Every route reads its body this way. `request.arrayBuffer()` would hold
+ * the whole thing first and only then let us measure it, so a sender that
+ * leaves out `content-length` and keeps writing could make a Worker isolate
+ * (or one host's Durable Object, and with it its WebSockets and webhook
+ * ingress) buy memory for a body no route would have accepted.
+ */
+export async function readLimited(request: Request, limit: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
+    total += chunk.length;
+    if (total > limit) {
+      void reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(chunk);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}

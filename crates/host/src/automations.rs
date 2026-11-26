@@ -371,9 +371,33 @@ impl Automations {
         Ok(self.view(&row))
     }
 
+    /// Whether an automation carries policy only an admin may set: tools
+    /// pre-approved for its runs, or a webhook anyone who has the URL can
+    /// fire. Both make the automation's prompt, folder and login as powerful
+    /// as the pre-approval behind them — a run of it pushes, opens pull
+    /// requests or starts from the internet without anyone looking — so
+    /// everything about it, including deleting it and running it now, is the
+    /// admin's to change. Without them an automation is a deferred
+    /// `session.create` + `session.prompt`, which a phone may already do.
+    fn admin_owned(a: &Automation) -> bool {
+        !a.auto_approve.is_empty() || matches!(a.trigger, AutomationTrigger::Webhook { .. })
+    }
+
+    fn admin_owned_error(what: &str) -> RpcError {
+        admin_only(&format!(
+            "{what} for an automation with pre-approved tools or a webhook trigger"
+        ))
+    }
+
     pub fn update(&self, p: AutomationUpdateParams, admin: bool) -> Result<Automation, RpcError> {
         let mut row = self.row(&p.automation_id)?;
         let before = row.automation.clone();
+        // The pre-approval or webhook is what makes the rest of it dangerous:
+        // changing the prompt of an automation that may push, or the folder
+        // it runs in, is changing what that pre-approval authorises.
+        if !admin && Self::admin_owned(&before) {
+            return Err(Self::admin_owned_error("Nothing can be changed"));
+        }
         let mut a = before.clone();
         if let Some(v) = p.name {
             a.name = v.trim().to_string();
@@ -456,10 +480,26 @@ impl Automations {
         a.updated_at = now_ms();
         row.automation = a;
         self.ctx.store.automation_save(&row).map_err(internal)?;
-        if row.automation.auto_approve != before.auto_approve || row.automation.trigger.kind() != before.trigger.kind() || p.rotate_webhook {
+        let prompt_changed = row.automation.prompt != before.prompt;
+        if row.automation.auto_approve != before.auto_approve
+            || row.automation.trigger.kind() != before.trigger.kind()
+            || row.automation.workspace_id != before.workspace_id
+            || prompt_changed
+            || p.rotate_webhook
+        {
             self.ctx.audit.log(
                 "automation.updated",
-                json!({"automation_id": row.automation.automation_id, "trigger": row.automation.trigger.kind(), "auto_approve": row.automation.auto_approve, "rotated": p.rotate_webhook}),
+                json!({
+                    "automation_id": row.automation.automation_id,
+                    "trigger": row.automation.trigger.kind(),
+                    "auto_approve": row.automation.auto_approve,
+                    "rotated": p.rotate_webhook,
+                    "workspace_id": row.automation.workspace_id,
+                    // What a pre-approved tool would be told to do, before and after.
+                    "prompt_was": prompt_changed.then(|| clean(&before.prompt, 500)),
+                    "prompt_now": prompt_changed.then(|| clean(&row.automation.prompt, 500)),
+                    "by_admin": admin,
+                }),
             );
         }
         self.changed(&row.automation.automation_id);
@@ -467,8 +507,11 @@ impl Automations {
         Ok(self.view(&row))
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), RpcError> {
-        self.row(id)?;
+    pub fn delete(&self, id: &str, admin: bool) -> Result<(), RpcError> {
+        let row = self.row(id)?;
+        if !admin && Self::admin_owned(&row.automation) {
+            return Err(Self::admin_owned_error("An automation can't be deleted"));
+        }
         self.ctx.store.automation_remove(id).map_err(internal)?;
         let _ = self.secrets.delete(&secret_name(id));
         self.ctx.audit.log("automation.deleted", json!({"automation_id": id}));
@@ -476,9 +519,12 @@ impl Automations {
         Ok(())
     }
 
-    pub async fn run_now(self: &Arc<Self>, id: &str) -> Result<AutomationRun, RpcError> {
+    pub async fn run_now(self: &Arc<Self>, id: &str, admin: bool) -> Result<AutomationRun, RpcError> {
         let _starting = self.starting.lock().await;
         let row = self.row(id)?;
+        if !admin && Self::admin_owned(&row.automation) {
+            return Err(Self::admin_owned_error("An automation can't be run"));
+        }
         let busy = self.running(id).len();
         if busy > 0 {
             return Err(RpcError::invalid_state("a run of this automation is still going"));

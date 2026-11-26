@@ -916,6 +916,13 @@ impl Gateway {
         Some(std::path::PathBuf::from(ws.path))
     }
 
+    /// The protected worktree the host made for this session, if it has one:
+    /// the only repository whose config the session's sandbox cannot write.
+    fn session_worktree_dir(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        let s = self.ctx.store.session_get(session_id).ok()??;
+        s.worktree.map(|w| std::path::PathBuf::from(w.path))
+    }
+
     /// Remember the pull request a command's output links to as the
     /// session's, and tell the clients (the session list shows its number).
     /// `opened`: the command just opened it, so it is open; otherwise its
@@ -1007,8 +1014,18 @@ impl Gateway {
             "note": "Posts to GitHub as you, with your GitHub CLI login. Push the branch first.",
         });
         // Settings can let pull requests open without asking, and so can the
-        // automation this session is a run of.
-        let by_automation = self.automation_allows(session_id, tool);
+        // automation this session is a run of — for the run's own branch
+        // only, as with a push: the agent can create any other branch, and a
+        // pull request from one is a push of the agent's choosing by proxy.
+        let own_branch = self
+            .ctx
+            .store
+            .session_get(session_id)
+            .ok()
+            .flatten()
+            .and_then(|s| s.worktree)
+            .is_some_and(|w| plan.head == w.branch);
+        let by_automation = self.automation_allows(session_id, tool).filter(|_| own_branch);
         let auto = self.builtin_policy(tool) == ToolPolicy::Auto || by_automation.is_some();
         let decision = if auto {
             ApprovalDecision::Approve
@@ -1096,6 +1113,13 @@ impl Gateway {
                 return text_result(&format!("AgentOS: {e}"), true);
             }
         };
+        // A fetch runs without asking only when the agent can't choose what
+        // git runs: its repository's config is the protected worktree's.
+        let protected = crate::gitremote::config_is_protected(
+            &plan.dir,
+            self.session_worktree_dir(session_id).as_deref(),
+        )
+        .await;
         if push {
             let reason = s("reason").unwrap_or_default();
             let mut note = "Uses your git credentials. Nothing from the repository runs (its hooks are skipped).".to_string();
@@ -1105,6 +1129,9 @@ impl Gateway {
             let shown = json!({
                 "command": plan.command(),
                 "remote": plan.remote,
+                // Where it really goes: `insteadOf` in the repository's config
+                // can point an approved "push to origin" somewhere else.
+                "url": plan.url,
                 "branch": plan.branch,
                 "force": plan.force,
                 "reason": reason,
@@ -1133,17 +1160,42 @@ impl Gateway {
             };
             self.ctx.audit.log(
                 "git.decision",
-                json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "decision": decision, "auto": auto, "automation_id": by_automation}),
+                json!({"session_id": session_id, "command": plan.command(), "url": plan.url, "dir": plan.dir, "decision": decision, "auto": auto, "automation_id": by_automation, "protected": protected}),
             );
             if decision != ApprovalDecision::Approve {
                 finish("denied", "the user denied this push");
                 return text_result("The user denied this push.", true);
             }
+        } else if !protected {
+            // This repository's config is the agent's to write, so what git
+            // does here is the agent's choice as much as ours: ask.
+            let shown = json!({
+                "command": plan.command(),
+                "remote": plan.remote,
+                "url": plan.url,
+                "reason": s("reason").unwrap_or_default(),
+                "runs": "on this computer, as you, outside the sandbox",
+                "approve_label": "Fetch",
+                "ask_title": "Fetch?",
+                "note": "This folder's git settings can be changed from inside the sandbox, so the host asks before \
+                         running git here. Check where it fetches from.",
+            });
+            let decision = self
+                .await_approval(session_id, BUILTIN_CONNECTOR_ID, "AgentOS", tool, &shown, Some(plan.summary()))
+                .await;
+            self.ctx.audit.log(
+                "git.decision",
+                json!({"session_id": session_id, "command": plan.command(), "url": plan.url, "dir": plan.dir, "decision": decision, "auto": false, "protected": false}),
+            );
+            if decision != ApprovalDecision::Approve {
+                finish("denied", "the user denied this fetch");
+                return text_result("The user denied this fetch.", true);
+            }
         }
         let out = crate::gitremote::run(&plan).await;
         self.ctx.audit.log(
             "git.done",
-            json!({"session_id": session_id, "command": plan.command(), "dir": plan.dir, "ok": out.ok}),
+            json!({"session_id": session_id, "command": plan.command(), "url": plan.url, "dir": plan.dir, "ok": out.ok}),
         );
         let output = if out.output.is_empty() { "(no output)".to_string() } else { out.output.clone() };
         finish(if out.ok { "completed" } else { "failed" }, &format!("$ {}\n{output}", plan.command()));

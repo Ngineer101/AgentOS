@@ -573,12 +573,14 @@ impl Conn {
             }
             m::AUTOMATION_DELETE => {
                 let r: AutomationRef = params(p)?;
-                h.automations.delete(&r.automation_id)?;
+                let admin = self.principal.capabilities.contains(&Capability::Admin);
+                h.automations.delete(&r.automation_id, admin)?;
                 Ok(json!({"removed": true}))
             }
             m::AUTOMATION_RUN_NOW => {
                 let r: AutomationRef = params(p)?;
-                to_value(h.automations.run_now(&r.automation_id).await?)
+                let admin = self.principal.capabilities.contains(&Capability::Admin);
+                to_value(h.automations.run_now(&r.automation_id, admin).await?)
             }
             m::AUTOMATION_RUNS => to_value(h.automations.runs(&params(p)?)?),
             m::AUTOMATION_CHECK_SCHEDULE => {

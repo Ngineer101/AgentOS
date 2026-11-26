@@ -13,6 +13,14 @@ macOS, via Anthropic's `sandbox-runtime` at a pinned version). It:
   shared session tools folder (where agents install helpers for themselves
   with npm, pipx, uv, cargo or go, never into your home folder);
 - cannot read secrets folders, other agents' credentials or the host's data;
+  your home folder is otherwise readable, so "secrets" has to mean more than
+  the obvious credential folders: `~/.ssh` and friends, but also browser
+  profiles (a cookie store is a live login), chat apps' tokens, shell and
+  tool history, and database and cloud credential files. The list is
+  `SECRET_DIRS` in `crates/host/src/sandbox.rs`. It is a list of what an
+  agent may **not** read rather than a list of what it may, because an agent
+  needs to see your tools' configuration to work in your repositories — so
+  if you keep credentials somewhere unusual, add it there;
 - has no network except the host's per-session egress proxy, which allows
   only the agent's provider hosts plus the workspace's network profile,
   resolves names itself and refuses private addresses.
@@ -32,9 +40,19 @@ outside the sandbox.
   a time, logged to the audit log).
 - **Pushing**: the sandbox can't read your git credentials, so
   `agenthost__git_push` asks you to approve the exact `git push` and the host
-  runs it with your credentials (fetching runs without asking).
-  `agenthost__create_pull_request` opens a pull request with your GitHub CLI
-  after you approve its title and description.
+  runs it with your credentials. The approval also shows where the remote
+  really points, because a repository's own settings can send an approved
+  "push to origin" somewhere else. `agenthost__create_pull_request` opens a
+  pull request with your GitHub CLI after you approve its title and
+  description.
+- **Fetching** changes nothing on the remote, so it runs without asking —
+  but only in the worktree the host made for the session, whose git settings
+  the sandbox cannot write. Anywhere else (a folder the agent ran `git init`
+  in, a repository inside the session's folder, a shared folder, a quick
+  task) the settings are the agent's, and a fetch there asks. Git is run so
+  that nothing in those settings can name a command for it to run, whichever
+  folder it is: no hooks, no `sshCommand`, no credential helper, no proxy
+  command, no transport helper, no submodules.
 - **Any other command that needs your logins** (`gh pr edit`,
   `gh issue create`, a deploy CLI) goes through `agenthost__run_command`: you
   see the exact argument list and its input, and the host runs it as you in
