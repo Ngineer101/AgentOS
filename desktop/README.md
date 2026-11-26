@@ -1,7 +1,7 @@
 # AgentOS desktop
 
 The full control surface, built with [Rune](https://github.com/anomalyco/rune)
-(pinned to rev `e7f3ad9`). It runs on the same machine as the host and talks
+(pinned to rev `4918969`). It runs on the same machine as the host and talks
 to it over the Unix socket; if no host is running it starts `agenthostd run`.
 It can also pair with a host on another machine and reach it through the
 relay (see [Remote access](#remote-access) below).

@@ -19,8 +19,8 @@ path = "src/main.rs"
 agenthost-proto = { path = "../crates/proto" }
 agenthost-cli = { path = "../crates/cli" }
 # Rune is pre-release: pin a rev of `dev` (never rewritten).
-rune = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b", features = ["native-file-dialog"] }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b", features = ["markdown"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d", features = ["markdown"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -49,8 +49,11 @@ bytes = "1"
 
 # Rune's own patches, which apps that build Rune apply too (see Rune's Cargo.toml).
 [patch.crates-io]
-wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
-winit = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
-parley_engine = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
-accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
-accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "e7f3ad9fba336e9c33a5f25bb96e1c3aa7e2771b" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "4918969f04dce020f63b34e024368a86e5e1857d" }
