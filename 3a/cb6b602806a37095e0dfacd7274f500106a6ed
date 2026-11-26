@@ -1,0 +1,27 @@
+crates/host/src/api.rs
+  s_02da536afc6ae9::t_4c585c5f46b267 44-53,56,58
+crates/host/src/gitremote.rs
+  s_02da536afc6ae9::t_3fc5d9e1e3c87a 58-124,416-444
+crates/host/src/lib.rs
+  s_02da536afc6ae9::t_7469eef99f345d 49
+crates/host/src/mcp.rs
+  s_02da536afc6ae9::t_ddd210913790dd 255,304,318-319,340-355,363,392-393,395-412,430-454,947-953,1048-1054
+crates/host/tests/m1_host_core.rs
+  s_02da536afc6ae9::t_e42a21c55fd5e8 768-809
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3acb6b602806a37095e0dfacd7274f500106a6ed",
+  "prompts": {},
+  "sessions": {
+    "s_02da536afc6ae9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_02da536afc6ae9",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
