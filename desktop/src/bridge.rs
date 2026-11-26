@@ -213,6 +213,15 @@ impl Bridge {
     pub fn send(&self, cmd: ToHost) {
         let _ = self.tx.send(cmd);
     }
+
+    /// A bridge with no host behind it: tests hand the app replies through the sender, as
+    /// the real one does, so they arrive in `poll`.
+    #[cfg(test)]
+    pub fn fake() -> (Bridge, std_mpsc::Sender<FromHost>, mpsc::UnboundedReceiver<ToHost>) {
+        let (tx, to_host) = mpsc::unbounded_channel();
+        let (from_host, rx) = std_mpsc::channel();
+        (Bridge { tx, rx }, from_host, to_host)
+    }
 }
 
 pub fn socket_path() -> PathBuf {
