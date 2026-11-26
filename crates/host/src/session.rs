@@ -1167,6 +1167,9 @@ impl Actor {
                 .env
                 .push(("CODEX_CONFIG".into(), thread_cfg.to_string()));
         }
+        if self.spec.kind == AgentKind::Claude {
+            agents::forget_gateway_auth_failure(&self.spec.claude_config_dir(&self.ctx.cfg));
+        }
         let workspace_path = PathBuf::from(&self.workspace.path);
         if self.workspace.kind == WorkspaceKind::Scratch {
             crate::config::create_private_dir(&workspace_path)?;

@@ -60,6 +60,14 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
+    /// Claude Code's config folder: the profile's, else `~/.claude`.
+    pub fn claude_config_dir(&self, cfg: &HostConfig) -> PathBuf {
+        match &self.profile {
+            Some(p) if self.kind == AgentKind::Claude => PathBuf::from(&p.config_dir),
+            _ => cfg.home_dir.join(".claude"),
+        }
+    }
+
     /// Codex's config folder: the profile's, else `~/.codex`.
     pub fn codex_home(&self, cfg: &HostConfig) -> PathBuf {
         match &self.profile {
@@ -747,5 +755,49 @@ mod tests {
         assert_eq!(major("opencode 2.3.0"), Some(2));
         assert_eq!(major("codex-cli 0.169.0"), Some(0));
         assert_eq!(major("none"), None);
+    }
+
+    #[test]
+    fn forgets_only_the_gateway_s_auth_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("mcp-needs-auth-cache.json");
+        // Nothing to do: no file, or no entry for the gateway.
+        forget_gateway_auth_failure(d.path());
+        assert!(!file.exists());
+        std::fs::write(&file, r#"{"claude.ai Sentry":{"timestamp":1}}"#).unwrap();
+        forget_gateway_auth_failure(d.path());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"claude.ai Sentry":{"timestamp":1}}"#);
+
+        std::fs::write(&file, r#"{"claude.ai Sentry":{"timestamp":1},"agenthost":{"timestamp":2}}"#).unwrap();
+        forget_gateway_auth_failure(d.path());
+        let left: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(left, serde_json::json!({"claude.ai Sentry": {"timestamp": 1}}));
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "left a temporary file");
+
+        // A file it can't read as JSON is left alone.
+        std::fs::write(&file, "not json").unwrap();
+        forget_gateway_auth_failure(d.path());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "not json");
+    }
+}
+
+/// Claude Code remembers an MCP server that failed to connect as "needs
+/// authentication", by name, in its config folder, and every session on that
+/// login then skips connecting to it for a while: one moment the gateway was
+/// unreachable left all new sessions without the host's tools (no push, no
+/// pull requests) after the gateway was back. The gateway never asks for
+/// authentication, so drop its entry before each Claude session starts.
+pub fn forget_gateway_auth_failure(claude_dir: &Path) {
+    let file = claude_dir.join("mcp-needs-auth-cache.json");
+    let Ok(text) = std::fs::read_to_string(&file) else { return };
+    let Ok(serde_json::Value::Object(mut cache)) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    if cache.remove(agenthost_proto::BUILTIN_CONNECTOR_ID).is_none() {
+        return;
+    }
+    // Replace, never truncate in place: Claude Code may be reading it.
+    let tmp = file.with_extension("json.agenthost-tmp");
+    let body = serde_json::Value::Object(cache).to_string();
+    if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, &file).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
