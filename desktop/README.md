@@ -116,8 +116,16 @@ installed family (the look's own font fills in what it lacks).
   and token, sign in, defaults and per-tool policy), Devices (pair with QR and
   code, rename, revoke), Archived (search, Open read-only, Unarchive;
   archived sessions can't be deleted). Workspaces also sets the default login.
-  Drawn over the main window rather than in a window of its own: Rune's
-  windows each own their state.
+  They fill the window while open (nano page "Desktop settings (full
+  window)"): the pages are rows in a sidebar where the sessions were (with
+  Back on macOS, a back button in the header bar on GNOME), and the page has
+  the rest, in a centred column: 680 wide, or up to 960 (GNOME 920) for
+  Workspaces and Connectors, which list their items beside the chosen one.
+  Escape, Back or the Settings key again brings back the window as it was;
+  the right panel is hidden meanwhile. In a small window the sidebar narrows
+  first (to 220), then the list goes above its detail. Pairing a phone is a
+  sheet (GNOME: a dialog) over the whole window. Not a window of their own:
+  Rune's windows each own their state.
 - **Keys**: the macOS menu bar (File, Session, View, Settings…) lists every
   shortcut; on GNOME, Ctrl+? opens the shortcuts window and F10 the main menu.
 

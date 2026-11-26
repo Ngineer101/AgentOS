@@ -1,5 +1,6 @@
 //! The main window: the sidebar (sessions by workspace, search, host line), the toolbar or
-//! header bar, banners and the open session; sheets, Settings and menus over it.
+//! header bar, banners and the open session; sheets and menus over it. Settings take the
+//! whole window while open (`settings.rs`).
 
 use crate::look::MEDIUM;
 use crate::commands::{label as keys, run, Cmd};
@@ -16,16 +17,23 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     let k = t.kit();
     let mut body = row().key("body").w_full().h_full().min_h(0.0).fill(t.window);
-    if s.sidebar_open {
-        body = body.child(sidebar(s, &t));
-    }
-    body = body.child(main_pane(s, &t, &k, cx));
-    // One trailing pane: a subagent's, else the right panel on its open tab.
-    match (&s.screen, &s.agent_open) {
-        (Screen::Session(id), Some((_, call))) if s.agent_visible() => body = body.child(crate::agents::pane(s, id, call, &t, &k)),
-        _ => {
-            if let Some(tab) = s.panel_shown() {
-                body = body.child(crate::panel::pane(s, tab, &t, &k));
+    if let Some(tab) = s.settings {
+        // Settings take the window: their sidebar and page in place of the sessions', and no
+        // right panel. What was open stays as it was underneath.
+        let stacked = cx.layout_with("settings", |r| r[2] < crate::settings::STACK_BELOW).unwrap_or(false);
+        body = body.child(crate::settings::sidebar(s, tab, &t)).child(crate::settings::pane(s, tab, &t, stacked));
+    } else {
+        if s.sidebar_open {
+            body = body.child(sidebar(s, &t));
+        }
+        body = body.child(main_pane(s, &t, &k, cx));
+        // One trailing pane: a subagent's, else the right panel on its open tab.
+        match (&s.screen, &s.agent_open) {
+            (Screen::Session(id), Some((_, call))) if s.agent_visible() => body = body.child(crate::agents::pane(s, id, call, &t, &k)),
+            _ => {
+                if let Some(tab) = s.panel_shown() {
+                    body = body.child(crate::panel::pane(s, tab, &t, &k));
+                }
             }
         }
     }
@@ -36,8 +44,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.new_open {
         root = root.child(crate::sheet::new_session(s, &t));
     }
-    if let Some(tab) = s.settings {
-        root = root.child(crate::settings::view(s, tab, &t));
+    if let Some(sheet) = crate::settings::pairing(s, &t) {
+        root = root.child(sheet);
     }
     if s.shortcuts_open {
         root = root.child(crate::sheet::shortcuts(s, &t));
@@ -326,7 +334,23 @@ fn sidebar(s: &App, t: &Theme) -> El {
         list = list.child(t.small(msg).wrap().px(10.0).pt(8.0));
     }
 
-    // The host line.
+    let mut sb = col()
+        .key("sidebar")
+        .w(t.sidebar_w)
+        .h_full()
+        .min_h(0.0)
+        .child(header)
+        .child(top)
+        .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
+        .child(host_line(s, t));
+    sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
+    sb.child(sidebar_grip(t))
+}
+
+/// The host line at the foot of a sidebar: which host, and whether it's reached. It opens
+/// the host's status.
+pub(crate) fn host_line(s: &App, t: &Theme) -> El {
+    let mac = t.mac();
     let (dot, state) = match &s.conn {
         Conn::Connected => (t.ok, "Connected"),
         Conn::Connecting => (t.warn, "Connecting…"),
@@ -357,23 +381,12 @@ fn sidebar(s: &App, t: &Theme) -> El {
     } else {
         host.py(12.0).px(18.0).child(text(format!("{name} · {state}")).font(TextStyle::new(fsz, 400.0)).color(t.text2).truncate().shrink())
     };
-
-    let mut sb = col()
-        .key("sidebar")
-        .w(t.sidebar_w)
-        .h_full()
-        .min_h(0.0)
-        .child(header)
-        .child(top)
-        .child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
-        .child(host);
-    sb = if mac { sb.gradient(t.sidebar_top, t.sidebar_bottom).border_sides([0.0, 0.5, 0.0, 0.0], Color::BLACK.alpha(0.6)) } else { sb.fill(t.sidebar_top) };
-    sb.child(sidebar_grip(t))
+    host
 }
 
 /// The sidebar's trailing edge: drag it to resize the sidebar (kept between launches),
 /// double-press it for the look's own width.
-fn sidebar_grip(t: &Theme) -> El {
+pub(crate) fn sidebar_grip(t: &Theme) -> El {
     use crate::model::{SIDEBAR_MAX_W, SIDEBAR_MIN_W};
     const GRIP: f32 = 6.0;
     let w = t.sidebar_w;
@@ -479,7 +492,7 @@ fn nav_row(t: &Theme, key: &str, glyph: &'static rune::Icon, label: &str, select
 }
 
 /// A small heading over a part of the list ("Pinned", "Workspaces"), with an optional button.
-fn heading(t: &Theme, title: &str, button: Option<El>) -> El {
+pub(crate) fn heading(t: &Theme, title: &str, button: Option<El>) -> El {
     let mac = t.mac();
     let mut r = row()
         .w_full()
@@ -972,21 +985,23 @@ fn toolbar(s: &App, t: &Theme) -> El {
         if let Some(b) = terminal {
             bar = bar.child(b);
         }
-        // Linux keeps the window manager's own frame; elsewhere (a preview) draw Adwaita's.
-        if !cfg!(target_os = "linux") {
-            let circle = |i: &'static rune::Icon, label: &str, f: fn(&mut App, &mut Tx)| {
-                row().size(24.0, 24.0).radius(12.0).center().fill(Color::WHITE.alpha(0.1)).role("button").label(label.to_string()).hover(Color::WHITE.alpha(0.06)).on_press_tx(f).child(icon(i, 10.0).color(t.text))
-            };
-            bar = bar.child(
-                row()
-                    .gap(6.0)
-                    .px(6.0)
-                    .child(circle(&ic::MINIMIZE, "Minimize", |_, tx| tx.minimize()))
-                    .child(circle(&ic::CLOSE, "Close", |_, tx| tx.close_window())),
-            );
-        }
-        bar
+        bar.children(window_buttons(t))
     }
+}
+
+/// The width [`window_buttons`] take, for a header that centres its title against them.
+pub(crate) const WINDOW_BUTTONS_W: f32 = 66.0;
+
+/// GNOME's window buttons at the end of a header bar. Linux keeps the window manager's own
+/// frame; elsewhere (a preview) draw Adwaita's.
+pub(crate) fn window_buttons(t: &Theme) -> Option<El> {
+    if cfg!(target_os = "linux") {
+        return None;
+    }
+    let circle = |i: &'static rune::Icon, label: &str, f: fn(&mut App, &mut Tx)| {
+        row().size(24.0, 24.0).radius(12.0).center().fill(Color::WHITE.alpha(0.1)).role("button").label(label.to_string()).hover(Color::WHITE.alpha(0.06)).on_press_tx(f).child(icon(i, 10.0).color(t.text))
+    };
+    Some(row().gap(6.0).px(6.0).child(circle(&ic::MINIMIZE, "Minimize", |_, tx| tx.minimize())).child(circle(&ic::CLOSE, "Close", |_, tx| tx.close_window())))
 }
 
 /// The macOS toolbar's status capsule: this session needs you, or another one does.
