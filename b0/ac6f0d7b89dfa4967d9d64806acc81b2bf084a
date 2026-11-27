@@ -1,0 +1,21 @@
+crates/host/tests/push.rs
+  s_ec7868ebb1e461::t_bb8b3357ecb98e 312-315
+desktop/src/tests.rs
+  s_ec7868ebb1e461::t_4ea10bec219ec8 31-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0ac6f0d7b89dfa4967d9d64806acc81b2bf084a",
+  "prompts": {},
+  "sessions": {
+    "s_ec7868ebb1e461": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ec7868ebb1e461",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
