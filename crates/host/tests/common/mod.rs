@@ -20,16 +20,37 @@ pub fn workspace_root() -> PathBuf {
 
 /// Path to the fake agent binary, building it if needed.
 pub fn fake_agent() -> PathBuf {
-    let p = workspace_root().join("target/debug/agenthost-fake-agent");
-    BUILD.call_once(|| {
+    let root = workspace_root();
+    BUILD.call_once(|| build_fake_agent(&root));
+    root.join("target/debug/agenthost-fake-agent")
+}
+
+/// Build the fake agent, once per test run.
+///
+/// Under cargo-nextest every test is its own process, and `cargo build`
+/// re-links the binary even when nothing changed, so for a moment it isn't
+/// there for another test that is starting it. So under nextest the first
+/// test to take the lock builds it, once per run (`NEXTEST_RUN_ID`); the
+/// ffi tests share the same lock.
+fn build_fake_agent(root: &Path) {
+    let build = || {
         let st = std::process::Command::new(env!("CARGO"))
             .args(["build", "-q", "-p", "agenthost-fake-agent"])
-            .current_dir(workspace_root())
+            .current_dir(root)
             .status()
             .expect("cargo build fake agent");
         assert!(st.success());
-    });
-    p
+    };
+    let Ok(run) = std::env::var("NEXTEST_RUN_ID") else { return build() };
+    let dir = root.join("target/nextest-fake-agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = std::fs::File::create(dir.join("lock")).unwrap();
+    lock.lock().unwrap();
+    let done = dir.join(run);
+    if !done.exists() {
+        build();
+        std::fs::write(&done, b"").unwrap();
+    }
 }
 
 pub struct TestHost {
