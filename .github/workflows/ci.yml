@@ -1,56 +1,99 @@
+# Runs on PRs and merges to main, and only the parts a change touches.
+# macOS runs separately (macos.yml). Run the same checks locally with scripts/ci.sh.
 name: ci
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  rust:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      host: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.host == 'true' }}
+      relay: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.relay == 'true' }}
+      desktop: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.desktop == 'true' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
         with:
-          node-version: 22
-      - name: Linux sandbox prerequisites
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get -o Acquire::Retries=5 update
-          sudo apt-get -o Acquire::Retries=5 install -y bubblewrap socat ripgrep
-          # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Build
-        run: cargo build --all-targets
-      - name: Install pinned sandbox runtime and adapters
-        run: ./target/debug/agenthostd --data-dir "$RUNNER_TEMP/ah" install-tools
-      - name: Test (including the sandbox escape suite)
-        env:
-          AGENTHOST_TEST_TOOLS: ${{ runner.temp }}/ah/tools
-        run: cargo test --workspace --no-fail-fast -- --test-threads 4
+          filters: |
+            rust: &rust
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.config/nextest.toml'
+              - '.github/workflows/ci.yml'
+            host:
+              - *rust
+              - '.github/workflows/rust-host.yml'
+            relay:
+              - 'relay/**'
+              - '.github/workflows/ci.yml'
+            desktop:
+              - *rust
+              - 'desktop/**'
+
+  rust-linux:
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
+    uses: ./.github/workflows/rust-host.yml
+    with:
+      os: ubuntu-24.04
 
   relay:
+    needs: changes
+    if: needs.changes.outputs.relay == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: relay
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
 
   desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Linux libraries Rune links against
         run: |
           sudo apt-get -o Acquire::Retries=5 update
           sudo apt-get -o Acquire::Retries=5 install -y pkg-config libasound2-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Test the desktop app (Rune)
         working-directory: desktop
-        run: cargo test
+        run: cargo nextest run --config-file ../.config/nextest.toml --profile ci

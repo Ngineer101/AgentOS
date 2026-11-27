@@ -1,0 +1,12 @@
+# cargo-nextest runs each test in its own process, so tests that set
+# environment variables can't race each other.
+
+[profile.default]
+# Flag tests slower than a minute; stop any stuck for 10.
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[profile.ci]
+fail-fast = false
+test-threads = 4
+failure-output = "immediate-final"
+slow-timeout = { period = "60s", terminate-after = 10 }
