@@ -1,0 +1,21 @@
+crates/ffi/tests/ffi_remote.rs
+  s_19c4dba69c0adc::t_6a5eec1308b5cb 16,34-46,49,53-63
+crates/host/tests/common/mod.rs
+  s_19c4dba69c0adc::t_e49dad0680d6b7 23-36,39,43-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e96fd7f832a1043f5ca30d9d34b3c4b958da3c3",
+  "prompts": {},
+  "sessions": {
+    "s_19c4dba69c0adc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_19c4dba69c0adc",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
