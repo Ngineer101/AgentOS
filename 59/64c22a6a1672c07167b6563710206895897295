@@ -1,0 +1,23 @@
+desktop/src/demo.rs
+  s_8fb2264a243cfe::t_1d420b691676cd 1111-1122
+desktop/src/settings.rs
+  s_8fb2264a243cfe::t_78b03390b6f201 982-985,997-1001,1022,1039,1041-1044
+desktop/src/tests.rs
+  s_8fb2264a243cfe::t_df2d2ecafdd29a 4043-4089
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5964c22a6a1672c07167b6563710206895897295",
+  "prompts": {},
+  "sessions": {
+    "s_8fb2264a243cfe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8fb2264a243cfe",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
