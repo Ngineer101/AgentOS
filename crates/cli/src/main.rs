@@ -746,7 +746,7 @@ enum WsCmd {
         /// Network presets: packages, github, web (any public site) (comma separated).
         #[arg(long, value_delimiter = ',')]
         profile: Vec<String>,
-        /// Extra allowed hosts.
+        /// Extra allowed hosts: a name, or *.example.com for every subdomain.
         #[arg(long = "host")]
         hosts: Vec<String>,
     },
@@ -758,10 +758,10 @@ enum WsCmd {
         /// Replace the network presets: packages, github, web ("agent-only" for none).
         #[arg(long, value_delimiter = ',')]
         profile: Option<Vec<String>>,
-        /// Add one host to the custom profile.
+        /// Add one host to the custom profile: a name, or *.example.com for every subdomain.
         #[arg(long)]
         add_host: Option<String>,
-        /// Replace the custom host list.
+        /// Replace the custom host list (names, or *.example.com for every subdomain).
         #[arg(long, value_delimiter = ',')]
         hosts: Option<Vec<String>>,
         /// Enabled connector ids (comma separated, "none" for none).

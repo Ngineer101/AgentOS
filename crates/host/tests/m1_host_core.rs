@@ -541,6 +541,16 @@ async fn workspace_rules() {
         .await
         .unwrap();
     assert_eq!(w.network.custom_hosts, vec!["example.org"]);
+    // A wildcard for every subdomain, pasted as an address: kept as the host it names.
+    let w: Workspace = c
+        .call(
+            m::WORKSPACE_UPDATE,
+            json!({"workspace_id": w.workspace_id, "add_custom_host": "https://*.Example.org/docs"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(w.network.custom_hosts, vec!["example.org", "*.example.org"]);
+    assert!(w.network.names("api.example.org", 443) && !w.network.names("badexample.org", 443));
     assert!(c
         .request(
             m::WORKSPACE_UPDATE,

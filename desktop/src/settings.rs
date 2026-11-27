@@ -1038,7 +1038,7 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         })
         .key(format!("{}-add-host", w.workspace_id))
     };
-    let mut extra = col().key(format!("{}-extra-hosts", w.workspace_id)).w_full().child(form_row(t, "Extra hosts", Some("Other sites you allow by name".into()), add_host));
+    let mut extra = col().key(format!("{}-extra-hosts", w.workspace_id)).w_full().child(form_row(t, "Extra hosts", Some("Other sites you allow by name. *.example.com allows every subdomain.".into()), add_host));
     if !w.network.custom_hosts.is_empty() {
         extra = extra.child(hosts);
     }

@@ -263,6 +263,34 @@ impl NetworkProfile {
         }
         parts.join("+")
     }
+    /// Whether one of the custom hosts names `host:port` (see [`host_entry_matches`]).
+    pub fn names(&self, host: &str, port: u16) -> bool {
+        self.custom_hosts.iter().any(|e| host_entry_matches(e, host, port))
+    }
+}
+
+/// Whether an allow-list entry names `host:port`. An entry is `name`, or `*.name` for every
+/// subdomain of `name` however deep (but not `name` itself), either one with `:port` to
+/// name that port alone. Case and a trailing dot on the host don't matter. This is the rule
+/// the host's egress proxy enforces; apps use it to say what a workspace already allows.
+pub fn host_entry_matches(entry: &str, host: &str, port: u16) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let entry = entry.trim().to_ascii_lowercase();
+    let pat = match entry.rsplit_once(':') {
+        Some((name, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && !name.contains(':') => {
+            // A port that isn't one names nothing, rather than every port.
+            if p.parse::<u16>().ok() != Some(port) {
+                return false;
+            }
+            name
+        }
+        _ => entry.as_str(),
+    };
+    match pat.strip_prefix("*.") {
+        // The dot before the suffix must be there: `*.example.com` is not `badexample.com`.
+        Some(suffix) => !suffix.is_empty() && host.len() > suffix.len() && host.ends_with(suffix) && host.as_bytes()[host.len() - suffix.len() - 1] == b'.',
+        None => !pat.is_empty() && host == pat,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

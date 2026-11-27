@@ -142,33 +142,12 @@ impl EgressProxy {
 pub const ANY_PUBLIC_HOST: &str = "*";
 
 /// Whether `host:port` matches an allowlist entry (`name`, `*.suffix`, optional
-/// `:port`, or [`ANY_PUBLIC_HOST`]).
+/// `:port`, or [`ANY_PUBLIC_HOST`]). The rule for one entry is the protocol's
+/// [`agenthost_proto::host_entry_matches`], so apps read a list as the proxy does.
 pub fn host_allowed(allowed: &[String], host: &str, port: u16) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    allowed.iter().any(|entry| {
-        if entry == ANY_PUBLIC_HOST {
-            return true;
-        }
-        let entry = entry.trim().to_ascii_lowercase();
-        let (pat, pport) = match entry.rsplit_once(':') {
-            Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) && !h.contains(':') => {
-                (h.to_string(), p.parse::<u16>().ok())
-            }
-            _ => (entry.clone(), None),
-        };
-        if let Some(p) = pport {
-            if p != port {
-                return false;
-            }
-        }
-        if let Some(suffix) = pat.strip_prefix("*.") {
-            host.len() > suffix.len()
-                && host.ends_with(suffix)
-                && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-        } else {
-            host == pat
-        }
-    })
+    allowed
+        .iter()
+        .any(|entry| entry == ANY_PUBLIC_HOST || agenthost_proto::host_entry_matches(entry, host, port))
 }
 
 /// Addresses a sandbox must never reach, even through an allowed name.

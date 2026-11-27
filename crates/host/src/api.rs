@@ -833,20 +833,64 @@ fn spawn_subscription(
 // Workspaces
 // ---------------------------------------------------------------------------
 
-fn validate_hosts(hosts: &[String]) -> Result<(), RpcError> {
-    for h in hosts {
-        let h = h.trim();
-        let ok = !h.is_empty()
-            && h.len() < 254
-            && h.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '*' | ':' | '_'))
-            && (!h.contains('*') || (h.starts_with("*.") && h.matches('*').count() == 1))
-            && h != "*";
-        if !ok {
-            return Err(RpcError::invalid_params(format!("invalid host {h:?}")));
+/// One extra host for a workspace's network, as it is kept: a name (`api.example.com`), or
+/// `*.example.com` for every subdomain of a name, either with `:port` for that port alone.
+/// What was typed may be a pasted address: its scheme, its path and the case of its letters
+/// are dropped. `*` alone is refused (that is the Open web preset, not a host).
+fn custom_host(raw: &str) -> Result<String, RpcError> {
+    let refuse = || {
+        RpcError::invalid_params(format!(
+            "invalid host {:?}: use a name like api.example.com, or *.example.com for every subdomain",
+            raw.trim()
+        ))
+    };
+    let mut h = raw.trim().to_ascii_lowercase();
+    if let Some((scheme, rest)) = h.split_once("://") {
+        if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+            return Err(refuse());
+        }
+        h = rest.to_string();
+    }
+    if let Some(end) = h.find(['/', '?', '#']) {
+        h.truncate(end);
+    }
+    let chars_ok = h
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '*' | ':' | '_'));
+    if h.is_empty() || h.len() >= 254 || !chars_ok {
+        return Err(refuse());
+    }
+    // `name:port`, read as the proxy reads it; anything else with a colon is an address.
+    let (name, port) = match h.rsplit_once(':') {
+        Some((n, p)) if !n.contains(':') => (n, Some(p)),
+        _ => (h.as_str(), None),
+    };
+    if port.is_some_and(|p| !p.chars().all(|c| c.is_ascii_digit()) || p.parse::<u16>().map_or(true, |n| n == 0)) {
+        return Err(refuse());
+    }
+    let name = name.trim_end_matches('.');
+    // A wildcard stands for whole labels at the front, once: `*.example.com`.
+    let base = name.strip_prefix("*.").unwrap_or(name);
+    let wild = base.len() != name.len();
+    if base.contains('*') || (wild && base.contains(':')) || (!base.contains(':') && base.split('.').any(str::is_empty)) {
+        return Err(refuse());
+    }
+    Ok(match port {
+        Some(p) => format!("{name}:{p}"),
+        None => name.to_string(),
+    })
+}
+
+/// A workspace's extra hosts as they are kept (see [`custom_host`]), each once.
+fn custom_hosts(raw: &[String]) -> Result<Vec<String>, RpcError> {
+    let mut hosts: Vec<String> = vec![];
+    for r in raw {
+        let h = custom_host(r)?;
+        if !hosts.contains(&h) {
+            hosts.push(h);
         }
     }
-    Ok(())
+    Ok(hosts)
 }
 
 /// Add a folder as a workspace, after every check (also used by `project.create`).
@@ -906,8 +950,8 @@ pub fn workspace_add(h: &Host, p: WorkspaceAddParams) -> Result<Workspace, RpcEr
             "this folder is already a workspace",
         ));
     }
-    let network = p.network.unwrap_or_default();
-    validate_hosts(&network.custom_hosts)?;
+    let mut network = p.network.unwrap_or_default();
+    network.custom_hosts = custom_hosts(&network.custom_hosts)?;
     let kind = p.kind.unwrap_or(if path.join(".git").exists() {
         WorkspaceKind::Repo
     } else {
@@ -990,13 +1034,12 @@ fn workspace_update(h: &Host, p: WorkspaceUpdateParams) -> Result<Workspace, Rpc
     if let Some(n) = p.name {
         w.name = n;
     }
-    if let Some(net) = p.network {
-        validate_hosts(&net.custom_hosts)?;
+    if let Some(mut net) = p.network {
+        net.custom_hosts = custom_hosts(&net.custom_hosts)?;
         w.network = net;
     }
     if let Some(host) = p.add_custom_host {
-        let host = host.trim().to_ascii_lowercase();
-        validate_hosts(std::slice::from_ref(&host))?;
+        let host = custom_host(&host)?;
         if !w.network.custom_hosts.contains(&host) {
             w.network.custom_hosts.push(host);
         }
@@ -1011,4 +1054,71 @@ fn workspace_update(h: &Host, p: WorkspaceUpdateParams) -> Result<Workspace, Rpc
     }
     h.ctx.store.workspace_update(&w).map_err(internal)?;
     Ok(w)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::host_allowed;
+
+    #[test]
+    fn a_wildcard_host_allows_every_subdomain_and_nothing_else() {
+        let kept = custom_host("*.TryHackMe.site").unwrap();
+        assert_eq!(kept, "*.tryhackme.site");
+        let profile = NetworkProfile { presets: vec![], custom_hosts: vec![kept] };
+        let allowed = crate::sandbox::profile_hosts(&profile);
+        for (host, port) in [("staging.tryhackme.site", 443), ("a.b.tryhackme.site", 80), ("WWW.tryhackme.site.", 443)] {
+            assert!(host_allowed(&allowed, host, port), "{host}:{port}");
+            assert!(profile.names(host, port), "{host}:{port}");
+        }
+        // Not the name itself, a name that only ends the same, or one that only starts so.
+        for host in ["tryhackme.site", "eviltryhackme.site", "tryhackme.site.evil.example", "staging.tryhackme.site.evil.example", "site"] {
+            assert!(!host_allowed(&allowed, host, 443), "{host}");
+            assert!(!profile.names(host, 443), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_wildcard_with_a_port_allows_that_port_alone() {
+        let allowed = vec![custom_host("*.example.com:8443").unwrap()];
+        assert!(host_allowed(&allowed, "api.example.com", 8443));
+        assert!(!host_allowed(&allowed, "api.example.com", 443));
+        // A port that is no port never meant "every port".
+        assert!(!host_allowed(&["example.com:99999".to_string()], "example.com", 443));
+        assert!(!host_allowed(&["example.com:".to_string()], "example.com", 443));
+    }
+
+    #[test]
+    fn a_pasted_address_is_kept_as_its_host() {
+        for (typed, kept) in [
+            ("  Example.org ", "example.org"),
+            ("https://*.tryhackme.site/", "*.tryhackme.site"),
+            ("https://staging.tryhackme.site/rooms?id=1#top", "staging.tryhackme.site"),
+            ("http://localhost.example.com:8080/x", "localhost.example.com:8080"),
+            ("example.org.", "example.org"),
+            ("*.example.org:443", "*.example.org:443"),
+            ("my_bucket.s3.amazonaws.com", "my_bucket.s3.amazonaws.com"),
+            ("127.0.0.1", "127.0.0.1"),
+            ("fe80::1", "fe80::1"),
+        ] {
+            assert_eq!(custom_host(typed).unwrap(), kept, "{typed}");
+        }
+        assert_eq!(
+            custom_hosts(&["A.example".into(), "https://a.example/".into(), "*.a.example".into()]).unwrap(),
+            vec!["a.example", "*.a.example"]
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_host_or_a_leading_wildcard_is_refused() {
+        for typed in [
+            "", " ", "*", "*.", "*.:443", ".", "..", "a..b", ".example.com", "*example.com", "api.*.example.com", "*.*.example.com", "**.example.com", "example.*",
+            "example.com:0", "example.com:99999", "example.com:", "example.com:https", "user@example.com", "exa mple.com", "://example.com", "https://", "*://example.com",
+            "*.fe80::1",
+        ] {
+            assert!(custom_host(typed).is_err(), "{typed:?} was kept as {:?}", custom_host(typed));
+        }
+        assert!(custom_host(&"a".repeat(254)).is_err());
+        assert!(custom_hosts(&["ok.example".into(), "*".into()]).is_err());
+    }
 }

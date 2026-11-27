@@ -4125,3 +4125,38 @@ fn the_right_panels_edge_is_a_line_you_can_see() {
     }
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }
+
+/// A blocked host reads as allowed once the workspace's extra hosts cover it, by name or by
+/// a wildcard (`*.crates.io`), as the host's proxy would decide; otherwise it offers to allow it.
+#[test]
+fn a_blocked_host_is_allowed_once_a_wildcard_covers_it() {
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    // The scene's session was refused index.crates.io:443.
+    for (hosts, allowed) in [
+        (vec![], false),
+        (vec!["index.crates.io"], true),
+        (vec!["*.crates.io"], true),
+        (vec!["*.CRATES.io:443"], true),
+        (vec!["*.crates.io:8443"], false),
+        (vec!["crates.io", "*.index.crates.io", "*.s.io"], false),
+    ] {
+        let mut ui = crate::app().headless_runtime((1280.0, 1600.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "session").unwrap().1;
+        let list: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
+        ui.update(move |s, _| {
+            f(s);
+            let ws = s.session("ses_1").unwrap().workspace_id.clone();
+            let w = s.workspaces.iter_mut().find(|w| w.workspace_id == ws).unwrap();
+            w.network = NetworkProfile { presets: vec![], custom_hosts: list.clone() };
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        let els = ui.elements();
+        let has = |t: &str| els.iter().any(|e| e.text.as_deref().is_some_and(|x| x.starts_with(t)));
+        assert!(has("Blocked index.crates.io"), "{hosts:?}: the blocked host is not shown");
+        assert_eq!(has("Allowed"), allowed, "{hosts:?}");
+        assert_eq!(has("Allow for"), !allowed, "{hosts:?}");
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}

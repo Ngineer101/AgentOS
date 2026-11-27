@@ -973,7 +973,9 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
             let host = str_of(&p["host"]);
             let ws = sess.workspace_id.clone();
             let ws_name = s.workspace(&sess.workspace_id).map(|w| w.name.clone()).unwrap_or_else(|| "this workspace".into());
-            let allowed = s.workspace(&sess.workspace_id).is_some_and(|w| w.network.custom_hosts.contains(&host) || w.network.presets.contains(&NetworkPreset::Web));
+            // As the host's proxy would decide now: an extra host may be a wildcard (`*.example.com`).
+            let port = p["port"].as_u64().and_then(|n| u16::try_from(n).ok()).unwrap_or(443);
+            let allowed = s.workspace(&sess.workspace_id).is_some_and(|w| w.network.names(&host, port) || w.network.presets.contains(&NetworkPreset::Web));
             let h2 = host.clone();
             let mut r = row()
                 .w_full()
