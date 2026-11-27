@@ -2664,16 +2664,26 @@ fn the_right_panel_shows_one_tab_at_a_time() {
     assert_eq!(app.panel_shown(), Some(PanelTab::Terminal));
     assert!(!app.toggle_terminal());
     assert_eq!(app.panel_shown(), None);
-    // The terminal's width drags; the side questions keep their own.
+    // The terminal's width drags; the side questions have a width of their own, which
+    // drags too. A dragged width goes back to the look's.
     let t = crate::look::Theme::new(crate::look::Look::Gnome);
     app.toggle_terminal();
-    app.resize_panel(10_000.0, false);
+    app.resize_panel(Some(10_000.0), false);
     assert_eq!(app.panel_width(&t), crate::terminal::PANEL_MAX_W);
-    app.resize_panel(700.0, false);
+    app.resize_panel(Some(700.0), false);
     assert_eq!((app.panel_width(&t), app.trailing_width(&t)), (700.0, 700.0));
     app.screen = Screen::Session("ses_1".into());
     app.show_panel(PanelTab::Side);
     assert_eq!(app.panel_width(&t), crate::side::width(&t));
+    app.resize_panel(Some(520.0), false);
+    assert_eq!((app.panel_width(&t), app.trailing_width(&t)), (520.0, 520.0));
+    app.resize_panel(Some(10.0), false);
+    assert_eq!(app.panel_width(&t), crate::terminal::PANEL_MIN_W);
+    app.show_panel(PanelTab::Terminal);
+    assert_eq!(app.panel_width(&t), 700.0, "the terminal's width is as it was");
+    app.show_panel(PanelTab::Side);
+    app.resize_panel(None, false);
+    assert_eq!((app.panel_width(&t), app.side_w, app.panel_w), (crate::side::width(&t), None, Some(700.0)));
 
     // A new terminal starts in the open session's own folder (its worktree).
     let mut app = demo("terminal");
@@ -2851,6 +2861,28 @@ fn the_terminal_lays_out_and_takes_the_keyboard() {
     let mut ui = open("terminal-side", Look::Gnome);
     click(&mut ui, "panel-tab-side");
     assert!(ui.find("side-pane").is_some() && ui.find("term-view").is_none());
+    // The side questions' edge drags them wider (leftwards); a double press puts it back.
+    let own = crate::side::width(&crate::look::Theme::new(Look::Gnome));
+    // The panel moves to the side questions' width over a few frames.
+    for _ in 0..60 {
+        ui.frame(0.016);
+    }
+    let (x, y) = ui.find("panel-grip").expect("the side questions' edge");
+    assert!((x - (1280.0 - own)).abs() < 1.5, "the look's own width to begin with: {x}");
+    ui.pointer_down(x, y);
+    ui.pointer_move(x - 120.0, y);
+    ui.frame(0.016);
+    ui.pointer_up(x - 120.0, y);
+    ui.frame(0.016);
+    assert!(read(&mut ui, &|s| s.side_w.is_some_and(|w| (w - (own + 120.0)).abs() < 1.0) && s.panel_w.is_none()), "dragged 120 pt wider");
+    let (x2, y2) = ui.find("panel-grip").unwrap();
+    assert!((x - x2 - 120.0).abs() < 1.5, "the edge moved with the pointer: {x} to {x2}");
+    ui.pointer_down(x2, y2);
+    ui.pointer_up(x2, y2);
+    ui.pointer_down(x2, y2);
+    ui.pointer_up(x2, y2);
+    ui.frame(0.016);
+    assert!(read(&mut ui, &|s| s.side_w.is_none()), "a double press puts the look's width back");
     click(&mut ui, "panel-tab-terminal");
     assert!(ui.find("term-view").is_some() && ui.find("side-pane").is_none());
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");

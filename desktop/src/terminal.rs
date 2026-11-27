@@ -137,20 +137,33 @@ impl App {
         }
     }
 
-    /// The panel's width: the side questions' own, or the terminal's (which drags).
+    /// The panel's width: the side questions have their own, the other tabs share one.
+    /// Each is the look's until its edge has been dragged.
     pub fn panel_width(&self, t: &Theme) -> f32 {
-        match self.panel_shown() {
-            Some(PanelTab::Terminal | PanelTab::Changes | PanelTab::Files | PanelTab::Browser) => self.panel_w.unwrap_or(if t.mac() { 520.0 } else { 560.0 }).clamp(PANEL_MIN_W, PANEL_MAX_W),
-            _ => crate::side::width(t),
-        }
+        let w = match self.panel_shown() {
+            Some(PanelTab::Side) | None => self.side_w.unwrap_or(crate::side::width(t)),
+            Some(_) => self.panel_w.unwrap_or(if t.mac() { 520.0 } else { 560.0 }),
+        };
+        w.clamp(PANEL_MIN_W, PANEL_MAX_W)
     }
 
-    /// Drag the panel's edge to `w` (clamped); `save` on release keeps it between launches.
-    pub fn resize_panel(&mut self, w: f32, save: bool) {
-        self.panel_w = Some(w.clamp(PANEL_MIN_W, PANEL_MAX_W));
+    /// Drag the panel's edge to `w` (clamped), or with `None` put the look's own width
+    /// back: the width of the tab on screen. `save` on release keeps it between launches.
+    pub fn resize_panel(&mut self, w: Option<f32>, save: bool) {
+        let w = w.map(|w| w.clamp(PANEL_MIN_W, PANEL_MAX_W));
+        let side = self.panel_shown() == Some(PanelTab::Side);
+        if side {
+            self.side_w = w;
+        } else {
+            self.panel_w = w;
+        }
         if save && self.save_prefs {
             let mut p = crate::prefs::load();
-            p.panel_w = self.panel_w;
+            if side {
+                p.side_w = w;
+            } else {
+                p.panel_w = w;
+            }
             crate::prefs::save(&p);
         }
     }
