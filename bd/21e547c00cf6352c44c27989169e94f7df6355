@@ -1,0 +1,19 @@
+desktop/src/tests.rs
+  s_660bffa67f1336::t_9080e7c63bc3d8 3425-3435,3437-3441,3449-3454,3513,3522-3523
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd21e547c00cf6352c44c27989169e94f7df6355",
+  "prompts": {},
+  "sessions": {
+    "s_660bffa67f1336": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_660bffa67f1336",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
