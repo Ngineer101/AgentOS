@@ -1,0 +1,35 @@
+.github/workflows/ci.yml
+  s_07689b80ce6e28::t_d8280ba55503b1 96-97,100
+crates/ffi/tests/ffi_remote.rs
+  s_07689b80ce6e28::t_098f9d77c77b11 338
+crates/host/tests/automations.rs
+  s_07689b80ce6e28::t_c53654c8a37091 155,157-158,160-162
+crates/host/tests/git_push.rs
+  s_07689b80ce6e28::t_f409b2d5539822 213,215-218
+crates/host/tests/m1_host_core.rs
+  s_07689b80ce6e28::t_8fc2d565dbb192 654,682
+crates/host/tests/push.rs
+  s_07689b80ce6e28::t_00e8eaf35b8eac 189,191
+crates/host/tests/run_command.rs
+  s_07689b80ce6e28::t_d3f9d35021d923 81-82
+desktop/src/tests.rs
+  s_07689b80ce6e28::t_3253633a9e8ad1 26,1184
+scripts/ci.sh
+  s_07689b80ce6e28::t_fff626067321ab 9,120-121,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c36c90dc2cf5f2ba88f9107c3057307dfe0892ca",
+  "prompts": {},
+  "sessions": {
+    "s_07689b80ce6e28": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_07689b80ce6e28",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
