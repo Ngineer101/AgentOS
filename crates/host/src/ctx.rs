@@ -7,6 +7,7 @@ use agenthost_proto::{Event, EventType, Session, SessionState};
 use anyhow::Result;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Implemented by the MCP gateway; sessions register with it.
@@ -27,9 +28,21 @@ pub struct Ctx {
     pub audit: crate::audit::Audit,
     pub uploads: crate::uploads::Uploads,
     pub voice: Arc<crate::voice::Voice>,
+    /// Set the moment the host is told to stop. A service manager may signal
+    /// the agents at the same time as the host; an agent that exits then is
+    /// the host stopping, not the session failing.
+    pub stopping: AtomicBool,
 }
 
 impl Ctx {
+    pub fn set_stopping(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
     /// Append an event and publish it.
     pub fn append(&self, session_id: &str, kind: EventType, payload: Value) -> Result<Event> {
         let ev = self.store.append_event(session_id, kind, payload)?;

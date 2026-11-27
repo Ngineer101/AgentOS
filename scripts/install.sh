@@ -92,6 +92,15 @@ stop_service() {
   if [[ "$os" == Darwin ]]; then
     launchctl bootout "$domain/$label" 2>/dev/null || true
   else
+    # Signal the host alone first, as KillMode=mixed does: units installed before it
+    # signal the agents too, and the sessions then show as failed.
+    if systemctl --user is-active --quiet agenthost.service 2>/dev/null; then
+      systemctl --user kill --kill-whom=main --signal=TERM agenthost.service 2>/dev/null || true
+      for _ in $(seq 300); do
+        systemctl --user is-active --quiet agenthost.service 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
     systemctl --user stop agenthost.service 2>/dev/null || true
   fi
   # Any host not run by the service (scripts/dev.sh, or one the desktop started) holds the socket.
@@ -319,6 +328,9 @@ ExecStart=$exec_line
 Environment="PATH=$host_path"
 Restart=on-failure
 RestartSec=2
+# Stop signals the host alone: it stops its agents so their sessions resume after.
+# (The default signals every process at once, and the agents' exits read as failures.)
+KillMode=mixed
 TimeoutStopSec=30
 StandardOutput=append:$data/logs/host.log
 StandardError=append:$data/logs/host.log
