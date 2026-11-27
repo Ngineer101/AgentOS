@@ -1,0 +1,31 @@
+desktop/src/main.rs
+  s_81a1fa5d4172b3::t_9bc93c93016a8b 43
+desktop/src/model.rs
+  s_81a1fa5d4172b3::t_07a20da27610b5 672-673,873
+desktop/src/panel.rs
+  s_81a1fa5d4172b3::t_16ccb5d17696a3 100,133-134,148,151-153,156
+desktop/src/prefs.rs
+  s_81a1fa5d4172b3::t_d27e2f8cccc465 28-30,81,85
+desktop/src/terminal.rs
+  s_81a1fa5d4172b3::t_2705ae44ae9f79 140-141,143-147,150-159,162-166
+desktop/src/tests.rs
+  s_81a1fa5d4172b3::t_4fc59459047204 2667-2668,2671,2673,2678-2686,2864-2885
+docs/status.md
+  s_81a1fa5d4172b3::t_a28c3e08fcde47 41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a631827ef4d73f2bf9c2ffbb0e71caa827eb4671",
+  "prompts": {},
+  "sessions": {
+    "s_81a1fa5d4172b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_81a1fa5d4172b3",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
