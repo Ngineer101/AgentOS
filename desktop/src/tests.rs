@@ -28,7 +28,14 @@ fn pump(app: &mut model::App, until: impl Fn(&model::App) -> bool) {
     let t0 = Instant::now();
     while !until(app) {
         app.drain();
-        assert!(t0.elapsed() < Duration::from_secs(20), "timed out; conn={:?} error={:?}", app.conn, app.error);
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "timed out; conn={:?} error={:?} notice={:?} toasts={:?}",
+            app.conn,
+            app.error,
+            app.notice,
+            app.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
