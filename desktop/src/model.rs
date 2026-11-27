@@ -2408,7 +2408,7 @@ impl App {
                     self.browser_site_allowed(&workspace_id, &host, r);
                 }
                 (Tag::BrowserAttached(_), Ok(_)) => {}
-                (Tag::BrowserAttached(id), Err(_)) => self.browser_attach_failed(&id),
+                (Tag::BrowserAttached(id), Err(e)) => self.browser_attach_failed(&id, &e.message),
                 (Tag::BrowserCopied, Ok(v)) => self.browser_copied(parse::<BrowserSelection>(v).map(|s| s.text).unwrap_or_default()),
                 (Tag::BrowserCopied, Err(_)) => {}
                 (Tag::NoteSaved { new_gen }, Ok(v)) => {

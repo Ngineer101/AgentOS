@@ -3396,7 +3396,12 @@ fn the_browser_lays_out_and_sends_what_you_do() {
 
     // A tab the host can't attach to is dropped, not tried on every poll.
     let mut ui = open("browser", Look::Gnome);
-    ui.update(|s, _| s.browser_attach_failed("tab_agent"));
+    ui.update(|s, _| {
+        s.browser_attach_failed("tab_agent", "Page.startScreencast took longer than 20s");
+        // Said, with the host's reason, not swallowed.
+        let e = s.error.take().unwrap_or_default();
+        assert!(e.contains("Page.startScreencast took longer than 20s") && e.contains("try again"), "{e}");
+    });
     for _ in 0..5 {
         ui.frame(0.016);
     }
@@ -3405,11 +3410,25 @@ fn the_browser_lays_out_and_sends_what_you_do() {
         let mut b = s.web.browsers["ws_relay"].clone();
         b.tabs.push(BrowserTab { tab_id: "tab_agent".into(), url: "https://x.example/".into(), title: "X".into(), loading: false, session_id: None, width: 800, height: 600, can_go_back: false, can_go_forward: false });
         s.browser_changed(b);
-        s.select_browser_tab("tab_agent");
     });
     ui.frame(0.016);
     ui.frame(0.016);
-    assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_mine")), "and not picked again on this connection");
+    assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_mine")), "and not picked again by itself");
+    // Pressing its tab is asking for it: it is tried once more.
+    click(&mut ui, "browser-tab-tab_agent");
+    assert!(read(&mut ui, &|s| s.web.attached.as_deref() == Some("tab_agent")), "pressed, so tried again");
+    // With every tab unshowable, the panel says so instead of inviting you to type an address.
+    ui.update(|s, _| {
+        s.browser_attach_failed("tab_agent", "no such tab");
+        s.browser_attach_failed("tab_mine", "no such tab");
+        s.error = None;
+        let mut b = s.web.browsers["ws_relay"].clone();
+        b.tabs = vec![BrowserTab { tab_id: "tab_mine".into(), url: "https://x.example/".into(), title: "X".into(), loading: false, session_id: None, width: 800, height: 600, can_go_back: false, can_go_forward: false }];
+        s.browser_changed(b);
+    });
+    ui.frame(0.016);
+    ui.frame(0.016);
+    assert!(ui.elements().iter().any(|e| e.text.as_deref().is_some_and(|t| t.starts_with("This page could not be shown"))), "the panel says the page could not be shown");
 
     // The view maps points to the page: letterboxed, centred.
     let mut app = model::init();

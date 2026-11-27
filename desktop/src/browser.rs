@@ -398,9 +398,12 @@ impl App {
         }
     }
 
-    pub fn browser_attach_failed(&mut self, id: &str) {
-        // Not again on this connection (it would fail again on every poll), and ask the
-        // host what it has now.
+    pub fn browser_attach_failed(&mut self, id: &str, why: &str) {
+        // Not again by itself (it would fail again on every poll), and ask the host what it
+        // has now. Said, with the host's reason: a tab that silently won't show looks broken,
+        // and pressing the tab tries once more.
+        let name = self.web.browsers.values().flat_map(|b| b.tabs.iter()).find(|t| t.tab_id == id).map(tab_title).unwrap_or_else(|| "the page".into());
+        self.error = Some(format!("Could not show {}: {why}. Press its tab to try again.", clip(&name, 40)));
         self.web.failed.insert(id.to_string());
         self.web.chosen.retain(|_, t| t != id);
         for b in self.web.browsers.values_mut() {
@@ -476,6 +479,8 @@ impl App {
 
     pub fn select_browser_tab(&mut self, id: &str) {
         let ws = self.browser_ws();
+        // Asked for by hand: a tab that could not be shown gets another go.
+        self.web.failed.remove(id);
         self.web.chosen.insert(ws, id.to_string());
     }
 
@@ -756,6 +761,8 @@ pub fn body(s: &App, t: &Theme) -> El {
         None => {
             let msg = if s.web.opening {
                 "Opening…".to_string()
+            } else if info.is_some_and(|b| !b.tabs.is_empty()) {
+                "This page could not be shown. Press its tab to try again.".to_string()
             } else {
                 format!("The browser for {ws_name}. Type an address to open a page. Sign in to sites here once: agents in this workspace's sessions use the same browser, signed in as you.")
             };
