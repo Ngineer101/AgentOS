@@ -93,9 +93,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Test failures don't spoil the build cache, so keep it either way.
           cache-on-failure: true
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
+      # Plain cargo test, not nextest: the tests that start a host take turns
+      # through a lock in the test binary, which separate processes don't share.
       - name: Test the desktop app (Rune)
         working-directory: desktop
-        run: cargo nextest run --config-file ../.config/nextest.toml --profile ci
+        run: cargo test --no-fail-fast

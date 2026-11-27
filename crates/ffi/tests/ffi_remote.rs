@@ -335,7 +335,7 @@ async fn pair_connect_sessions_resume_and_revoke() {
     let (events, _) = events_until(&mut notes, is_turn_end).await;
     assert!(
         events.iter().any(|e| e["type"] == "agent.message"
-            && e["payload"]["text"].as_str().unwrap_or("").contains("/attachments/photo.jpg (image/jpeg")),
+            && e["payload"]["text"].as_str().unwrap_or("").contains(".att/photo.jpg (image/jpeg")),
         "{events:#?}"
     );
     let last_seq = events.last().unwrap()["seq"].as_i64().unwrap();

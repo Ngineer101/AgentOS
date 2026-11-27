@@ -210,9 +210,12 @@ async fn pull_requests_and_pushes_can_run_without_asking_but_force_pushes_and_in
     git(&th.workspace, &["remote", "add", "origin", remote.to_str().unwrap()]);
 
     let (c, mut n) = th.client().await;
-    // Asks by default; installing can't be switched off.
+    // Asks by default, except recording the browser; installing can't be switched off.
     let list: Vec<BuiltinTool> = c.call(m::BUILTIN_LIST, json!({})).await.unwrap();
-    assert!(list.iter().all(|t| t.policy == ToolPolicy::Ask));
+    for t in &list {
+        let want = if t.name == "browser_recording" { ToolPolicy::Auto } else { ToolPolicy::Ask };
+        assert_eq!(t.policy, want, "{}", t.name);
+    }
     assert!(!list.iter().find(|t| t.name == "install_tool").unwrap().can_auto);
     assert!(c
         .request(m::BUILTIN_SET_POLICY, json!({"name": "install_tool", "policy": "auto"}))

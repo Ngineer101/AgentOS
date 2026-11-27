@@ -186,8 +186,9 @@ async fn a_phone_sets_up_notifications_and_gets_sealed_ones_when_a_session_needs
     // Nothing set up yet.
     let st: PushStatus = phone.call(m::PUSH_STATUS, json!({})).await.unwrap();
     assert!(!st.configured && st.this_device.is_none());
+    // A phone tests only itself, and this one isn't registered yet.
     let e = phone.request(m::PUSH_TEST, json!({})).await.unwrap_err();
-    assert_eq!(e.code, codes::UNAVAILABLE);
+    assert_eq!(e.code, codes::NOT_FOUND);
 
     // The phone hands over the APNs key while pairing. Garbage is refused.
     let e = phone

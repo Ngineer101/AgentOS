@@ -152,9 +152,14 @@ async fn phones_cannot_add_webhooks_or_pre_approve() {
     let a = au.create(base.clone(), false).unwrap();
     let up = AutomationUpdateParams { automation_id: a.automation_id.clone(), auto_approve: Some(vec!["create_pull_request".into()]), ..Default::default() };
     assert_eq!(au.update(up.clone(), false).unwrap_err().code, codes::CAPABILITY_DENIED);
+    let plain = au.create(base.clone(), false).unwrap();
     assert!(au.update(up, true).is_ok());
-    // A phone may still change the prompt.
+    // Once it pre-approves a tool, a phone can't change anything about it,
+    // not even the prompt: that would change what the pre-approval authorises.
     let up = AutomationUpdateParams { automation_id: a.automation_id.clone(), prompt: Some("hello".into()), ..Default::default() };
+    assert_eq!(au.update(up, false).unwrap_err().code, codes::CAPABILITY_DENIED);
+    // A phone may still change the prompt of a plain one.
+    let up = AutomationUpdateParams { automation_id: plain.automation_id.clone(), prompt: Some("hello".into()), ..Default::default() };
     assert_eq!(au.update(up, false).unwrap().prompt, "hello");
     // Unknown tools can't be pre-approved by anyone.
     let bad = AutomationCreateParams { auto_approve: vec!["run_command".into()], ..base };

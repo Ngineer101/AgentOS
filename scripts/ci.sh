@@ -6,7 +6,7 @@
 #   scripts/ci.sh host desktop     just these parts (host, relay, desktop)
 #   scripts/ci.sh --install-hook   run this before every `git push` (skip once with --no-verify)
 #
-# Uses cargo-nextest when it's installed (cargo install cargo-nextest), else cargo test.
+# The host tests use cargo-nextest when it's installed (cargo install cargo-nextest), else cargo test.
 # The sandbox escape suite needs the pinned sandbox runtime; it goes in .dev/ci/tools
 # the first time, or set AGENTHOST_TEST_TOOLS to a tools dir of your own.
 set -euo pipefail
@@ -117,13 +117,11 @@ run_relay() (
   npx tsc --noEmit && npm test
 )
 
+# Not nextest: the desktop tests that start a host take turns through a lock
+# in the test binary, which separate processes don't share.
 run_desktop() (
   cd desktop
-  if (( nextest )); then
-    cargo nextest run --config-file ../.config/nextest.toml
-  else
-    cargo test --no-fail-fast
-  fi
+  cargo test --no-fail-fast
 )
 
 started=$SECONDS

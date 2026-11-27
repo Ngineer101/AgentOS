@@ -78,7 +78,8 @@ async fn commands_run_only_after_approval_or_for_a_prefix_the_user_allowed() {
     assert!(logged.contains("New description."), "{logged}");
     let session: Session = c.call(m::SESSION_GET, json!({"session_id": sid})).await.unwrap();
     let folder = session.worktree.map(|w| w.path).unwrap_or_else(|| th.workspace.display().to_string());
-    assert!(logged.contains(&format!("cwd: {folder}")), "{logged}");
+    let folder = std::fs::canonicalize(&folder).unwrap();
+    assert!(logged.contains(&format!("cwd: {}", folder.display())), "{logged}");
 
     // "Don't ask again" for gh pr edit: that prefix runs straight away, others still ask.
     let l: Vec<BuiltinTool> = c
