@@ -9,8 +9,11 @@
 use crate::config::HostConfig;
 use agenthost_proto::SessionWorktree;
 use anyhow::{anyhow, bail, Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 /// Settings that stop a repository's own config from making git run
@@ -229,10 +232,12 @@ pub fn branch_for(session_id: &str) -> String {
     format!("agenthost/{short}")
 }
 
-/// A new worktree for a session, on a new branch from the repository's
-/// current `HEAD`. `None` when `workspace` is not in a git repository with a
-/// commit. Returns the worktree and the workspace's folder inside it.
-pub async fn create(
+/// Where a session's worktree and branch will be, decided when the session
+/// is created: nothing is made yet (see [`add`]), so creating a session
+/// doesn't wait for a checkout. `None` when `workspace` is not in a git
+/// repository with a commit. Returns the worktree and the workspace's folder
+/// inside it.
+pub async fn plan(
     cfg: &HostConfig,
     workspace: &Path,
     session_id: &str,
@@ -242,22 +247,135 @@ pub async fn create(
     };
     crate::config::create_private_dir(&cfg.worktrees_dir())?;
     let base = std::fs::canonicalize(cfg.worktrees_dir()).unwrap_or(cfg.worktrees_dir());
-    let dir = base.join(session_id);
-    let branch = branch_for(session_id);
-    let dir_s = dir.display().to_string();
-    git(
-        &repo.toplevel,
-        &["worktree", "add", "--quiet", "-b", &branch, &dir_s, "HEAD"],
-    )
-    .await
-    .with_context(|| format!("could not create a worktree for the session in {}", repo.toplevel.display()))?;
     Ok(Some((
         SessionWorktree {
-            path: dir_s,
-            branch,
+            path: base.join(session_id).display().to_string(),
+            branch: branch_for(session_id),
         },
         repo.subdir,
     )))
+}
+
+/// How fresh the remote's main branch has to be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fresh {
+    /// As it was fetched last: the remote isn't asked.
+    AsIs,
+    /// Asked at most once a minute, and not while someone else is asking
+    /// (for a view that is opened often).
+    Recent,
+    /// Asked now (for a new session, which starts from it).
+    Now,
+}
+
+/// A repository's remote is asked at most this often for [`Fresh::Recent`].
+const FETCH_EVERY: Duration = Duration::from_secs(60);
+/// How long a fetch for a view may take before what was fetched last stands.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// The same for a new session, which is worth waiting longer for: what it
+/// starts from is what its pull request is measured against.
+const START_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// The remote's main branch, and how asking for it went.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteMain {
+    /// As this repository tracks it, e.g. `refs/remotes/origin/main`.
+    pub reference: String,
+    /// Why the remote could not be asked this time, if it was asked and
+    /// couldn't: what was fetched last stands.
+    pub stale: Option<String>,
+}
+
+/// One repository's fetch state: when its remote was last asked, behind the
+/// lock a fetch holds (two fetches of one ref at once fight over it).
+type FetchState = Arc<tokio::sync::Mutex<Option<Instant>>>;
+
+fn fetch_state(repo: &Path) -> FetchState {
+    static STATES: Mutex<Option<HashMap<PathBuf, FetchState>>> = Mutex::new(None);
+    let mut g = STATES.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(HashMap::new).entry(repo.to_path_buf()).or_default().clone()
+}
+
+/// The remote's main branch as this repository tracks it
+/// (`refs/remotes/origin/HEAD`, else `origin/main` or `origin/master`),
+/// brought up to date first as `fresh` asks, when the remote answers in
+/// time. `None` for a repository without an `origin` (or one that has never
+/// been fetched from).
+pub async fn remote_main(repo: &Path, fresh: Fresh) -> Option<RemoteMain> {
+    let exists = |r: String| async move {
+        git(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).await.ok().map(|_| r)
+    };
+    let mut found = git(repo, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).await.ok().filter(|r| r.starts_with("refs/remotes/origin/"));
+    for name in ["main", "master"] {
+        if found.is_none() {
+            found = exists(format!("refs/remotes/origin/{name}")).await;
+        }
+    }
+    let reference = found?;
+    let name = reference.trim_start_matches("refs/remotes/origin/").to_string();
+    let mut stale = None;
+    let state = fetch_state(repo);
+    let held = match fresh {
+        Fresh::AsIs => None,
+        // Someone is asking right now: what they bring is recent enough.
+        Fresh::Recent => state.try_lock().ok().filter(|at| at.is_none_or(|t| t.elapsed() >= FETCH_EVERY)),
+        Fresh::Now => Some(state.lock().await),
+    };
+    if let Some(mut at) = held {
+        *at = Some(Instant::now());
+        let refspec = format!("+refs/heads/{name}:{reference}");
+        let limit = if fresh == Fresh::Now { START_FETCH_TIMEOUT } else { FETCH_TIMEOUT };
+        // Offline, or a remote that wants a password: what was fetched last stands.
+        stale = match tokio::time::timeout(limit, git(repo, &["fetch", "--quiet", "--no-tags", "origin", &refspec])).await {
+            Ok(Ok(_)) => None,
+            Ok(Err(e)) => Some(format!("{e:#}")),
+            Err(_) => Some(format!("origin did not answer in {} s", limit.as_secs())),
+        };
+    }
+    let reference = exists(reference).await?;
+    Some(RemoteMain { reference, stale })
+}
+
+/// What a new session starts from, and how fresh it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartedFrom {
+    /// The commit.
+    pub commit: String,
+    /// What it is: `origin/main`, or `HEAD` without a remote.
+    pub name: String,
+    /// Why the remote could not be asked first, if it couldn't.
+    pub stale: Option<String>,
+}
+
+/// Make a new session's worktree (as [`plan`] named it), on a new branch
+/// from the remote's main branch, fetched first: what everybody has, however
+/// far behind your own checkout or its `main` is. Without a remote it starts
+/// from the commit the workspace has checked out. The branch follows no
+/// other (a push of it names where it goes). A no-op if the worktree is
+/// there already.
+pub async fn add(workspace: &Path, wt: &SessionWorktree) -> Result<Option<StartedFrom>> {
+    let dir = Path::new(&wt.path);
+    if dir.join(".git").exists() {
+        return Ok(None);
+    }
+    let (reference, name, stale) = match remote_main(workspace, Fresh::Now).await {
+        Some(m) => (m.reference.clone(), m.reference.trim_start_matches("refs/remotes/").to_string(), m.stale),
+        None => ("HEAD".to_string(), "HEAD".to_string(), None),
+    };
+    // The commit itself, so the branch is not set up to follow the remote's.
+    let commit = git(workspace, &["rev-parse", "--verify", "--quiet", &format!("{reference}^{{commit}}")])
+        .await
+        .with_context(|| format!("{name} is not a commit to start from"))?;
+    if let Some(parent) = dir.parent() {
+        crate::config::create_private_dir(parent)?;
+    }
+    git(
+        workspace,
+        &["worktree", "add", "--quiet", "--no-track", "-b", &wt.branch, &wt.path, &commit],
+    )
+    .await
+    .with_context(|| format!("could not create a worktree for the session in {}", workspace.display()))?;
+    Ok(Some(StartedFrom { commit, name, stale }))
 }
 
 /// Bring back a worktree that was removed (when its session was archived),
@@ -359,6 +477,140 @@ pub async fn access(root: &Path) -> Result<GitAccess> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tempdir() -> tempfile::TempDir {
+        let root = std::env::var_os("AGENTHOST_TEST_TMP").unwrap_or_else(|| std::env::temp_dir().into_os_string());
+        tempfile::Builder::new().prefix("ah").tempdir_in(root).unwrap()
+    }
+
+    /// git for building a test's repositories; what it printed.
+    fn sh(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(dir: &Path, file: &str, message: &str) -> String {
+        std::fs::write(dir.join(file), message).unwrap();
+        sh(dir, &["add", "."]);
+        sh(dir, &["commit", "-q", "-m", message]);
+        sh(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// An `origin`, your clone of it (`work`, returned first) and someone
+    /// else's (`theirs`), with one commit that everybody has.
+    fn cloned(t: &Path) -> (PathBuf, PathBuf, String) {
+        let (origin, work, theirs) = (t.join("origin.git"), t.join("work"), t.join("theirs"));
+        std::fs::create_dir(&theirs).unwrap();
+        sh(&theirs, &["init", "-q", "-b", "main"]);
+        let one = commit(&theirs, "README.md", "one");
+        sh(t, &["clone", "-q", "--bare", theirs.to_str().unwrap(), origin.to_str().unwrap()]);
+        sh(&theirs, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        sh(t, &["clone", "-q", origin.to_str().unwrap(), work.to_str().unwrap()]);
+        (work, theirs, one)
+    }
+
+    fn worktree_in(t: &Path, name: &str) -> SessionWorktree {
+        SessionWorktree { path: t.join("worktrees").join(name).display().to_string(), branch: format!("agenthost/{name}") }
+    }
+
+    /// What a session starts from is what everybody has, not how far your
+    /// own checkout got: a `main` you haven't pulled, a branch of your own
+    /// you have checked out, commits you haven't pushed.
+    #[tokio::test]
+    async fn a_new_worktree_starts_from_the_remote_s_main_fetched_first() {
+        let t = tempdir();
+        let (work, theirs, one) = cloned(t.path());
+        let two = commit(&theirs, "new.txt", "two");
+        sh(&theirs, &["push", "-q", "origin", "main"]);
+        assert_eq!(sh(&work, &["rev-parse", "refs/remotes/origin/main"]), one, "not fetched yet");
+
+        let a = worktree_in(t.path(), "a");
+        let from = add(&work, &a).await.unwrap().unwrap();
+        assert_eq!((from.commit.as_str(), from.name.as_str(), &from.stale), (two.as_str(), "origin/main", &None));
+        assert_eq!(sh(Path::new(&a.path), &["rev-parse", "HEAD"]), two);
+        assert!(Path::new(&a.path).join("new.txt").is_file());
+        assert_eq!(sh(Path::new(&a.path), &["rev-parse", "--abbrev-ref", "HEAD"]), a.branch);
+        // Your own `main` is left where it was.
+        assert_eq!(sh(&work, &["rev-parse", "main"]), one);
+        // The branch follows nothing: a plain push can't land on `main`.
+        let upstream = std::process::Command::new("git").arg("-C").arg(&a.path).args(["rev-parse", "--abbrev-ref", "@{upstream}"]).output().unwrap();
+        assert!(!upstream.status.success(), "{}", String::from_utf8_lossy(&upstream.stdout));
+
+        // On a branch of your own, with a commit nobody else has.
+        sh(&work, &["checkout", "-q", "-b", "mine"]);
+        let mine = commit(&work, "mine.txt", "mine");
+        let b = worktree_in(t.path(), "b");
+        let from = add(&work, &b).await.unwrap().unwrap();
+        assert_eq!(from.commit, two);
+        assert_ne!(sh(Path::new(&b.path), &["rev-parse", "HEAD"]), mine);
+        // There already: nothing to do, and nothing moved.
+        assert_eq!(add(&work, &b).await.unwrap(), None);
+    }
+
+    /// Offline (or a remote that wants a password): the session still
+    /// starts, from the remote's main branch as it was fetched last, and
+    /// the host knows it could not ask.
+    #[tokio::test]
+    async fn a_remote_that_does_not_answer_leaves_what_was_fetched_last() {
+        let t = tempdir();
+        let (work, _theirs, one) = cloned(t.path());
+        sh(&work, &["remote", "set-url", "origin", t.path().join("gone.git").to_str().unwrap()]);
+        let a = worktree_in(t.path(), "a");
+        let from = add(&work, &a).await.unwrap().unwrap();
+        assert_eq!((from.commit.as_str(), from.name.as_str()), (one.as_str(), "origin/main"));
+        assert!(from.stale.is_some());
+        assert_eq!(sh(Path::new(&a.path), &["rev-parse", "HEAD"]), one);
+    }
+
+    /// No remote at all: from what the workspace has checked out, as before.
+    #[tokio::test]
+    async fn without_a_remote_a_worktree_starts_from_the_checkout() {
+        let t = tempdir();
+        let work = t.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        sh(&work, &["init", "-q", "-b", "main"]);
+        let one = commit(&work, "README.md", "one");
+        let a = worktree_in(t.path(), "a");
+        let from = add(&work, &a).await.unwrap().unwrap();
+        assert_eq!((from.commit.as_str(), from.name.as_str(), &from.stale), (one.as_str(), "HEAD", &None));
+        // A branch that is taken (or any other refusal) is an error, not a
+        // session in somebody else's folder.
+        let again = SessionWorktree { path: t.path().join("worktrees/c").display().to_string(), branch: a.branch.clone() };
+        let e = add(&work, &again).await.unwrap_err();
+        assert!(format!("{e:#}").contains("could not create a worktree"), "{e:#}");
+        assert!(!Path::new(&again.path).exists());
+    }
+
+    /// A view asks the remote at most once a minute; a new session always
+    /// asks.
+    #[tokio::test]
+    async fn a_view_asks_the_remote_once_a_minute_and_a_new_session_always() {
+        let t = tempdir();
+        let (work, theirs, one) = cloned(t.path());
+        let tracked = || sh(&work, &["rev-parse", "refs/remotes/origin/main"]);
+        let two = commit(&theirs, "two.txt", "two");
+        sh(&theirs, &["push", "-q", "origin", "main"]);
+        // As it is: the remote isn't asked.
+        let m = remote_main(&work, Fresh::AsIs).await.unwrap();
+        assert_eq!((m.reference.as_str(), tracked()), ("refs/remotes/origin/main", one.clone()));
+        // The first look asks.
+        assert_eq!(remote_main(&work, Fresh::Recent).await.unwrap().stale, None);
+        assert_eq!(tracked(), two);
+        // The next one, moments later, doesn't; a new session does.
+        let three = commit(&theirs, "three.txt", "three");
+        sh(&theirs, &["push", "-q", "origin", "main"]);
+        remote_main(&work, Fresh::Recent).await.unwrap();
+        assert_eq!(tracked(), two);
+        remote_main(&work, Fresh::Now).await.unwrap();
+        assert_eq!(tracked(), three);
+    }
 
     /// H1: the settings that hold a repository's config can't be a flat
     /// override, or a `core.sshCommand` you set yourself (to pick a key, say)

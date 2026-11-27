@@ -146,7 +146,17 @@ is refused. The host listened on no TCP port throughout.
   minutes to receive the browser redirect.
 - **Several live sessions per workspace.** In a git repository each session
   gets a worktree under `<data>-worktrees/<session>` on its own branch
-  (`agenthost/<id>`), made by the host from `HEAD`; the session works there
+  (`agenthost/<id>`). `session.create` only names them and answers at once;
+  the host makes them as the session starts (a checkout takes seconds in a
+  large repository), from the remote's main branch (`origin/HEAD`, else
+  `origin/main` or `origin/master`), which it fetches first (45 s at most),
+  so a session has what everybody has however far behind your checkout or
+  its `main` is, and whatever branch you have checked out. Offline, it
+  starts from that branch as it was fetched last (the host's log says so);
+  without a remote, from `HEAD`. The branch follows no other. A worktree git
+  refuses to make fails the session's start with git's reason. Until the
+  worktree is there, `session.changes` is empty and `session.files` lists
+  what the session starts from. The session works there
   (in the same subfolder when the workspace is one), your checkout stays
   read-only to it, and other sessions' worktrees are unreadable. Inside the
   sandbox the repository's `.git` is writable (commits, branches, fetched

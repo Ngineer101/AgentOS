@@ -154,7 +154,10 @@ impl SessionManager {
     }
 
     /// Create and start a session. In a git workspace it gets a worktree and
-    /// a branch of its own; elsewhere sessions share the folder.
+    /// a branch of its own; elsewhere sessions share the folder. The worktree
+    /// is only named here: checking it out can take a while in a large
+    /// repository, so it is made as the session starts (see [`Actor::start`])
+    /// and the caller has its session at once.
     pub async fn create(
         self: &Arc<Self>,
         p: SessionCreateParams,
@@ -222,14 +225,9 @@ impl SessionManager {
         let worktree = if ws.kind == WorkspaceKind::Scratch {
             None
         } else {
-            crate::worktree::create(&self.ctx.cfg, Path::new(&ws.path), &session_id)
+            crate::worktree::plan(&self.ctx.cfg, Path::new(&ws.path), &session_id)
                 .await
-                .map_err(|e| {
-                    RpcError::new(
-                        jsonrpc::codes::UNAVAILABLE,
-                        format!("{e:#}; check the repository with `git worktree list`"),
-                    )
-                })?
+                .map_err(|e| RpcError::new(jsonrpc::codes::UNAVAILABLE, format!("{e:#}")))?
         };
         let now = now_ms();
         let s = Session {
@@ -1215,10 +1213,24 @@ impl Actor {
         }
         let mut git_access = None;
         if let Some(wt) = self.session.worktree.clone() {
-            // Removed when the session was archived: back from its branch.
-            crate::worktree::ensure(&self.repo_path, &wt)
-                .await
-                .map_err(|e| StartFailure::new(format!("{e:#}"), Value::Null))?;
+            if resume {
+                // Removed when the session was archived: back from its branch.
+                crate::worktree::ensure(&self.repo_path, &wt)
+                    .await
+                    .map_err(|e| StartFailure::new(format!("{e:#}"), Value::Null))?;
+            } else {
+                // A new session: its worktree was only named when it was
+                // created. From the remote's main branch, fetched first.
+                let from = crate::worktree::add(&self.repo_path, &wt).await.map_err(|e| {
+                    StartFailure::new(format!("{e:#}; check the repository with `git worktree list`"), Value::Null)
+                })?;
+                if let Some(from) = from {
+                    match &from.stale {
+                        Some(why) => tracing::warn!(session = %self.session.session_id, commit = %from.commit, "started from {} as it was fetched last; origin could not be asked: {why}", from.name),
+                        None => tracing::info!(session = %self.session.session_id, commit = %from.commit, "started from {}", from.name),
+                    }
+                }
+            }
             let access = crate::worktree::access(Path::new(&wt.path))
                 .await
                 .map_err(|e| StartFailure::new(format!("the session's worktree {} is not usable: {e:#}", wt.path), Value::Null))?;
