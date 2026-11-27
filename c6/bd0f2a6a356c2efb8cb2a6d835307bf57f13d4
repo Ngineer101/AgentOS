@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_25d9862865a444::t_5646d8718bb6fb 94-95
+.github/workflows/rust-host.yml
+  s_25d9862865a444::t_c544a8654bc04a 38-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c6bd0f2a6a356c2efb8cb2a6d835307bf57f13d4",
+  "prompts": {},
+  "sessions": {
+    "s_25d9862865a444": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_25d9862865a444",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
