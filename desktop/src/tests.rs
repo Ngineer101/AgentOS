@@ -4040,3 +4040,50 @@ fn a_word_too_long_for_its_line_breaks_inside_the_column() {
     }
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }
+
+/// However many extra hosts a workspace has, Add Host… stays in its row: the hosts wrap onto
+/// lines of their own under it, and a long name ends in an ellipsis.
+#[test]
+fn extra_hosts_wrap_and_keep_add_host_in_reach() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    for look in [Look::Mac, Look::Gnome] {
+        // A wide window, and one narrow enough that the list and the detail stack.
+        for width in [1280.0, 640.0] {
+            let mut ui = crate::app().headless_runtime((width, 1600.0), rune::Env::default());
+            let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "settings-workspaces-hosts").unwrap().1;
+            ui.update(move |s, _| {
+                f(s);
+                s.look = look;
+                s.admin = true;
+            });
+            ui.frame(0.016);
+            ui.frame(0.016);
+            let inside = |ui: &rune::Runtime<model::App>, what: &str| {
+                let els = ui.elements();
+                let of = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{look:?} {width}: {key} is not on screen ({what})"));
+                let b = of("ws_relay-extra-hosts");
+                // The row is as wide as the rows above it, and everything in it is inside it.
+                let above = of("ws_relay-Github");
+                let up = els.iter().find(|e| above.path.strip_prefix(&e.path).is_some_and(|rest| rest.starts_with('/') && !rest[1..].contains('/'))).unwrap();
+                assert!((b.rect[0] - up.rect[0]).abs() < 0.5 && (b.rect[2] - up.rect[2]).abs() < 0.5, "{look:?} {width} ({what}): the row spans {:?}, the one above {:?}", b.rect, up.rect);
+                let (left, right) = (b.rect[0] - 0.5, b.rect[0] + b.rect[2] + 0.5);
+                for e in els.iter().filter(|e| e.path.starts_with(&format!("{}/", b.path))) {
+                    assert!(e.rect[0] >= left && e.rect[0] + e.rect[2] <= right, "{look:?} {width} ({what}): {} ({:?}) spans {}..{}, outside {left}..{right}", e.path, e.text, e.rect[0], e.rect[0] + e.rect[2]);
+                }
+                assert_eq!(els.iter().filter(|e| e.path.starts_with(&format!("{}/", of("ws_relay-hosts").path)) && e.role == "button").count(), 9, "{look:?} {width} ({what}): every host can be removed");
+            };
+            inside(&ui, "at rest");
+            // Add Host… is there to press, and its field opens in the same place.
+            let (x, y) = ui.find("ws_relay-add-host").unwrap_or_else(|| panic!("{look:?} {width}: Add Host… is not on screen"));
+            ui.pointer_down(x, y);
+            ui.pointer_up(x, y);
+            ui.frame(0.016);
+            ui.frame(0.016);
+            assert!(ui.find("ws_relay-host-field").is_some(), "{look:?} {width}: the field did not open");
+            inside(&ui, "adding");
+        }
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}

@@ -979,7 +979,10 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         };
         form_row(t, name, Some(detail.to_string()), control.key(format!("{}-{:?}", w.workspace_id, p)))
     };
-    let mut hosts = row().gap(6.0).center_y().flex_wrap();
+    // The hosts get lines of their own under the title, as many as they need: beside it they
+    // pushed Add Host… out of the row once there were more than a line of them.
+    let pad = if mac { 12.0 } else { 14.0 };
+    let mut hosts = row().key(format!("{}-hosts", w.workspace_id)).w_full().gap(6.0).px(pad).pb(if mac { 10.0 } else { 14.0 }).center_y().flex_wrap();
     for h in &w.network.custom_hosts {
         let (id2, h2) = (id.clone(), h.clone());
         let net = w.network.clone();
@@ -991,7 +994,11 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
             .center_y()
             .radius(11.0)
             .fill(Color::WHITE.alpha(0.1))
-            .child(text(h.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0)).color(t.text));
+            // A name longer than the line ends in an ellipsis; its button stays.
+            .shrink()
+            .min_w(0.0)
+            .help(h.clone())
+            .child(text(h.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0)).color(t.text).truncate().shrink().min_w(0.0));
         if edit {
             chip = chip.child(
                 row()
@@ -1012,7 +1019,7 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         el()
     } else if editing {
         let idh = id.clone();
-        row().w(220.0).child(
+        row().key(format!("{}-host-field", w.workspace_id)).w(220.0).child(
             t.field_submit(&s.custom_host, "api.example.com", |s| &mut s.custom_host, move |s: &mut App, _: &mut Tx| {
                 let h = s.custom_host.text.trim().to_string();
                 if !h.is_empty() {
@@ -1029,17 +1036,12 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
             s.custom_host = rune::TextEdit::new("");
             s.custom_host.focused = true;
         })
+        .key(format!("{}-add-host", w.workspace_id))
     };
-    let extra = row()
-        .w_full()
-        .gap(10.0)
-        .px(if mac { 12.0 } else { 14.0 })
-        .py(if mac { 6.0 } else { 10.0 })
-        .center_y()
-        .child(t.label("Extra hosts"))
-        .child(el().grow(1.0))
-        .child(hosts)
-        .child(add_host);
+    let mut extra = col().key(format!("{}-extra-hosts", w.workspace_id)).w_full().child(form_row(t, "Extra hosts", Some("Other sites you allow by name".into()), add_host));
+    if !w.network.custom_hosts.is_empty() {
+        extra = extra.child(hosts);
+    }
     let net = t.group(
         vec![
             preset(NetworkPreset::Web, "Open web", "Any public site. Your local network stays blocked."),

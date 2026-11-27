@@ -1108,6 +1108,18 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         s.settings = Some(Tab::Workspaces);
         s.sel_ws = Some("ws_relay".into());
     }),
+    // More extra hosts than one line holds, one of them a long name.
+    ("settings-workspaces-hosts", |s| {
+        base(s);
+        s.settings = Some(Tab::Workspaces);
+        s.sel_ws = Some("ws_relay".into());
+        if let Some(w) = s.workspaces.iter_mut().find(|w| w.workspace_id == "ws_relay") {
+            w.network.custom_hosts = ["docs.rs", "cafe.github.com", "tryhackme.site", "staging.tryhackme.site", "vercel.com", "api.stripe.com", "sentry.io", "a-preview-deployment-with-a-very-long-name-7f3a9c21b4d8e6f0a1b2c3d4e5f60718293a4b5c6d7e8f90.eu-central-1.elb.amazonaws.com", "fonts.gstatic.com"]
+                .into_iter()
+                .map(String::from)
+                .collect();
+        }
+    }),
     ("settings-connectors", |s| {
         base(s);
         s.settings = Some(Tab::Connectors);
