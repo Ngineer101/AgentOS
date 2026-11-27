@@ -3506,6 +3506,128 @@ fn opening_a_session_focuses_its_composer() {
     }
 }
 
+/// A press anywhere on the composer's box that no button takes (its padding, the gaps in the
+/// row of controls) puts the keyboard in the message, as the button goes down.
+#[test]
+fn a_press_anywhere_on_the_composer_box_focuses_the_message() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let focused = |ui: &rune::Runtime<model::App>, key: &str| ui.elements().iter().any(|e| e.key.as_deref() == Some(key) && e.focused);
+    // Left, top, right, bottom.
+    let rect = |ui: &rune::Runtime<model::App>, key: &str| {
+        let [x, y, w, h] = ui.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key} is not on screen")).rect;
+        [x, y, x + w, y + h]
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "session").unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+            s.approvals.clear();
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        let (b, p, send) = (rect(&ui, "composer-box"), rect(&ui, "prompt"), rect(&ui, "send"));
+        assert!(p[0] - b[0] >= 8.0 && p[1] - b[1] >= 8.0, "{look:?}: the box has padding around the text: {b:?} {p:?}");
+        let mid_y = (send[1] + send[3]) / 2.0;
+        let spots = [
+            ("the top left corner's padding", b[0] + 3.0, b[1] + 3.0),
+            ("the padding left of the text", b[0] + 3.0, (p[1] + p[3]) / 2.0),
+            ("the padding above the text", (b[0] + b[2]) / 2.0, b[1] + 2.0),
+            ("the right edge beside the text", b[2] - 3.0, (p[1] + p[3]) / 2.0),
+            ("the gap in the row of controls", (b[0] + b[2]) / 2.0, mid_y),
+            ("the bottom edge", (b[0] + b[2]) / 2.0, b[3] - 2.0),
+        ];
+        for (what, x, y) in spots {
+            ui.update(|s, tx| {
+                s.prompt.focused = false;
+                tx.blur();
+            });
+            ui.frame(0.016);
+            ui.frame(0.016);
+            assert!(!focused(&ui, "prompt"), "{look:?}: nothing has focus before the press on {what}");
+            ui.pointer_down(x, y);
+            ui.frame(0.016);
+            assert!(focused(&ui, "prompt"), "{look:?}: a press on {what} focuses the message as it goes down");
+            ui.pointer_up(x, y);
+            ui.frame(0.016);
+            ui.key(rune::KeyEvent { key: rune::Key::Text("h".into()), mods: rune::Mods::default() });
+            ui.frame(0.016);
+            let typed = std::rc::Rc::new(std::cell::Cell::new(false));
+            let typed2 = typed.clone();
+            ui.update(move |s, _| {
+                typed2.set(s.prompt.text == "h");
+                s.prompt.replace_text("");
+            });
+            assert!(typed.get(), "{look:?}: typing after a press on {what} goes into the message");
+            // A second press there, with the message focused, leaves the keyboard where it is.
+            ui.pointer_down(x, y);
+            ui.frame(0.016);
+            ui.pointer_up(x, y);
+            ui.frame(0.016);
+            assert!(focused(&ui, "prompt"), "{look:?}: a press on {what} keeps the message focused");
+        }
+        // The buttons inside keep their own presses: the box isn't one itself.
+        let roles: Vec<_> = ui.elements().into_iter().filter(|e| matches!(e.key.as_deref(), Some("composer-box" | "send"))).map(|e| (e.key.unwrap(), e.role)).collect();
+        assert!(roles.contains(&("composer-box".to_string(), "textbox")) && roles.contains(&("send".to_string(), "button")), "{look:?}: {roles:?}");
+        let centre = |ui: &rune::Runtime<model::App>, key: &str| {
+            let r = rect(ui, key);
+            ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)
+        };
+        let click = |ui: &mut rune::Runtime<model::App>, (x, y): (f32, f32)| {
+            ui.pointer_down(x, y);
+            ui.frame(0.016);
+            ui.pointer_up(x, y);
+            ui.frame(0.016);
+            ui.frame(0.016);
+        };
+        let state = |ui: &mut rune::Runtime<model::App>, f: fn(&model::App) -> bool| {
+            let r = std::rc::Rc::new(std::cell::Cell::new(false));
+            let r2 = r.clone();
+            ui.update_if(move |s, _| {
+                r2.set(f(s));
+                false
+            });
+            r.get()
+        };
+        for key in ["attach", "mic", "model-chip", "send"] {
+            let (x, y) = centre(&ui, key);
+            let at = ui.element_at(x, y);
+            let path = at.as_ref().map(|p| p.path().to_string()).unwrap_or_default();
+            assert!(path.contains(&format!("/{key}")), "{look:?}: a press on {key} lands on it, not the box: {path}");
+        }
+        // Attach opens the file picker.
+        assert!(ui.file_dialog().is_none(), "{look:?}");
+        let at = centre(&ui, "attach");
+        click(&mut ui, at);
+        assert!(ui.file_dialog().is_some(), "{look:?}: Attach opens the file picker");
+        ui.resolve_file_dialog(None).unwrap();
+        ui.frame(0.016);
+        // The microphone answers: it records, or a toast says why it can't here.
+        ui.update(|s, _| {
+            s.toasts.clear();
+            s.ask_voice_download = false;
+        });
+        assert!(state(&mut ui, |s| matches!(s.mic, model::Mic::Idle)), "{look:?}");
+        let at = centre(&ui, "mic");
+        click(&mut ui, at);
+        assert!(state(&mut ui, |s| !s.toasts.is_empty() || s.ask_voice_download || !matches!(s.mic, model::Mic::Idle)), "{look:?}: the microphone button ran");
+        ui.update(|s, _| {
+            s.mic_cancel();
+            s.toasts.clear();
+            s.ask_voice_download = false;
+        });
+        ui.frame(0.016);
+        // The model chip opens its menu.
+        assert!(state(&mut ui, |s| s.menu.is_none()), "{look:?}");
+        let at = centre(&ui, "model-chip");
+        click(&mut ui, at);
+        assert!(state(&mut ui, |s| s.menu == Some(model::Menu::Model)), "{look:?}: the model chip opens its menu");
+    }
+}
+
 /// A session's pull request icon says where it stands: green open, purple merged, red
 /// closed without merging, grey before the host has looked; the tooltip says it in words.
 #[test]

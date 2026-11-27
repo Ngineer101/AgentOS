@@ -212,7 +212,10 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
         });
     // One rounded container: files, the text, then the controls. Where the work lands (the
     // workspace and branch) is the header's subtitle, not the composer's.
-    let mut boxc = col().key("composer-box").w_full().radius(if mac { 18.0 } else { 12.0 });
+    // The whole box is the text field, as Rune's `textbox` role makes it: a press anywhere on it
+    // that no control takes (its padding, the gaps between the buttons) focuses the message as
+    // the button goes down, with the caret at the nearer end and the text pointer over it.
+    let mut boxc = col().key("composer-box").w_full().radius(if mac { 18.0 } else { 12.0 }).role("textbox");
     boxc = if mac {
         boxc.fill(Color::WHITE.alpha(0.055)).border(0.5, Color::WHITE.alpha(0.15)).shadow(6.0, 20.0, Color::BLACK.alpha(0.22))
     } else {
