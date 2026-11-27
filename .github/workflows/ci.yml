@@ -91,6 +91,8 @@ jobs:
         with:
           workspaces: desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Test failures don't spoil the build cache, so keep it either way.
+          cache-on-failure: true
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
