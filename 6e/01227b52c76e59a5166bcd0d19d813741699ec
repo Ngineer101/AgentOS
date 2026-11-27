@@ -1,0 +1,47 @@
+desktop/src/agentfile.rs
+  s_e810f5d186a9b1::t_1a18dae76cfe8a 490
+desktop/src/agents.rs
+  s_e810f5d186a9b1::t_0a1584261bb662 148,256,272,297
+desktop/src/automations.rs
+  s_e810f5d186a9b1::t_8b9211786ddc53 97,150,241,276,522-523,651,679,772,894-895
+desktop/src/browser.rs
+  s_e810f5d186a9b1::t_47da4d5ad740be 569,668,683
+desktop/src/demo.rs
+  s_e810f5d186a9b1::t_843f3f45133ea0 520-550,1002
+desktop/src/files.rs
+  s_e810f5d186a9b1::t_21adeaac525b90 414
+desktop/src/notes.rs
+  s_e810f5d186a9b1::t_ceda0c43ff7bd5 53,128,249,284-285,384-385
+desktop/src/session.rs
+  s_e810f5d186a9b1::t_4a5cb2014cf0c9 37-38,167,180-181,667,753,764,838,920,960,992-993,1127-1128,1267-1268,1284,1295,1311,1403-1404
+desktop/src/settings.rs
+  s_e810f5d186a9b1::t_1b9ab7d8d2d5df 218,224,1087,1419,1421,1658,1663,1667,1669,1947
+desktop/src/sheet.rs
+  s_e810f5d186a9b1::t_256314d2f27801 515-516
+desktop/src/side.rs
+  s_e810f5d186a9b1::t_f2647be50ca347 129,144,155-156
+desktop/src/terminal.rs
+  s_e810f5d186a9b1::t_26d2b932e239e3 503
+desktop/src/tests.rs
+  s_e810f5d186a9b1::t_8aff8af6c77281 3996-4042
+desktop/src/toast.rs
+  s_e810f5d186a9b1::t_cddb5138cb003f 106,153
+desktop/src/view.rs
+  s_e810f5d186a9b1::t_3bb4cd83b19cbf 334,1114,1141,1147,1162,1181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e01227b52c76e59a5166bcd0d19d813741699ec",
+  "prompts": {},
+  "sessions": {
+    "s_e810f5d186a9b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e810f5d186a9b1",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
