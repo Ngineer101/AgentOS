@@ -325,6 +325,38 @@ impl Instance {
     }
 }
 
+/// Whether a refused `host:port` is one to ask about: the workspace's network rules don't
+/// include it, and including it could let the browser reach it. Not this computer or the
+/// local network (refused whatever the rules say), and not a site the rules already include
+/// (refused for where it resolves, or for not resolving).
+pub(crate) fn askable(network: &NetworkProfile, host: &str, port: u16) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    if h == "localhost" || h.ends_with(".localhost") {
+        return false;
+    }
+    if h.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok_and(crate::proxy::ip_is_denied) {
+        return false;
+    }
+    !crate::proxy::host_allowed(&crate::sandbox::profile_hosts(network), &h, port)
+}
+
+/// A refused site as it is listed (`name`, or `name:port` off the web's own ports).
+fn listed(host: &str, port: u16) -> String {
+    if port == 443 || port == 80 {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// [`listed`] read back: the name and a port.
+fn unlisted(entry: &str) -> (&str, u16) {
+    match entry.rsplit_once(':') {
+        Some((name, port)) if !name.contains(':') => port.parse().map_or((entry, 443), |p| (name, p)),
+        _ => (entry, 443),
+    }
+}
+
 /// The browser's network: what its workspace allows, nothing else.
 struct BrowserNet {
     ctx: Arc<Ctx>,
@@ -427,6 +459,15 @@ impl Browsers {
             None => BrowserInfo { workspace_id: workspace_id.into(), running: false, tabs: vec![], blocked: vec![], error: None },
         };
         info.error = self.errors.lock().unwrap().get(workspace_id).cloned();
+        // What the rules have come to include since is no longer refused by them.
+        if !info.blocked.is_empty() {
+            if let Ok(Some(ws)) = self.ctx.store.workspace_get(workspace_id) {
+                info.blocked.retain(|e| {
+                    let (host, port) = unlisted(e);
+                    askable(&ws.network, host, port)
+                });
+            }
+        }
         info
     }
 
@@ -453,13 +494,19 @@ impl Browsers {
 
     fn blocked(&self, workspace_id: &str, host: &str, port: u16, reason: &str) {
         let Some(inst) = self.instance(workspace_id) else { return };
-        let shown = if port == 443 || port == 80 { host.to_string() } else { format!("{host}:{port}") };
+        let shown = listed(host, port);
+        // Listed for the app to ask about only if allowing it could help; the page's log
+        // has every refusal.
+        let ask = match self.ctx.store.workspace_get(workspace_id) {
+            Ok(Some(ws)) => askable(&ws.network, host, port),
+            _ => false,
+        };
         let changed = {
             let mut st = inst.st.lock().unwrap();
             for t in st.tabs.iter_mut() {
                 t.note(format!("[network] {shown} was refused: {reason}"));
             }
-            if st.blocked.front() == Some(&shown) {
+            if !ask || st.blocked.front() == Some(&shown) {
                 false
             } else {
                 st.blocked.retain(|h| *h != shown);
@@ -1089,6 +1136,39 @@ fn snapshot_short(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_sites_the_rules_could_let_in_are_asked_about() {
+        let rules = NetworkProfile { presets: vec![NetworkPreset::Github], custom_hosts: vec!["*.tryhackme.site".into(), "example.org:8443".into()] };
+        // Not in the rules: worth asking.
+        for (host, port) in [("fonts.gstatic.com", 443), ("tryhackme.site", 443), ("example.org", 443), ("93.184.216.34", 80), ("Example.COM.", 443)] {
+            assert!(askable(&rules, host, port), "{host}:{port}");
+        }
+        // In the rules (by name, wildcard, port or preset), so refused for another reason;
+        // or this computer and the local network, which no rule lets in.
+        for (host, port) in [
+            ("staging.tryhackme.site", 443),
+            ("example.org", 8443),
+            ("github.com", 443),
+            ("localhost", 3000),
+            ("app.localhost", 443),
+            ("127.0.0.1", 8080),
+            ("192.168.1.10", 80),
+            ("[::1]", 443),
+            ("169.254.169.254", 80),
+        ] {
+            assert!(!askable(&rules, host, port), "{host}:{port}");
+        }
+        // The open web includes every name.
+        let web = NetworkProfile { presets: vec![NetworkPreset::Web], custom_hosts: vec![] };
+        assert!(!askable(&web, "fonts.gstatic.com", 443));
+        // As listed, and read back.
+        for (host, port, entry) in [("a.example", 443, "a.example"), ("a.example", 80, "a.example"), ("a.example", 8443, "a.example:8443")] {
+            assert_eq!(listed(host, port), entry);
+            assert_eq!(unlisted(entry).0, host);
+            assert!(unlisted(entry).1 == port || port == 80);
+        }
+    }
 
     #[test]
     fn the_browser_goes_through_the_proxy_and_keeps_its_profile() {

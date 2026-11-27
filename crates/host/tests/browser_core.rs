@@ -209,9 +209,9 @@ async fn the_browser_cannot_reach_this_computer() {
         }
     }
     assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing reached the local server");
-    // The refusal is shown to the panel.
+    // Not listed for the panel to ask about: no network rule could let this computer in.
     let info = host.browsers.list().browsers.into_iter().find(|x| x.workspace_id == ws).unwrap();
-    assert!(!info.blocked.is_empty(), "{info:?}");
+    assert!(info.blocked.is_empty(), "{info:?}");
     host.browsers.close_all().await;
 }
 

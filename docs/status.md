@@ -273,7 +273,14 @@ is refused. The host listened on no TCP port throughout.
   Ctrl+Shift+B) shows the workspace's tabs as JPEG frames decoded off the UI
   thread into a Rune `NativeSurface` (at most two frames ahead of the app's
   acknowledgement, newer ones replacing older), and sends clicks, wheel, keys
-  and paste back. Every `browser.*` method is admin only. Tested: protocol and
+  and paste back. A site the workspace's network rules don't include is asked
+  about in the tab, under the address bar (27 Nov 2026): Allow adds it to the
+  workspace's extra hosts (its agents' too) and reloads the page, Don't Allow
+  keeps it refused and quiet until Ask Again; with the tab out of sight a
+  toast says so. The host lists only refusals a rule could lift (not this
+  computer or the local network), and extra hosts may be wildcards
+  (`*.example.com`: every subdomain, not the name itself). Every `browser.*`
+  method is admin only. Tested: protocol and
   host units here (URL rules, snapshot outline, keys, frame flow control),
   the panel laid out and clicked/typed headless in both looks, and the app
   joined to a real in-process host (start failure shown in the panel, phone

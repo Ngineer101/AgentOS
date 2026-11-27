@@ -375,6 +375,8 @@ pub enum ToastAction {
     ShowApproval { session_id: String, approval_id: String },
     /// "Settings" (GNOME: "Preferences"): open Settings on this tab.
     OpenSettings(Tab),
+    /// "Show": open the Browser tab, where a site waits to be allowed or not.
+    ShowBrowser,
 }
 
 /// A short message over the window that goes by itself (AdwToast, or a floating panel on macOS).
@@ -2401,6 +2403,10 @@ impl App {
                     let r = r.map_err(|e| e.message).and_then(|v| parse::<BrowserTab>(v).ok_or_else(|| "the host's answer made no sense".to_string()));
                     self.browser_opened(r);
                 }
+                (Tag::BrowserSiteAllowed { workspace_id, host }, r) => {
+                    let r = r.map_err(|e| e.message).and_then(|v| parse::<Workspace>(v).ok_or_else(|| "the host's answer made no sense".to_string()));
+                    self.browser_site_allowed(&workspace_id, &host, r);
+                }
                 (Tag::BrowserAttached(_), Ok(_)) => {}
                 (Tag::BrowserAttached(id), Err(_)) => self.browser_attach_failed(&id),
                 (Tag::BrowserCopied, Ok(v)) => self.browser_copied(parse::<BrowserSelection>(v).map(|s| s.text).unwrap_or_default()),
@@ -3077,6 +3083,11 @@ impl App {
                 tx.scroll_into_view("approval-card");
             }
             Some(ToastAction::OpenSettings(tab)) => self.open_settings(tab),
+            Some(ToastAction::ShowBrowser) => {
+                self.close_overlays();
+                self.close_agent();
+                self.show_panel(PanelTab::Browser);
+            }
             None => {}
         }
     }
@@ -3113,7 +3124,7 @@ impl App {
         let live: HashSet<&str> = self.approvals.iter().map(|a| a.approval_id.as_str()).collect();
         self.toasts.retain(|t| match &t.action {
             Some(ToastAction::ShowApproval { approval_id, .. }) => live.contains(approval_id.as_str()),
-            Some(ToastAction::OpenSettings(_)) | None => true,
+            Some(ToastAction::OpenSettings(_)) | Some(ToastAction::ShowBrowser) | None => true,
         });
     }
 

@@ -103,6 +103,8 @@ pub enum Tag {
     BrowserAttached(String),
     /// `browser.selection`: the page's selected text, to copy.
     BrowserCopied,
+    /// `workspace.update` adding a site the browser asked about: answered with the workspace.
+    BrowserSiteAllowed { workspace_id: String, host: String },
     /// Housekeeping whose answer doesn't matter.
     Quiet,
 }

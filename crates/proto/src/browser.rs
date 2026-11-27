@@ -50,7 +50,9 @@ pub struct BrowserInfo {
     pub running: bool,
     /// Oldest first.
     pub tabs: Vec<BrowserTab>,
-    /// Hosts the workspace's network settings refused lately, newest first.
+    /// Sites the browser wanted that the workspace's network rules don't include, newest
+    /// first (`name`, or `name:port` off the web's own ports): the app asks whether to allow
+    /// each. One leaves the list when the rules come to include it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<String>,
     /// Why the browser could not start or stopped unexpectedly.

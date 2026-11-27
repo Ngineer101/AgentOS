@@ -127,6 +127,30 @@ pub struct Browse {
     pub shown: Shown,
     /// What would have gone to the host, kept while there is no bridge (tests, snapshots).
     pub sent: Vec<BrowserCmd>,
+    /// What you said about sites a browser was refused, by workspace.
+    pub answers: HashMap<String, HashMap<String, SiteAnswer>>,
+    /// Refused sites already told of in a toast, by workspace and site.
+    toasted: std::collections::HashSet<(String, String)>,
+    /// The calls asking about sites made, kept while there is no bridge (tests).
+    pub calls: Vec<(&'static str, serde_json::Value)>,
+}
+
+/// Your answer about a site the workspace's network rules don't include.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SiteAnswer {
+    /// Allow: the host is adding it to the workspace's rules.
+    Allowing,
+    /// Don't Allow: not asked about again until you say so.
+    Declined,
+}
+
+/// A refused site as the host lists it (`name`, or `name:port` off the web's own ports) as
+/// a name and a port.
+fn refused(entry: &str) -> (&str, u16) {
+    match entry.rsplit_once(':') {
+        Some((name, port)) if !name.contains(':') => port.parse().map_or((entry, 443), |p| (name, p)),
+        _ => (entry, 443),
+    }
 }
 
 fn host_of(url: &str) -> &str {
@@ -253,8 +277,110 @@ impl App {
         if b.error.is_none() && !b.running && b.tabs.is_empty() && b.blocked.is_empty() {
             self.web.browsers.remove(&ws);
         } else {
-            self.web.browsers.insert(ws, b);
+            self.web.browsers.insert(ws.clone(), b);
         }
+        self.toast_browser_asks(&ws);
+    }
+
+    /// The sites `ws`'s browser was refused that its network rules still don't include,
+    /// newest first, read as the host's proxy reads the rules (so a wildcard counts).
+    fn browser_refused(&self, ws: &str) -> Vec<String> {
+        let Some(w) = self.workspace(ws) else { return vec![] };
+        if w.network.presets.contains(&NetworkPreset::Web) {
+            return vec![];
+        }
+        let blocked = self.web.browsers.get(ws).map(|b| b.blocked.as_slice()).unwrap_or_default();
+        blocked
+            .iter()
+            .filter(|e| {
+                let (name, port) = refused(e);
+                !w.network.names(name, port)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn site_answer(&self, ws: &str, host: &str) -> Option<SiteAnswer> {
+        self.web.answers.get(ws).and_then(|a| a.get(host)).copied()
+    }
+
+    /// The refused sites still to ask about.
+    pub fn browser_asks(&self, ws: &str) -> Vec<String> {
+        self.browser_refused(ws).into_iter().filter(|h| self.site_answer(ws, h).is_none()).collect()
+    }
+
+    /// The refused sites you said not to allow.
+    pub fn browser_declined(&self, ws: &str) -> Vec<String> {
+        self.browser_refused(ws).into_iter().filter(|h| self.site_answer(ws, h) == Some(SiteAnswer::Declined)).collect()
+    }
+
+    fn site_call(&mut self, tag: Tag, method: &'static str, params: serde_json::Value) {
+        if self.bridge.is_some() {
+            self.call(tag, method, params);
+        } else {
+            self.web.calls.push((method, params));
+        }
+    }
+
+    /// Allow: the site joins the workspace's network rules (its agents' too), and the page
+    /// is loaded again once the host has it.
+    pub fn browser_allow(&mut self, host: &str) {
+        let ws = self.browser_ws();
+        self.web.answers.entry(ws.clone()).or_default().insert(host.to_string(), SiteAnswer::Allowing);
+        self.site_call(Tag::BrowserSiteAllowed { workspace_id: ws.clone(), host: host.to_string() }, m::WORKSPACE_UPDATE, json!({"workspace_id": ws, "add_custom_host": host}));
+    }
+
+    /// Don't Allow: the site stays refused, and isn't asked about again until Ask Again.
+    pub fn browser_decline(&mut self, host: &str) {
+        let ws = self.browser_ws();
+        self.web.answers.entry(ws).or_default().insert(host.to_string(), SiteAnswer::Declined);
+    }
+
+    /// Ask Again: the sites you declined are asked about once more.
+    pub fn browser_ask_again(&mut self) {
+        let ws = self.browser_ws();
+        if let Some(a) = self.web.answers.get_mut(&ws) {
+            a.retain(|_, v| *v != SiteAnswer::Declined);
+        }
+    }
+
+    /// The host answered an Allow: with the workspace and its new rule, or why not.
+    pub fn browser_site_allowed(&mut self, ws: &str, host: &str, r: Result<Workspace, String>) {
+        if let Some(a) = self.web.answers.get_mut(ws) {
+            a.remove(host);
+        }
+        match r {
+            Ok(w) => {
+                match self.workspaces.iter_mut().find(|x| x.workspace_id == w.workspace_id) {
+                    Some(x) => *x = w,
+                    None => self.refresh(crate::bridge::Refresh::Workspaces),
+                }
+                // The page that was refused it gets another go.
+                if let Some(tab) = self.web.chosen.get(ws).cloned() {
+                    self.site_call(Tag::Action { what: "Reload the page".into(), refresh: crate::bridge::Refresh::None }, m::BROWSER_NAVIGATE, json!({"tab_id": tab, "action": BrowserAction::Reload}));
+                }
+            }
+            Err(e) => self.error = Some(format!("Could not allow {host}: {e}")),
+        }
+    }
+
+    /// A site newly refused while its bar is out of sight says so in a toast that opens the
+    /// Browser tab. Each site once; another workspace's waits in its own browser.
+    fn toast_browser_asks(&mut self, ws: &str) {
+        let fresh: Vec<String> = self.browser_asks(ws).into_iter().filter(|h| !self.web.toasted.contains(&(ws.to_string(), h.clone()))).collect();
+        if fresh.is_empty() || ws != self.browser_ws() {
+            return;
+        }
+        self.web.toasted.extend(fresh.iter().map(|h| (ws.to_string(), h.clone())));
+        if self.panel_shown() == Some(PanelTab::Browser) {
+            return;
+        }
+        let name = self.workspace(ws).map(|w| w.name.clone()).unwrap_or_else(|| "This workspace".into());
+        let text = match fresh.len() {
+            1 => format!("{name}'s browser wants to reach {}", clip(&fresh[0], 60)),
+            n => format!("{name}'s browser wants to reach {} and {} more", clip(&fresh[0], 60), n - 1),
+        };
+        self.push_toast(crate::model::ToastKind::Approval, text, Some(crate::model::ToastAction::ShowBrowser), std::time::Instant::now());
     }
 
     /// A new connection gets frames only for what it attaches to.
@@ -266,6 +392,10 @@ impl App {
         self.web.failed.clear();
         self.web.sent.clear();
         self.web.shown.set_tab(None);
+        // An Allow whose answer went with the old connection is asked about again.
+        for a in self.web.answers.values_mut() {
+            a.retain(|_, v| *v != SiteAnswer::Allowing);
+        }
     }
 
     pub fn browser_attach_failed(&mut self, id: &str) {
@@ -661,16 +791,32 @@ pub fn body(s: &App, t: &Theme) -> El {
         }
     };
 
-    let mut body = col().key("browser-body").w_full().grow(1.0).min_h(0.0).fill(bg).child(strip).child(bar).child(page);
+    let mut body = col().key("browser-body").w_full().grow(1.0).min_h(0.0).fill(bg).child(strip).child(bar);
+    // A site the workspace's network rules don't include: asked about here, where it was
+    // wanted, newest first and one at a time.
+    let asks = s.browser_asks(&ws);
+    if let Some(host) = asks.first() {
+        body = body.child(ask_bar(t, host, &ws_name, asks.len() - 1));
+    }
+    body = body.child(page);
     // What the workspace's network settings refused, and why the browser isn't running.
     let foot = |key: &str, child: El| row().key(key.to_string()).w_full().px(12.0).py(6.0).gap(8.0).center_y().border_sides([0.5, 0.0, 0.0, 0.0], t.sep).child(child);
     if let Some(e) = info.and_then(|b| b.error.as_ref()) {
         body = body.child(foot("browser-error", text(e.clone()).font(t.font_small()).color(t.danger).wrap_anywhere().grow(1.0).min_w(0.0)));
     }
-    if let Some(b) = info.filter(|b| !b.blocked.is_empty()) {
-        let hosts = b.blocked.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
-        let msg = format!("{ws_name}'s network settings refused {hosts}. Add hosts in Settings → Workspaces to allow them.");
-        body = body.child(foot("browser-blocked", text(msg).font(t.font_small()).color(t.text2).wrap().grow(1.0).min_w(0.0)));
+    let declined = s.browser_declined(&ws);
+    if !declined.is_empty() {
+        let hosts = declined.iter().take(4).map(|h| clip(h, 40)).collect::<Vec<_>>().join(", ");
+        let more = if declined.len() > 4 { format!(" and {} more", declined.len() - 4) } else { String::new() };
+        body = body.child(foot(
+            "browser-declined",
+            row()
+                .w_full()
+                .gap(6.0)
+                .center_y()
+                .child(text(format!("Not allowed in {ws_name}: {hosts}{more}")).font(t.font_small()).color(t.text2).truncate().grow(1.0).min_w(0.0))
+                .child(t.small_button("Ask Again", |s| s.browser_ask_again()).key("browser-ask-again")),
+        ));
     }
     if let Some(x) = tab.filter(|x| x.session_id.is_some()) {
         let who = x.session_id.as_deref().and_then(|id| s.session(id)).map(|ss| ss.title.clone().unwrap_or_default()).filter(|t| !t.is_empty()).unwrap_or_else(|| "an agent".into());
@@ -691,6 +837,44 @@ pub fn body(s: &App, t: &Theme) -> El {
             .child(t.small_button("Sign Out Everywhere…", |s| s.web.confirm_clear = true).key("browser-clear"))
     };
     body.child(foot("browser-foot", clear.w_full()))
+}
+
+/// "Allow fonts.example.com in relay?": a site the browser was refused, with what allowing it
+/// means, Don't Allow and Allow. `more` others wait behind it.
+fn ask_bar(t: &Theme, host: &str, ws_name: &str, more: usize) -> El {
+    let mac = t.mac();
+    let mut why = format!("{ws_name}'s network rules don't include it. Allowing adds it to them, for this workspace's agents too.");
+    match more {
+        0 => {}
+        1 => why.push_str(" 1 more site is waiting."),
+        n => why.push_str(&format!(" {n} more sites are waiting.")),
+    }
+    let (allow, deny) = (host.to_string(), host.to_string());
+    let mut bar = row()
+        .key("browser-ask")
+        .w_full()
+        .gap(if mac { 10.0 } else { 12.0 })
+        .px(12.0)
+        .py(if mac { 8.0 } else { 10.0 })
+        .center_y()
+        .fill(t.warn_tint)
+        .role("group")
+        .label(format!("Allow {host} in {ws_name}?"))
+        .child(icon(&ic::GLOBE, 15.0).color(t.warn))
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(1.0)
+                .child(text(format!("Allow {host} in {ws_name}?")).font(TextStyle::new(t.fs, crate::look::MEDIUM)).color(t.text).wrap_anywhere())
+                .child(t.small(why).wrap_anywhere()),
+        )
+        .child(t.small_button("Don't Allow", move |s| s.browser_decline(&deny)).key("browser-deny"))
+        .child(t.small_button("Allow", move |s| s.browser_allow(&allow)).key("browser-allow"));
+    if mac {
+        bar = bar.border_sides([0.0, 0.0, 0.5, 0.0], t.warn_border);
+    }
+    bar
 }
 
 /// One tab in the strip: an agent's shows a bolt.

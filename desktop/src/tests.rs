@@ -3258,7 +3258,7 @@ fn the_browser_lays_out_and_sends_what_you_do() {
     let scenes: [(&str, &[&str], &[&str]); 4] = [
         (
             "browser",
-            &["panel", "panel-tab-browser", "panel-tab-terminal", "browser-tabs", "browser-tab-tab_agent", "browser-tab-tab_mine", "browser-close-tab_agent", "browser-new", "browser-back", "browser-forward", "browser-reload", "browser-url", "browser-view", "browser-blocked", "browser-owner", "browser-clear", "toggle-browser"],
+            &["panel", "panel-tab-browser", "panel-tab-terminal", "browser-tabs", "browser-tab-tab_agent", "browser-tab-tab_mine", "browser-close-tab_agent", "browser-new", "browser-back", "browser-forward", "browser-reload", "browser-url", "browser-view", "browser-ask", "browser-allow", "browser-deny", "browser-owner", "browser-clear", "toggle-browser"],
             &["browser-note", "browser-error", "browser-clear-confirm"],
         ),
         ("browser-empty", &["panel", "browser-note", "browser-url", "browser-new", "browser-clear"], &["browser-view", "browser-owner"]),
@@ -4157,6 +4157,149 @@ fn a_blocked_host_is_allowed_once_a_wildcard_covers_it() {
         assert!(has("Blocked index.crates.io"), "{hosts:?}: the blocked host is not shown");
         assert_eq!(has("Allowed"), allowed, "{hosts:?}");
         assert_eq!(has("Allow for"), !allowed, "{hosts:?}");
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
+
+/// A site the browser was refused is asked about in the Browser tab, newest first: Allow adds
+/// it to the workspace's network rules and reloads the page, Don't Allow keeps quiet about it
+/// until you ask again, and what the rules cover (a wildcard, the open web) is never asked.
+#[test]
+fn the_browser_asks_before_a_site_joins_the_workspaces_rules() {
+    use crate::browser::SiteAnswer;
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let click = |ui: &mut rune::Runtime<model::App>, key: &str| {
+        let (x, y) = ui.find(key).unwrap_or_else(|| panic!("{key} is not on screen"));
+        ui.pointer_down(x, y);
+        ui.pointer_up(x, y);
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    let says = |ui: &rune::Runtime<model::App>, key: &str, what: &str| {
+        let els = ui.elements();
+        let Some(bar) = els.iter().find(|e| e.key.as_deref() == Some(key)) else { return false };
+        els.iter().any(|e| e.path.starts_with(&format!("{}/", bar.path)) && e.text.as_deref().is_some_and(|t| t.contains(what)))
+    };
+    let blocked = |ui: &mut rune::Runtime<model::App>, hosts: &[&str]| {
+        let hosts: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
+        ui.update(move |s, _| {
+            let mut b = s.web.browsers["ws_relay"].clone();
+            b.blocked = hosts.clone();
+            s.browser_changed(b);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+    };
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "browser").unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        // The scene's browser was refused fonts.gstatic.com: asked about under the address bar,
+        // inside the panel.
+        for k in ["browser-ask", "browser-allow", "browser-deny"] {
+            assert!(ui.find(k).is_some(), "{look:?}: {k} is not on screen");
+        }
+        assert!(says(&ui, "browser-ask", "fonts.gstatic.com") && ui.find("browser-declined").is_none(), "{look:?}");
+        let els = ui.elements();
+        let of = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+        let (ask, panel, bar, view) = (of("browser-ask"), of("panel"), of("browser-bar"), of("browser-view"));
+        assert!(ask[0] >= panel[0] && ask[0] + ask[2] <= panel[0] + panel[2] + 0.5 && ask[1] >= bar[1] + bar[3] - 0.5 && ask[1] + ask[3] <= view[1] + 0.5, "{look:?}: ask {ask:?}, bar {bar:?}, view {view:?}");
+        for k in ["browser-allow", "browser-deny"] {
+            let b = of(k);
+            assert!(b[0] >= ask[0] && b[0] + b[2] <= ask[0] + ask[2] + 0.5, "{look:?}: {k} {b:?} is outside the bar {ask:?}");
+        }
+
+        // Don't Allow: nothing is sent, and the site waits quietly until Ask Again.
+        click(&mut ui, "browser-deny");
+        assert!(ui.find("browser-ask").is_none() && says(&ui, "browser-declined", "fonts.gstatic.com"), "{look:?}");
+        ui.update(|s, _| assert!(s.web.calls.is_empty() && s.web.answers["ws_relay"]["fonts.gstatic.com"] == SiteAnswer::Declined));
+        click(&mut ui, "browser-ask-again");
+        assert!(says(&ui, "browser-ask", "fonts.gstatic.com") && ui.find("browser-declined").is_none(), "{look:?}");
+
+        // Another site is refused: the newest is asked about first, and the bar says one more waits.
+        blocked(&mut ui, &["cdn.example.com:8443", "fonts.gstatic.com"]);
+        assert!(says(&ui, "browser-ask", "cdn.example.com:8443") && says(&ui, "browser-ask", "1 more"), "{look:?}");
+
+        // Allow: the host adds it to the workspace's rules, and the next site is asked about.
+        click(&mut ui, "browser-allow");
+        ui.update(|s, _| {
+            assert_eq!(s.web.calls, vec![(m::WORKSPACE_UPDATE, json!({"workspace_id": "ws_relay", "add_custom_host": "cdn.example.com:8443"}))]);
+            assert!(s.web.answers["ws_relay"]["cdn.example.com:8443"] == SiteAnswer::Allowing);
+        });
+        assert!(says(&ui, "browser-ask", "fonts.gstatic.com") && !says(&ui, "browser-ask", "more"), "{look:?}");
+        // The host's answer is the workspace with its new rule: the page on show is reloaded.
+        ui.update(|s, _| {
+            let mut w = s.workspace("ws_relay").unwrap().clone();
+            w.network.custom_hosts.push("cdn.example.com:8443".into());
+            s.apply(bridge::FromHost::Reply { tag: bridge::Tag::BrowserSiteAllowed { workspace_id: "ws_relay".into(), host: "cdn.example.com:8443".into() }, result: Ok(serde_json::to_value(&w).unwrap()) });
+            assert!(s.workspace("ws_relay").unwrap().network.names("cdn.example.com", 8443));
+            assert_eq!(s.web.calls.last().unwrap(), &(m::BROWSER_NAVIGATE, json!({"tab_id": "tab_agent", "action": "reload"})));
+            assert!(!s.web.answers.get("ws_relay").is_some_and(|a| a.contains_key("cdn.example.com:8443")));
+        });
+        ui.frame(0.016);
+        assert!(says(&ui, "browser-ask", "fonts.gstatic.com"), "{look:?}");
+
+        // The host refuses: the reason is shown and the site is asked about again.
+        click(&mut ui, "browser-allow");
+        assert!(ui.find("browser-ask").is_none(), "{look:?}: nothing else waits while it is being allowed");
+        ui.update(|s, _| {
+            let refused = agenthost_proto::jsonrpc::RpcError { code: -32602, message: "no such workspace".into(), data: None };
+            s.apply(bridge::FromHost::Reply { tag: bridge::Tag::BrowserSiteAllowed { workspace_id: "ws_relay".into(), host: "fonts.gstatic.com".into() }, result: Err(refused) });
+            assert_eq!(s.error.take().as_deref(), Some("Could not allow fonts.gstatic.com: no such workspace"));
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(says(&ui, "browser-ask", "fonts.gstatic.com"), "{look:?}");
+
+        // What the rules cover is never asked about: a wildcard, then the open web.
+        let rules = |ui: &mut rune::Runtime<model::App>, presets: Vec<NetworkPreset>, hosts: &[&str]| {
+            let hosts: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
+            ui.update(move |s, _| s.workspaces.iter_mut().find(|w| w.workspace_id == "ws_relay").unwrap().network = NetworkProfile { presets: presets.clone(), custom_hosts: hosts.clone() });
+            ui.frame(0.016);
+            ui.frame(0.016);
+        };
+        rules(&mut ui, vec![], &["*.gstatic.com", "*.example.com:8443"]);
+        assert!(ui.find("browser-ask").is_none() && ui.find("browser-declined").is_none(), "{look:?}: a wildcard covers them");
+        rules(&mut ui, vec![], &["*.gstatic.com", "*.example.com"]);
+        assert!(ui.find("browser-ask").is_none(), "{look:?}: any port");
+        rules(&mut ui, vec![], &["gstatic.com"]);
+        assert!(says(&ui, "browser-ask", "cdn.example.com:8443"), "{look:?}: the name alone covers neither");
+        rules(&mut ui, vec![NetworkPreset::Web], &[]);
+        assert!(ui.find("browser-ask").is_none(), "{look:?}: the open web covers them");
+
+        // With the panel closed, a newly refused site says so in a toast whose button opens the
+        // Browser tab; with the tab on screen the bar is enough.
+        rules(&mut ui, vec![], &[]);
+        ui.update(|s, _| {
+            let before = s.toasts.len();
+            let mut b = s.web.browsers["ws_relay"].clone();
+            b.blocked.insert(0, "seen.example.org".into());
+            s.browser_changed(b.clone());
+            assert_eq!(s.toasts.len(), before, "the bar is on screen");
+            s.panel_open = false;
+            b.blocked.insert(0, "new.example.org".into());
+            s.browser_changed(b.clone());
+            let t = s.toasts.last().unwrap().clone();
+            assert!(t.text.contains("new.example.org") && !t.text.contains("seen.example.org") && t.action == Some(model::ToastAction::ShowBrowser), "{t:?}");
+            // Told once, not on every change.
+            s.browser_changed(b);
+            assert_eq!(s.toasts.len(), before + 1);
+        });
+        ui.update(|s, tx| {
+            let id = s.toasts.last().unwrap().id;
+            s.toast_action(id, tx);
+            assert!(s.panel_shown() == Some(model::PanelTab::Browser));
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        assert!(says(&ui, "browser-ask", "new.example.org"), "{look:?}");
     }
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }

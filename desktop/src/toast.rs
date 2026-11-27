@@ -28,7 +28,7 @@ pub fn layer(s: &App, t: &Theme) -> Option<El> {
             kind: x.kind,
             text: x.text.clone(),
             action: x.action.as_ref().map(|a| match a {
-                ToastAction::ShowApproval { .. } => "Show",
+                ToastAction::ShowApproval { .. } | ToastAction::ShowBrowser => "Show",
                 ToastAction::OpenSettings(_) if t.mac() => "Settings",
                 ToastAction::OpenSettings(_) => "Preferences",
             }),
