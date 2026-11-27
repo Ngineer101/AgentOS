@@ -94,7 +94,7 @@ pub fn screen(s: &App, t: &Theme) -> El {
             .px(24.0)
             .child(icon(&ic::CLOCK, 40.0).color(t.text3))
             .child(text("Update AgentOS").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
-            .child(t.small("This host has no automations. Update agenthostd to run sessions on a schedule or from a webhook.").wrap().align(rune::Align::Center).max_w(420.0));
+            .child(t.small("This host has no automations. Update agenthostd to run sessions on a schedule or from a webhook.").wrap_anywhere().align(rune::Align::Center).max_w(420.0));
     }
     if s.automations.is_empty() {
         return empty(t).key("automations");
@@ -147,7 +147,7 @@ fn empty(t: &Theme) -> El {
         .child(text("No Automations").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
         .child(
             t.small("An automation is a session that starts by itself: on a schedule, when a webhook arrives (a Sentry alert, a GitHub event), or when you run it. Each run is a session you can open and ask follow-up questions in.")
-                .wrap()
+                .wrap_anywhere()
                 .align(rune::Align::Center)
                 .max_w(460.0),
         )
@@ -238,7 +238,7 @@ fn detail(s: &App, t: &Theme, a: &Automation, now: i64) -> El {
     c = c
         .child(el().h(8.0))
         .child(t.group_title("Prompt"))
-        .child(t.group(vec![row().w_full().px(if mac { 12.0 } else { 14.0 }).py(if mac { 8.0 } else { 12.0 }).child(text(clip(&a.prompt, 1200)).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round())).color(t.text).wrap().selectable(true).shrink().min_w(0.0))], 0.0));
+        .child(t.group(vec![row().w_full().px(if mac { 12.0 } else { 14.0 }).py(if mac { 8.0 } else { 12.0 }).child(text(clip(&a.prompt, 1200)).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round())).color(t.text).wrap_anywhere().selectable(true).shrink().min_w(0.0))], 0.0));
     let approve = if a.auto_approve.is_empty() { "Nothing: every tool asks".to_string() } else { a.auto_approve.iter().map(|x| auto_approve_title(x)).collect::<Vec<_>>().join(", ") };
     c = c.child(el().h(8.0)).child(t.group_title("Each run")).child(t.group(
         vec![
@@ -273,7 +273,7 @@ fn webhook_box(s: &App, t: &Theme, a: &Automation, now: i64) -> Option<El> {
             let word = capitalize(&d.result);
             let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(t.label("Last delivery"));
             if !d.detail.is_empty() {
-                names = names.child(t.small(d.detail.clone()).wrap().selectable(true));
+                names = names.child(t.small(d.detail.clone()).wrap_anywhere().selectable(true));
             }
             row()
                 .key("last-delivery")
@@ -519,6 +519,8 @@ fn field(t: &Theme, edit: &TextEdit, key: &str, placeholder: &str, access: fn(&m
 fn area(t: &Theme, edit: &TextEdit, key: &str, placeholder: &str, access: fn(&mut App) -> &mut TextEdit, min: usize, max: usize) -> El {
     let input = rune::text_input(edit, TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round()))
         .key(key.to_string())
+        // A pasted word too long for the line wraps inside it, as it will once sent.
+        .wrap_anywhere()
         .label(placeholder.to_string())
         .w_full()
         .color(t.text)
@@ -646,7 +648,7 @@ fn editor_body(s: &App, t: &Theme) -> El {
     let max = row().gap(8.0).center_y().child(row().w(64.0).child(field(t, &d.max_minutes, "auto-max", "60", |s| &mut s.draft.max_minutes, false, false))).child(t.small("minutes"));
     body = body.child(t.group(vec![form_row(t, "Stop a run after", Some("1 to 720 minutes".into()), max)], inset));
     if let Some(e) = &d.error {
-        body = body.child(text(e.clone()).key("auto-error").font(t.font_small()).color(t.danger).wrap());
+        body = body.child(text(e.clone()).key("auto-error").font(t.font_small()).color(t.danger).wrap_anywhere());
     }
     body
 }
@@ -674,7 +676,7 @@ fn schedule_box(s: &App, t: &Theme) -> El {
     }
     // The host's word on it: the schedule in words and the next few times, or what's wrong.
     let check = match &d.check {
-        Some(ScheduleCheck { error: Some(e), .. }) => text(e.clone()).key("schedule-error").font(t.font_small()).color(t.danger).wrap(),
+        Some(ScheduleCheck { error: Some(e), .. }) => text(e.clone()).key("schedule-error").font(t.font_small()).color(t.danger).wrap_anywhere(),
         Some(c) => {
             let now = now_ms();
             let next: Vec<String> = c.next.iter().take(3).map(|n| when_label(*n, now, s.look)).collect();
@@ -767,7 +769,7 @@ fn webhook_editor(s: &App, t: &Theme) -> El {
                 .px(if mac { 12.0 } else { 14.0 })
                 .py(if mac { 8.0 } else { 12.0 })
                 .child(t.label("Only when"))
-                .child(t.small("One rule per line, field = value, like payload.action = opened or headers.x-github-event = issues. Every rule must hold.").wrap())
+                .child(t.small("One rule per line, field = value, like payload.action = opened or headers.x-github-event = issues. Every rule must hold.").wrap_anywhere())
                 .child(area(t, &d.filters, "auto-filters", "payload.action = opened", |s| &mut s.draft.filters, 2, 6)),
         ];
         c = c.child(t.group(rows, inset));
@@ -889,8 +891,8 @@ pub fn confirm(s: &App, t: &Theme) -> Option<El> {
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, cancel)
-        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap())
-        .child(t.small(msg).wrap())
+        .child(text(title).font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap_anywhere())
+        .child(t.small(msg).wrap_anywhere())
         .child(buttons);
     panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     Some(scrim("confirm-automation-layer", 0.32, cancel).center().child(panel))

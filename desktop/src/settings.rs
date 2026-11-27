@@ -215,13 +215,13 @@ pub(crate) fn section(t: &Theme, title: &str, note: Option<String>, content: El)
 pub(crate) fn form_row(t: &Theme, title: &str, detail: Option<String>, trailing: El) -> El {
     let mut names = col().grow(1.0).min_w(0.0).gap(1.0).child(t.label(title.to_string()));
     if let Some(d) = detail {
-        names = names.child(t.small(d).wrap());
+        names = names.child(t.small(d).wrap_anywhere());
     }
     row().w_full().gap(10.0).px(if t.mac() { 12.0 } else { 14.0 }).py(if t.mac() { 8.0 } else { 12.0 }).center_y().child(names).child(trailing)
 }
 
 pub(crate) fn footnote(t: &Theme, msg: &str) -> El {
-    text(msg.to_string()).font(TextStyle::new(if t.mac() { 11.0 } else { 13.0 }, 400.0).lh(if t.mac() { 16.0 } else { 19.0 })).color(t.text3).wrap()
+    text(msg.to_string()).font(TextStyle::new(if t.mac() { 11.0 } else { 13.0 }, 400.0).lh(if t.mac() { 16.0 } else { 19.0 })).color(t.text3).wrap_anywhere()
 }
 
 fn policy_name(p: ToolPolicy) -> &'static str {
@@ -1084,7 +1084,7 @@ fn workspace_detail(s: &App, w: &Workspace, t: &Theme) -> El {
         conns.push(form_row(t, "No connectors", Some("Add one in the Connectors tab.".into()), el()));
     }
     let place = if quick {
-        t.small(format!("No project folder: each session gets a fresh, empty folder of its own (in {}).", tilde(&w.path))).wrap()
+        t.small(format!("No project folder: each session gets a fresh, empty folder of its own (in {}).", tilde(&w.path))).wrap_anywhere()
     } else {
         t.mono(tilde(&w.path)).color(t.text2)
     };
@@ -1416,9 +1416,9 @@ fn add_connector(s: &App, t: &Theme) -> El {
     } else if s.searching || s.search_due.is_some() || s.search_query != q {
         Some(row().key("conn-searching").gap(6.0).center_y().child(icon(&ic::SPINNER, 12.0).color(t.text2).looping(rune::LoopSpec::rotation(0.9))).child(t.small("Searching…")))
     } else if let Some(e) = &s.search_error {
-        Some(text(format!("Couldn't search the catalog: {e}")).font(t.font_small()).color(t.danger).wrap())
+        Some(text(format!("Couldn't search the catalog: {e}")).font(t.font_small()).color(t.danger).wrap_anywhere())
     } else if s.suggestions.is_empty() {
-        Some(t.small(format!("No servers match \u{201c}{q}\u{201d}. Enter its URL instead.")).wrap())
+        Some(t.small(format!("No servers match \u{201c}{q}\u{201d}. Enter its URL instead.")).wrap_anywhere())
     } else {
         None
     };
@@ -1655,18 +1655,18 @@ fn connector_detail(s: &App, c: &Connector, t: &Theme) -> El {
             );
     } else if c.status == "error" {
         if let Some(det) = &c.status_detail {
-            d = d.child(text(det.clone()).font(t.font_small()).color(t.danger).wrap());
+            d = d.child(text(det.clone()).font(t.font_small()).color(t.danger).wrap_anywhere());
         }
     }
     if renaming {
         if let Some((_, why)) = s.rename_error.as_ref().filter(|(cid, _)| *cid == c.connector_id) {
-            d = d.child(text(why.clone()).key("rename-error").font(t.font_small()).color(t.danger).wrap());
+            d = d.child(text(why.clone()).key("rename-error").font(t.font_small()).color(t.danger).wrap_anywhere());
         }
         let new = s.rename.text.trim();
         let slug = connector_slug(if new.is_empty() { &c.name } else { new });
-        d = d.child(t.faint(format!("Sessions started after the rename see its tools as {slug}__tool. Running sessions keep {}__tool.", connector_slug(&c.name))).wrap());
+        d = d.child(t.faint(format!("Sessions started after the rename see its tools as {slug}__tool. Running sessions keep {}__tool.", connector_slug(&c.name))).wrap_anywhere());
     } else {
-        d = d.child(t.faint(format!("Agents see its tools as {}__tool. A new name applies to sessions started afterwards.", connector_slug(&c.name))).wrap());
+        d = d.child(t.faint(format!("Agents see its tools as {}__tool. A new name applies to sessions started afterwards.", connector_slug(&c.name))).wrap_anywhere());
     }
     // Defaults.
     let default_row = |label: &str, which: &'static str, p: ToolPolicy| {
@@ -1944,7 +1944,7 @@ fn pairing_sheet(s: &App, t: &Theme) -> El {
     let Some(p) = &s.pairing else { return el() };
     let mut c = col().w_full().items_center().gap(12.0);
     let title = text("Pair an iPhone").font(TextStyle::new(15.0, MEDIUM)).color(t.text);
-    let center = |msg: &str| text(msg.to_string()).font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0).lh(if mac { 18.0 } else { 21.0 })).color(t.text2).wrap().align(rune::Align::Center).max_w(330.0);
+    let center = |msg: &str| text(msg.to_string()).font(TextStyle::new(if mac { 12.0 } else { 14.0 }, 400.0).lh(if mac { 18.0 } else { 21.0 })).color(t.text2).wrap_anywhere().align(rune::Align::Center).max_w(330.0);
     let buttons;
     match (&p.pending, &p.done) {
         (_, Some(done)) => {

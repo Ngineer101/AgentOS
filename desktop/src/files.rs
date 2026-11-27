@@ -411,7 +411,7 @@ pub fn toggle_button(s: &App, t: &Theme) -> El {
 // ---- views ------------------------------------------------------------------------------
 
 fn note(t: &Theme, key: &str, msg: impl Into<String>) -> El {
-    col().key(key.to_string()).w_full().grow(1.0).center().px(24.0).child(text(msg.into()).font(t.font_small()).color(t.text2).wrap().align(Align::Center))
+    col().key(key.to_string()).w_full().grow(1.0).center().px(24.0).child(text(msg.into()).font(t.font_small()).color(t.text2).wrap_anywhere().align(Align::Center))
 }
 
 /// The strip under the panel's header.

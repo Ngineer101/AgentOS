@@ -34,6 +34,8 @@ pub(crate) fn reply(src: &str, streaming: bool, t: &Theme, k: &Kit) -> El {
         .selectable(true)
         .streaming(streaming)
         .scroll_wide(true)
+        // A word too long for its line (a hash, a URL, an encoded command) breaks inside it.
+        .wrap_anywhere(true)
         .on_link(|s: &mut App, url: &str| {
             if is_web_link(url) {
                 s.open_queue.push(url.to_string());
@@ -162,7 +164,7 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
                 .fill(t.danger.alpha(0.10))
                 .border(if t.mac() { 0.5 } else { 1.0 }, t.danger.alpha(0.35))
                 .child(t.dot(t.danger, 8.0))
-                .child(col().grow(1.0).min_w(0.0).gap(1.0).child(t.strong("The session failed")).child(t.small(reason).wrap())),
+                .child(col().grow(1.0).min_w(0.0).gap(1.0).child(t.strong("The session failed")).child(t.small(reason).wrap_anywhere())),
         );
     }
     if sess.state.is_terminal() {
@@ -175,6 +177,8 @@ fn composer(s: &App, sess: &Session, t: &Theme) -> El {
     let agent = sess.agent.display_name();
     let input = rune::text_input(&s.prompt, TextStyle::new(t.fs_msg, 400.0).lh((t.fs_msg * 1.45).round()))
         .key("prompt")
+        // A pasted word too long for the line wraps inside it, as it will once sent.
+        .wrap_anywhere()
         .label(format!("Message to {agent}"))
         .w_full()
         .color(t.text)
@@ -660,7 +664,7 @@ fn voice_offer(s: &App, t: &Theme) -> Option<El> {
                     v.model,
                     v.download_bytes / 1_000_000
                 ))
-                .wrap(),
+                .wrap_anywhere(),
             )
             .child(
                 row()
@@ -746,7 +750,7 @@ fn prompt_body(p: &Value, with_images: bool, t: &Theme) -> Vec<El> {
     let mut v = vec![];
     let tx = p["text"].as_str().unwrap_or("");
     if !tx.is_empty() {
-        v.push(text(tx.to_string()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round())).color(t.text).wrap().selectable(true));
+        v.push(text(tx.to_string()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.45).round())).color(t.text).wrap_anywhere().selectable(true));
     }
     let is_image = |a: &Value| a["mime"].as_str().is_some_and(|m| m.starts_with("image/"));
     for a in p["attachments"].as_array().into_iter().flatten().filter(|a| with_images || !is_image(a)) {
@@ -757,7 +761,7 @@ fn prompt_body(p: &Value, with_images: bool, t: &Theme) -> Vec<El> {
                 .gap(6.0)
                 .center_y()
                 .child(icon(&ic::FILE_SM, 13.0).color(t.text2))
-                .child(text(format!("{name} · {size}")).font(TextStyle::new(12.0, 400.0)).color(t.text2).wrap()),
+                .child(text(format!("{name} · {size}")).font(TextStyle::new(12.0, 400.0)).color(t.text2).wrap_anywhere()),
         );
     }
     v
@@ -831,7 +835,7 @@ fn thumbnail(s: &App, id: &str, name: &str, t: &Theme) -> El {
             .items_center()
             .gap(4.0)
             .child(icon(&ic::FILE_SM, 16.0).color(t.text2))
-            .child(text(clip(name, 40)).font(TextStyle::new(12.0, 400.0)).color(t.text2).wrap().align(rune::Align::Center))
+            .child(text(clip(name, 40)).font(TextStyle::new(12.0, 400.0)).color(t.text2).wrap_anywhere().align(rune::Align::Center))
             .child(text(note).font(TextStyle::new(11.0, 400.0)).color(t.text3)),
     );
     b.label(format!("{name}, {note}"))
@@ -913,7 +917,7 @@ fn arg_lines(args: &Value) -> String {
 }
 
 pub(crate) fn pre(t: &Theme, body: String) -> El {
-    text(body).font(TextStyle::new(t.fs_mono_small, 400.0).mono().lh((t.fs_mono_small * 1.55).round())).color(t.text2).wrap().selectable(true)
+    text(body).font(TextStyle::new(t.fs_mono_small, 400.0).mono().lh((t.fs_mono_small * 1.55).round())).color(t.text2).wrap_anywhere().selectable(true)
 }
 
 fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: &HashMap<&str, &Event>, t: &Theme, k: &Kit) -> Option<El> {
@@ -953,7 +957,7 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
                     .child(text(label).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0)).color(t.text2)),
             );
             if open {
-                c = c.child(text(clip(&str_of(&p["text"]), 4000)).font(t.font_small()).color(t.text2).wrap().selectable(true).pl(16.0));
+                c = c.child(text(clip(&str_of(&p["text"]), 4000)).font(t.font_small()).color(t.text2).wrap_anywhere().selectable(true).pl(16.0));
             }
             c
         }
@@ -985,8 +989,8 @@ fn event_row(s: &App, sess: &Session, e: &Event, next_ts: Option<i64>, results: 
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(1.0)
-                        .child(text(format!("Blocked {host}")).font(TextStyle::new(t.fs, if mac { 500.0 } else { 400.0 })).color(t.text).wrap())
-                        .child(t.small(if mac { "This workspace's network rules don't include it." } else { "Not in this workspace's network rules" }).wrap()),
+                        .child(text(format!("Blocked {host}")).font(TextStyle::new(t.fs, if mac { 500.0 } else { 400.0 })).color(t.text).wrap_anywhere())
+                        .child(t.small(if mac { "This workspace's network rules don't include it." } else { "Not in this workspace's network rules" }).wrap_anywhere()),
                 );
             if mac {
                 r = r.border(0.5, t.warn_border);
@@ -1120,7 +1124,8 @@ fn activity(s: &App, sess: &Session, run: &[(&Event, Option<i64>)], results: &Ha
         .child(icon(if open { &ic::CHEVRON_D } else { &ic::CHEVRON_R }, 10.0).color(t.text3));
     let mut c = col().key(key).w_full().gap(6.0).child(head);
     if open {
-        let steps = run.iter().filter_map(each).fold(col().w_full().gap(2.0), |c, r| c.child(r));
+        // Stretched to the line, not `w_full`: with its margin that would end past the column.
+        let steps = run.iter().filter_map(each).fold(col().gap(2.0), |c, r| c.child(r));
         c = c.child(steps.ml(6.0).pl(10.0).border_sides([0.0, 0.0, 0.0, 1.0], Color::WHITE.alpha(0.1)));
     }
     vec![c]
@@ -1259,8 +1264,8 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
             .grow(1.0)
             .min_w(0.0)
             .gap(if mac { 1.0 } else { 2.0 })
-            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap())
-            .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap()),
+            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap_anywhere())
+            .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap_anywhere()),
     );
     let mut card = col()
         .key("approval-card")
@@ -1276,7 +1281,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
         card.fill(t.card).box_shadow(rune::Shadow { spread: 1.0, inset: true, color: t.warn.alpha(0.6), ..Default::default() })
     };
     if !reason.is_empty() {
-        card = card.child(text(format!("“{reason}”")).font(t.font()).color(t.text).wrap());
+        card = card.child(text(format!("“{reason}”")).font(t.font()).color(t.text).wrap_anywhere());
     }
     // What will be posted (a pull request's description), as the user reads it.
     if let Some(details) = a["details"].as_str().map(str::trim).filter(|d| !d.is_empty()) {
@@ -1287,7 +1292,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
                 .py(9.0)
                 .radius(t.box_radius)
                 .border(0.5, t.text2.alpha(0.3))
-                .child(text(details.to_string()).font(t.font()).color(t.text).wrap()),
+                .child(text(details.to_string()).font(t.font()).color(t.text).wrap_anywhere()),
         );
     }
     let mut box_ = col().w_full().px(11.0).py(9.0).radius(t.box_radius).fill(Color::BLACK.alpha(0.25)).child(pre(t, format!("$ {command}")));
@@ -1303,7 +1308,7 @@ fn install_card(s: &App, agent: &str, pending: &PendingApproval, t: &Theme) -> E
         text(note)
             .font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0))
             .color(t.text2)
-            .wrap(),
+            .wrap_anywhere(),
     );
     let mut buttons = row().w_full().gap(if mac { 8.0 } else { 10.0 }).center_y();
     // Settings can let this tool run without asking: offer that here, set apart from the
@@ -1395,8 +1400,8 @@ fn approval_card(s: &App, sess: &Session, e: &Event, t: &Theme) -> Option<El> {
             .grow(1.0)
             .min_w(0.0)
             .gap(if mac { 1.0 } else { 2.0 })
-            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap())
-            .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap()),
+            .child(text(title).font(TextStyle::new(t.fs, MEDIUM)).color(t.text).wrap_anywhere())
+            .child(text(sub).font(TextStyle::new(if mac { 11.5 } else { 13.0 }, 400.0)).color(t.text2).wrap_anywhere()),
     );
     let mut card = col()
         .key("approval-card")

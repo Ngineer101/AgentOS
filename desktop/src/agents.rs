@@ -145,7 +145,7 @@ fn card(s: &App, session: &str, a: &Subagent, calls: &HashMap<&str, &Event>, t: 
         } else {
             lines.into_iter().take(3).collect::<Vec<_>>().join(" ")
         };
-        text(clip(&body, 400)).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0).lh(if mac { 17.0 } else { 18.0 })).color(t.text).wrap().max_lines(3)
+        text(clip(&body, 400)).font(TextStyle::new(if mac { 12.0 } else { 13.0 }, 400.0).lh(if mac { 17.0 } else { 18.0 })).color(t.text).wrap_anywhere().max_lines(3)
     };
     c = c.child(preview.mt(4.0));
     let (sid, cid) = (session.to_string(), a.call_id.clone());
@@ -253,7 +253,7 @@ fn detail(s: &App, session: &str, a: &Subagent, t: &Theme, k: &Kit) -> El {
     let events: &[Event] = tr.map(|t| t.events.as_slice()).unwrap_or(&[]);
     let (calls, results) = by_call(events);
     let kind = if a.agent_type.is_empty() { "Subagent".to_string() } else { format!("{} agent", a.agent_type) };
-    let mut c = col().gap(14.0).child(text(format!("{kind} · {} · {}", status_word(&a.status), elapsed(a))).key("agent-status").font(t.font_small()).color(t.text2).wrap());
+    let mut c = col().gap(14.0).child(text(format!("{kind} · {} · {}", status_word(&a.status), elapsed(a))).key("agent-status").font(t.font_small()).color(t.text2).wrap_anywhere());
 
     // The task, folded when long.
     if !a.prompt.trim().is_empty() {
@@ -269,7 +269,7 @@ fn detail(s: &App, session: &str, a: &Subagent, t: &Theme, k: &Kit) -> El {
             .radius(t.box_radius)
             .fill(Color::WHITE.alpha(if mac { 0.06 } else { 0.07 }))
             .child(heading(t, "Task"))
-            .child(text(shown).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0).lh(if mac { 17.0 } else { 19.0 })).color(t.text).wrap().selectable(true));
+            .child(text(shown).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0).lh(if mac { 17.0 } else { 19.0 })).color(t.text).wrap_anywhere().selectable(true));
         if long {
             task = task.child(
                 text(if open { "Show less" } else { "Show more" })
@@ -294,7 +294,7 @@ fn detail(s: &App, session: &str, a: &Subagent, t: &Theme, k: &Kit) -> El {
                 }
             }
             SubItem::Message(m) => {
-                steps = steps.child(text(m.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0).lh(if mac { 17.0 } else { 19.0 })).color(t.text2).wrap().selectable(true).py(4.0));
+                steps = steps.child(text(m.clone()).font(TextStyle::new(if mac { 12.0 } else { 13.5 }, 400.0).lh(if mac { 17.0 } else { 19.0 })).color(t.text2).wrap_anywhere().selectable(true).py(4.0));
             }
         }
     }

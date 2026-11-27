@@ -566,7 +566,7 @@ impl App {
 pub fn body(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let bg = t.content;
-    let note = |msg: &str| col().key("browser-note").w_full().grow(1.0).center().px(24.0).gap(8.0).child(text(msg.to_string()).font(t.font_small()).color(t.text2).wrap().align(rune::Align::Center));
+    let note = |msg: &str| col().key("browser-note").w_full().grow(1.0).center().px(24.0).gap(8.0).child(text(msg.to_string()).font(t.font_small()).color(t.text2).wrap_anywhere().align(rune::Align::Center));
     let frame = |child: El| col().key("browser-body").w_full().grow(1.0).min_h(0.0).fill(bg).child(child);
     if !s.browser_allowed() {
         let msg = if s.admin { "This host is too old for the browser. Update it to use one here." } else { "The browser is signed in to your accounts on the host. It opens in the app on the host's own computer, not on a paired one." };
@@ -665,7 +665,7 @@ pub fn body(s: &App, t: &Theme) -> El {
     // What the workspace's network settings refused, and why the browser isn't running.
     let foot = |key: &str, child: El| row().key(key.to_string()).w_full().px(12.0).py(6.0).gap(8.0).center_y().border_sides([0.5, 0.0, 0.0, 0.0], t.sep).child(child);
     if let Some(e) = info.and_then(|b| b.error.as_ref()) {
-        body = body.child(foot("browser-error", text(e.clone()).font(t.font_small()).color(t.danger).wrap().grow(1.0).min_w(0.0)));
+        body = body.child(foot("browser-error", text(e.clone()).font(t.font_small()).color(t.danger).wrap_anywhere().grow(1.0).min_w(0.0)));
     }
     if let Some(b) = info.filter(|b| !b.blocked.is_empty()) {
         let hosts = b.blocked.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
@@ -680,7 +680,7 @@ pub fn body(s: &App, t: &Theme) -> El {
         row()
             .gap(6.0)
             .center_y()
-            .child(text(format!("Sign out of every site in {ws_name}'s browser?")).font(t.font_small()).color(t.text).wrap().grow(1.0).min_w(0.0))
+            .child(text(format!("Sign out of every site in {ws_name}'s browser?")).font(t.font_small()).color(t.text).wrap_anywhere().grow(1.0).min_w(0.0))
             .child(t.small_button_danger("Sign Out", |s| s.browser_clear()).key("browser-clear-confirm"))
             .child(t.small_button("Cancel", |s| s.web.confirm_clear = false))
     } else {

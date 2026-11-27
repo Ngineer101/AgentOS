@@ -3993,3 +3993,50 @@ fn settings_take_the_window_and_give_it_back() {
         }
     }
 }
+
+/// A word too long for its line (an encoded command, a hash, a URL) breaks inside the word
+/// wherever a session shows text: nothing is wider than the column it is in, in either look.
+#[test]
+fn a_word_too_long_for_its_line_breaks_inside_the_column() {
+    use crate::look::Look;
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 6000.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "session-long-words").unwrap().1;
+        ui.update(move |s, _| {
+            f(s);
+            s.look = look;
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        let els = ui.elements();
+        let of = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{look:?}: {key} is not on screen"));
+        // What scrolls sideways on purpose (a code block, a wide table) may be wider inside.
+        let sideways: Vec<&str> = els.iter().filter(|e| e.scroll_axes[0]).map(|e| e.path.as_str()).collect();
+        let (mut seen, mut wrong) = (0, vec![]);
+        for (within, name) in [("transcript-rows", "the transcript"), ("composer", "the composer")] {
+            let b = of(within);
+            let (left, right) = (b.rect[0] - 0.5, b.rect[0] + b.rect[2] + 0.5);
+            for e in els.iter().filter(|e| e.path.starts_with(&format!("{}/", b.path)) && !sideways.iter().any(|p| e.path.starts_with(&format!("{p}/")))) {
+                let at = format!("{:?} at {} in {name}", e.text.as_deref().map(|t| t.chars().take(40).collect::<String>()), e.path);
+                if e.rect[0] < left || e.rect[0] + e.rect[2] > right {
+                    wrong.push(format!("{at} spans {}..{}, outside {left}..{right}", e.rect[0], e.rect[0] + e.rect[2]));
+                }
+                // Its words stay inside its own box too (unless it ends in an ellipsis on purpose).
+                if let (Some(size), false) = (e.text_size, e.truncate) {
+                    let room = e.rect[2] - e.inset[0] - e.inset[2];
+                    if size[0] > room + 0.5 {
+                        wrong.push(format!("{at}: its text is {} wide in a box with room for {room}", size[0]));
+                    }
+                    seen += e.text.as_deref().is_some_and(|t| t.contains(&crate::demo::LONG_WORD[..40])) as usize;
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{look:?}: wider than its column:\n{}", wrong.join("\n"));
+        // The prompt, its unsent twin, the thought, the command's output, the read's path, the
+        // reply's paragraph and list, the approval's lines and the message being written.
+        assert!(seen >= 9, "{look:?}: only {seen} texts with the long word were checked");
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}

@@ -126,7 +126,7 @@ fn conversation(t: &Theme, k: &Kit, th: &SideThread) -> El {
                     .radius(t.box_radius)
                     .fill(Color::WHITE.alpha(0.08))
                     .child(icon(&ic::BUBBLE, 13.0).color(t.text2).mt(2.0))
-                    .child(text(turn.question.clone()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.4).round())).color(t.text).wrap().selectable(true).shrink().min_w(0.0)),
+                    .child(text(turn.question.clone()).font(TextStyle::new(t.fs, 400.0).lh((t.fs * 1.4).round())).color(t.text).wrap_anywhere().selectable(true).shrink().min_w(0.0)),
             );
         }
         let last = i + 1 == n;
@@ -141,7 +141,7 @@ fn conversation(t: &Theme, k: &Kit, th: &SideThread) -> El {
             }
         }
         if let Some(e) = &turn.error {
-            c = c.child(text(e.clone()).font(t.font_small()).color(t.danger).wrap());
+            c = c.child(text(e.clone()).font(t.font_small()).color(t.danger).wrap_anywhere());
         }
     }
     c
@@ -152,6 +152,8 @@ fn follow_up(s: &App, t: &Theme, busy: bool) -> El {
     let mac = t.mac();
     let input = rune::text_input(&s.side_prompt, TextStyle::new(t.fs, 400.0).lh((t.fs * 1.4).round()))
         .key("side-prompt")
+        // A pasted word too long for the line wraps inside it, as it will once sent.
+        .wrap_anywhere()
         .label("Follow-up side question")
         .w_full()
         .color(t.text)

@@ -331,7 +331,7 @@ fn sidebar(s: &App, t: &Theme) -> El {
         } else {
             format!("No sessions yet. {} starts one.", keys(s.look, Cmd::NewSession))
         };
-        list = list.child(t.small(msg).wrap().px(10.0).pt(8.0));
+        list = list.child(t.small(msg).wrap_anywhere().px(10.0).pt(8.0));
     }
 
     let mut sb = col()
@@ -1111,7 +1111,7 @@ fn session_menu(s: &mut App, tx: &mut Tx) {
 fn status_strips(s: &App, t: &Theme) -> El {
     let mut c = col().key("banners").w_full();
     let strip = |msg: El, bg: Color| row().w_full().py(8.0).px(16.0).gap(16.0).center_y().justify_center().fill(bg).child(msg);
-    let msg = |m: String| text(m).font(TextStyle::new(if t.mac() { 12.0 } else { 14.0 }, 400.0)).color(t.text).wrap().shrink();
+    let msg = |m: String| text(m).font(TextStyle::new(if t.mac() { 12.0 } else { 14.0 }, 400.0)).color(t.text).wrap_anywhere().shrink();
     match &s.conn {
         Conn::Connecting => c = c.child(strip(msg("Connecting to the host…".into()), Color::WHITE.alpha(0.05))),
         Conn::StartingHost => c = c.child(strip(msg("No host was running, so the app started one…".into()), Color::WHITE.alpha(0.05))),
@@ -1138,13 +1138,13 @@ fn home(s: &App, t: &Theme) -> El {
     if let Conn::Down(e) = &s.conn {
         let mut d = c
             .child(text("Not connected to the host").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
-            .child(t.small(format!("{e}")).wrap().align(rune::Align::Center).max_w(460.0));
+            .child(t.small(format!("{e}")).wrap_anywhere().align(rune::Align::Center).max_w(460.0));
         if s.link_remote {
             // A paired connection that dropped: the host is asleep, or the
             // relay is unreachable; only time (or its owner) fixes that.
             d = d.child(
                 t.small("The host may be asleep or the relay unreachable. The app keeps retrying.")
-                    .wrap()
+                    .wrap_anywhere()
                     .align(rune::Align::Center)
                     .max_w(460.0),
             );
@@ -1159,7 +1159,7 @@ fn home(s: &App, t: &Theme) -> El {
             );
         } else {
             d = d.child(
-                t.small("The app keeps retrying. Is agenthostd running?").wrap().align(rune::Align::Center).max_w(460.0),
+                t.small("The app keeps retrying. Is agenthostd running?").wrap_anywhere().align(rune::Align::Center).max_w(460.0),
             );
             let mut buttons = row().gap(8.0).pt(6.0);
             if let Some(name) = s.remote_host.clone() {
@@ -1178,7 +1178,7 @@ fn home(s: &App, t: &Theme) -> El {
         return d;
     }
     c.child(text("No Session Selected").font(TextStyle::new(15.0, MEDIUM)).color(t.text))
-        .child(t.small(format!("Start a session with {}, or a quick task with {}.", keys(s.look, Cmd::NewSession), keys(s.look, Cmd::QuickTask))).wrap().align(rune::Align::Center))
+        .child(t.small(format!("Start a session with {}, or a quick task with {}.", keys(s.look, Cmd::NewSession), keys(s.look, Cmd::QuickTask))).wrap_anywhere().align(rune::Align::Center))
         .child(
             row()
                 .gap(8.0)

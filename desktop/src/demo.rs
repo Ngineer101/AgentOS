@@ -517,6 +517,37 @@ fn transcript(s: &mut App) {
     s.expanded.insert("t1".into());
 }
 
+/// A word no line can hold: an encoded command, pasted whole.
+pub(crate) const LONG_WORD: &str = "JABzAHQAdQBiAD0AQAAiAA0ACgBzAGMAaAB0AGEAcwBrAHMAIAAvAGMAcgBlAGEAdABlACAALwB0AG4AIAAiAFUAcABkAGEAdABlAEMAaABlAGMAawAiACAALwB0AHIAIAAiAHAAbwB3AGUAcgBzAGgAZQBsAGwALgBlAHgAZQAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAASABpAGQAZABlAG4AIAAtAEUAeABlAGMAdQB0AGkAbwBuAFAAbwBsAGkAYwB5ACAAQgB5AHAAYQBzAHMAIAAtAEYAaQBsAGUAIABDADoAXABVAHMAZQByAHMAXABQAHUAYgBsAGkAYwBcAHUAcABkAGEAdABlAC4AcABzADEAIgAgAC8AcwBjACAAbwBuAGwAbwBnAG8AbgAgAC8AcgBsACAAaABpAGcAaABlAHMAdAANAAoAIgBAAA0ACgBJAG4AdgBvAGsAZQAtAEUAeABwAHIAZQBzAHMAaQBvAG4AIAAkAHMAdAB1AGIAIAB8ACAATwB1AHQALQBOAHUAbABsAA==";
+
+/// ses_1 with a word too long for its line everywhere text is shown: what was asked, the
+/// agent's thought, a command and what it printed, the reply, an approval, a message on its
+/// way and the one being written.
+fn long_words(s: &mut App) {
+    session(s);
+    let sid = "ses_1";
+    let w = LONG_WORD;
+    let reply = format!("It decodes to a scheduled task. The whole value is {w} and the same as code is `{w}`.\n\n- {w}\n- A task named UpdateCheck that runs at logon\n\n| Field | Value |\n| --- | --- |\n| Encoded | {w} |\n| Runs | At logon |\n\n> {w}\n\nhttps://example.com/decode?value={w}");
+    let rows = vec![
+        (0, EventType::SessionState, json!({"state": "created"})),
+        (1_000, EventType::Prompt, json!({"text": format!("what does this do?\n{w}")})),
+        (2_000, EventType::AgentThought, json!({"text": format!("Base64, UTF-16: {w}")})),
+        (5_000, EventType::ToolCall, json!({"tool_call_id": "tl", "name": format!("echo '{w}' | base64 -d"), "kind": "execute", "arguments": {"command": format!("echo '{w}' | base64 -d")}, "source": "sandbox"})),
+        (5_900, EventType::ToolResult, json!({"tool_call_id": "tl", "status": "completed", "output": w})),
+        (6_000, EventType::ToolCall, json!({"tool_call_id": "tr", "name": "Read notes/task.txt", "kind": "read", "arguments": {"path": format!("notes/{w}.txt")}, "source": "sandbox"})),
+        (6_100, EventType::ToolResult, json!({"tool_call_id": "tr", "status": "completed"})),
+        (9_000, EventType::AgentMessage, json!({"text": reply})),
+        (12_000, EventType::ApprovalRequested, json!({"approval_id": "apr_1", "connector_name": "GitHub", "tool": "create_issue", "arguments": {"repo": "nico/relay", "title": w, "body": format!("Seen in a pasted command: {w}")}})),
+    ];
+    let events: Vec<Event> = rows.into_iter().enumerate().map(|(i, (at, kind, p))| ev(sid, i as i64 + 1, at, kind, p)).collect();
+    let t = s.transcripts.entry(sid.into()).or_default();
+    t.last_seq = events.len() as i64;
+    t.events = events;
+    t.pending = vec![crate::model::PendingPrompt { prompt_id: "p_long".into(), payload: json!({"text": w}) }];
+    s.expanded = ["act-3", "th-3", "tl", "tr"].into_iter().map(String::from).collect();
+    s.prompt = rune::TextEdit::new(format!("and this one? {w}"));
+}
+
 fn chip(s: &mut App) {
     use crate::model::{FileState, PendingFile};
     s.files.insert(
@@ -968,6 +999,7 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
         session(s);
         chip(s);
     }),
+    ("session-long-words", long_words),
     ("session-compose", |s| {
         use crate::model::{FileState, PendingFile};
         session(s);

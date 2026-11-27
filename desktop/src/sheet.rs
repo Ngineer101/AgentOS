@@ -512,8 +512,8 @@ pub fn confirm_archive(s: &App, id: &str, t: &Theme) -> El {
         .fill(t.sheet)
         .shadow(20.0, 50.0, Color::BLACK.alpha(0.5))
         .modal(true, |s: &mut App| s.confirm_archive = None)
-        .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap())
-        .child(t.small("The agent stops and the session moves to Archived.").wrap())
+        .child(text("Archive this session?").font(TextStyle::new(if mac { 13.0 } else { 16.0 }, MEDIUM)).color(t.text).wrap_anywhere())
+        .child(t.small("The agent stops and the session moves to Archived.").wrap_anywhere())
         .child(buttons);
     panel = if mac { panel.radius(t.dialog_radius).border(0.5, Color::WHITE.alpha(0.18)) } else { panel.radius(t.dialog_radius).border(1.0, Color::BLACK.alpha(0.6)) };
     scrim("archive-layer", 0.32, |s| s.confirm_archive = None).center().child(panel)

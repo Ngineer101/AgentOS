@@ -103,7 +103,7 @@ fn mac_toast(t: &Theme, sh: &Shown) -> El {
         ToastKind::Error => (&ic::ERROR, t.danger),
         ToastKind::Approval => (&ic::WARN, t.warn),
     };
-    let mut body = col().grow(1.0).min_w(0.0).gap(8.0).child(text(sh.text.clone()).font(TextStyle::new(12.0, 400.0).lh(16.0)).color(t.text).wrap().selectable(true));
+    let mut body = col().grow(1.0).min_w(0.0).gap(8.0).child(text(sh.text.clone()).font(TextStyle::new(12.0, 400.0).lh(16.0)).color(t.text).wrap_anywhere().selectable(true));
     if let Some(a) = sh.action {
         body = body.child(row().gap(6.0).child(t.small_button_tx(a, act(sh)).key(format!("{}-action", sh.key))));
     }
@@ -150,7 +150,7 @@ fn gnome_toast(t: &Theme, sh: &Shown) -> El {
         .shadow(4.0, 18.0, Color::BLACK.alpha(0.4))
         .role(if sh.kind == ToastKind::Error { "alert" } else { "status" })
         .label(sh.text.clone())
-        .child(text(sh.text.clone()).font(TextStyle::new(14.5, 400.0).lh(20.0)).color(if sh.kind == ToastKind::Error { t.danger } else { t.text }).wrap().shrink().min_w(0.0).mr(6.0));
+        .child(text(sh.text.clone()).font(TextStyle::new(14.5, 400.0).lh(20.0)).color(if sh.kind == ToastKind::Error { t.danger } else { t.text }).wrap_anywhere().shrink().min_w(0.0).mr(6.0));
     if let Some(a) = sh.action {
         r = r.child(
             row()

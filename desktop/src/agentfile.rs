@@ -487,7 +487,7 @@ fn status(s: &App, id: &str, t: &Theme) -> Option<El> {
         }
         Download::Failed(e) => line
             .child(icon(&ic::ERROR, 12.0).color(t.danger))
-            .child(text(format!("Couldn't download it: {}. Click it to try again.", clip(e, 200))).font(t.font_small()).color(t.text2).wrap().shrink()),
+            .child(text(format!("Couldn't download it: {}. Click it to try again.", clip(e, 200))).font(t.font_small()).color(t.text2).wrap_anywhere().shrink()),
         Download::Saved(path) => {
             let (id, id2) = (id.to_string(), id.to_string());
             line.child(t.small(format!("Saved in {}", folder_label(path))))

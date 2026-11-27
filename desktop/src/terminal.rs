@@ -500,7 +500,7 @@ impl App {
 pub fn body(s: &App, t: &Theme) -> El {
     let mac = t.mac();
     let bg = color(pane_bg(t));
-    let note = |msg: &str| col().key("term-note").w_full().grow(1.0).center().px(24.0).child(text(msg.to_string()).font(t.font_small()).color(t.text2).wrap().align(rune::Align::Center));
+    let note = |msg: &str| col().key("term-note").w_full().grow(1.0).center().px(24.0).child(text(msg.to_string()).font(t.font_small()).color(t.text2).wrap_anywhere().align(rune::Align::Center));
     if !s.terminal_allowed() {
         let msg = if s.admin { "This host is too old for terminals. Update it to use one here." } else { "A terminal is a shell on the host, outside every sandbox. It opens in the app on the host's own computer, not on a paired one." };
         return col().key("term-body").w_full().grow(1.0).min_h(0.0).fill(bg).child(note(msg));
