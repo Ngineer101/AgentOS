@@ -3422,9 +3422,23 @@ fn the_browser_lays_out_and_sends_what_you_do() {
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }
 
+/// Puts `$AGENTHOST_BROWSER` back as it was.
+struct BrowserEnv(Option<std::ffi::OsString>);
+impl Drop for BrowserEnv {
+    fn drop(&mut self) {
+        match &self.0 {
+            Some(v) => std::env::set_var("AGENTHOST_BROWSER", v),
+            None => std::env::remove_var("AGENTHOST_BROWSER"),
+        }
+    }
+}
+
 /// The browser's protocol against a real host, in process: the app reads what the host says
-/// about its browser, and either a tab opens (Chromium starts) or the panel shows why not
-/// (inside an agent's sandbox Chromium can't start). A paired phone gets no browser.
+/// about its browser, and a paired phone gets none. Chromium itself starts only when asked
+/// (`AGENTHOST_TEST_BROWSER=1`, as the host's `browser_core` is): then a tab opens. Otherwise
+/// the host's browser is a program that exits at once, and the panel shows why nothing
+/// started. A real Chromium is not for every run: inside an agent's sandbox it aborts as it
+/// starts, and each abort is a core dump and a crash notice on the desktop.
 #[test]
 fn the_browser_against_a_real_host() {
     use agenthost_host::api::{serve_connection, Principal};
@@ -3432,6 +3446,12 @@ fn the_browser_against_a_real_host() {
     use tokio::sync::mpsc;
 
     let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let real = std::env::var_os("AGENTHOST_TEST_BROWSER").is_some();
+    let _env = BrowserEnv(std::env::var_os("AGENTHOST_BROWSER"));
+    if !real {
+        let stand_in = ["/usr/bin/false", "/bin/false"].into_iter().find(|p| std::path::Path::new(p).is_file()).expect("no `false` to stand in for the browser");
+        std::env::set_var("AGENTHOST_BROWSER", stand_in);
+    }
     let root = std::env::var_os("AGENTHOST_TEST_TMP").unwrap_or_else(|| std::env::temp_dir().into_os_string());
     let dir = tempfile::Builder::new().prefix("ahd").tempdir_in(root).unwrap();
     let mut cfg = agenthost_host::HostConfig::in_dir(dir.path());
@@ -3490,6 +3510,7 @@ fn the_browser_against_a_real_host() {
     let opened = rpc(&mut app, &tx, &mut rx, m::BROWSER_OPEN, json!({"workspace_id": ws, "url": "about:blank", "width": 600, "height": 500}));
     match opened {
         Ok(tab) => {
+            assert!(real, "the stand-in can't have started a browser");
             app.apply(bridge::FromHost::Reply { tag: bridge::Tag::BrowserOpened, result: Ok(tab) });
             app.browser_tick();
             assert!(app.web.attached.is_some(), "the new tab is attached to");
@@ -3498,7 +3519,8 @@ fn the_browser_against_a_real_host() {
             rpc(&mut app, &tx, &mut rx, m::BROWSER_STOP, json!({"workspace_id": ws})).unwrap();
         }
         Err(e) => {
-            // It could not start here: the host said why, and so does the panel.
+            // It did not start: the host said why, and so does the panel.
+            assert!(!real, "Chromium was asked for and did not start: {e:?}");
             assert!(e.message.contains("did not start"), "{e:?}");
             rpc(&mut app, &tx, &mut rx, m::BROWSER_LIST, json!({})).unwrap();
             let b = app.web.browsers.get(&ws).expect("browser.changed told the app");
