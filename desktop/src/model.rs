@@ -985,6 +985,23 @@ impl App {
         }
     }
 
+    /// The sheet's workspaces in the order it lists them: Quick task, then the folders.
+    pub fn sheet_workspaces(&self) -> Vec<&Workspace> {
+        let mut ws: Vec<&Workspace> = self.workspaces.iter().collect();
+        ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
+        ws
+    }
+
+    /// ⌘1…9 (Ctrl+1…9) in the sheet: start a session in the n-th workspace it lists, as the
+    /// login picking that row would show (the workspace's default, else the one picked). With
+    /// no login to start as, the row is picked and the sheet stays to ask.
+    pub fn start_in_workspace_at(&mut self, n: u8) {
+        let Some(id) = self.sheet_workspaces().get(n as usize - 1).map(|w| w.workspace_id.clone()) else { return };
+        self.menu = None;
+        self.pick_workspace(&id);
+        self.start_from_sheet();
+    }
+
     /// Set (or with `None` clear) the login new sessions in a workspace start with.
     pub fn set_default_login(&self, ws: &str, key: Option<&str>) {
         let agents = self.info.as_ref().map(|i| i.agents.as_slice()).unwrap_or_default();

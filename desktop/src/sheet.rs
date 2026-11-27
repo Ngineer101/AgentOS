@@ -2,7 +2,7 @@
 //! keyboard shortcuts window.
 
 use crate::look::MEDIUM;
-use crate::commands::{label as keys, Cmd};
+use crate::commands::{label as keys, pick_label, Cmd};
 use crate::icons as ic;
 use crate::look::{agent_badge, Btn, Theme};
 use crate::model::{login_key, App, Menu};
@@ -73,10 +73,8 @@ pub fn new_session(s: &App, t: &Theme) -> El {
 
 fn workspace_rows(s: &App, t: &Theme) -> Vec<El> {
     let mac = t.mac();
-    let mut ws: Vec<&Workspace> = s.workspaces.iter().collect();
-    ws.sort_by_key(|w| w.kind != WorkspaceKind::Scratch);
     let mut rows = vec![];
-    for w in ws {
+    for (i, w) in s.sheet_workspaces().into_iter().enumerate() {
         let quick = w.kind == WorkspaceKind::Scratch;
         let on = s.new_ws.as_deref() == Some(w.workspace_id.as_str());
         let id = w.workspace_id.clone();
@@ -101,11 +99,13 @@ fn workspace_rows(s: &App, t: &Theme) -> Vec<El> {
             .child(t.radio(on, true))
             .child(row().w(16.0).center().child(glyph))
             .child(col().grow(1.0).min_w(0.0).child(t.label(name)).child(t.small(detail).truncate()));
-        if mac && quick {
-            r = r.child(t.faint(keys(s.look, Cmd::QuickTask)));
-        } else if mac && live > 0 {
+        if mac && !quick && live > 0 {
             // Informational: each session works on a branch of its own, so several can run.
             r = r.child(text(format!("{live} live session{}", if live == 1 { "" } else { "s" })).font(TextStyle::new(11.0, 400.0)).color(t.text3));
+        }
+        // The first nine have a key that starts a session there: ⌘1…9 (Ctrl+1…9).
+        if i < 9 {
+            r = r.child(text(pick_label(s.look, i + 1)).key(format!("pick-key-{}", i + 1)).font(TextStyle::new(if mac { 11.0 } else { 12.0 }, 400.0)).color(if mac { t.text3 } else { t.text2 }));
         }
         rows.push(r);
     }
@@ -336,7 +336,7 @@ fn gnome_dialog(s: &App, t: &Theme) -> El {
         Some(b) => body.child(b),
         None => body,
     };
-    let body = body.child(t.small("Ctrl+Enter starts the session").font(TextStyle::new(13.0, 400.0)));
+    let body = body.child(t.small("Ctrl+1…9 starts in that workspace, Ctrl+Enter in the one picked").font(TextStyle::new(13.0, 400.0)));
     let header = row()
         .w_full()
         .h(48.0)
@@ -390,6 +390,7 @@ pub fn shortcut_sections(s: &App) -> Vec<(&'static str, Vec<(&'static str, Strin
             vec![
                 ("New session", l(Cmd::NewSession)),
                 ("New quick task", l(Cmd::QuickTask)),
+                ("Start in workspace 1–9 (in New Session)", if s.look.mac() { "⌘1…9".to_string() } else { "Ctrl+1…9".to_string() }),
                 ("Next / previous session", next_prev),
                 ("Go to session 1–9", jump),
                 ("Search sessions", l(Cmd::Search)),

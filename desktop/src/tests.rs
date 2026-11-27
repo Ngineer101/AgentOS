@@ -2279,6 +2279,89 @@ fn compact_sidebar_pins_collapses_and_shows_more() {
     assert!(!app.has_pins());
 }
 
+/// In the New Session sheet ⌘1…9 (Ctrl+1…9) start a session in the workspace on that row,
+/// as its default login (else the login picked), and each row shows its key. No session is
+/// jumped to; with no login to start as, the row is picked and the sheet stays.
+#[test]
+fn the_sheets_numbers_start_in_its_workspaces() {
+    use crate::look::Look;
+    use rune::{Key, KeyEvent, Mods};
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    let none = Mods::default();
+    for look in [Look::Mac, Look::Gnome] {
+        let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+        let f = crate::demo::SCENES.iter().find(|(n, _)| *n == "new").unwrap().1;
+        ui.update(move |s, _| {
+            s.look = look;
+            f(s);
+        });
+        ui.frame(0.016);
+        ui.frame(0.016);
+        let read = |ui: &mut rune::Runtime<model::App>| {
+            let r = std::rc::Rc::new(std::cell::RefCell::new((vec![], None, None, false, Screen::Home)));
+            let r2 = r.clone();
+            ui.update_if(move |s, _| {
+                *r2.borrow_mut() = (s.sheet_workspaces().iter().map(|w| w.workspace_id.clone()).collect::<Vec<_>>(), s.new_ws.clone(), s.new_agent.clone(), s.new_open, s.screen.clone());
+                false
+            });
+            let got = r.borrow().clone();
+            got
+        };
+        let (order, _, _, _, screen) = read(&mut ui);
+        assert!(order.len() >= 3 && order.len() < 9, "{look:?}: the scene has a few workspaces");
+        for n in 1..=order.len() {
+            assert!(ui.find(&format!("pick-key-{n}")).is_some(), "{look:?}: row {n} shows its key");
+        }
+        assert!(ui.find(&format!("pick-key-{}", order.len() + 1)).is_none(), "{look:?}");
+        // The Mac look's ⌘ is the logo key on this (Linux) build.
+        let press = |ui: &mut rune::Runtime<model::App>, n: usize| {
+            let c = char::from_digit(n as u32, 10).unwrap();
+            let ev = if look == Look::Mac { KeyEvent { key: Key::Text(c.to_string()), mods: Mods { logo: true, ..none } } } else { KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ctrl: true, ..none } } };
+            ui.key(ev);
+            ui.frame(0.016);
+            ui.frame(0.016);
+        };
+        let reopen = |ui: &mut rune::Runtime<model::App>| {
+            ui.update(|s, _| s.open_new_session(false));
+            ui.frame(0.016);
+            ui.frame(0.016);
+        };
+        for n in [3, 1, 2] {
+            // A number past the list does nothing.
+            press(&mut ui, 9);
+            assert!(read(&mut ui).3, "{look:?}: 9 has no row");
+            press(&mut ui, n);
+            let (_, ws, login, open, now) = read(&mut ui);
+            assert_eq!(ws.as_deref(), Some(order[n - 1].as_str()), "{look:?}: {n} starts in row {n}");
+            assert!(login.is_some() && !open, "{look:?}: started, so the sheet closed");
+            assert!(ui.find("new-session").is_none(), "{look:?}");
+            assert!(now == screen, "{look:?}: no session was jumped to");
+            reopen(&mut ui);
+        }
+        // The relay workspace starts as its default login whatever was picked.
+        let relay = order.iter().position(|w| w == "ws_relay").unwrap() + 1;
+        ui.update(|s, _| s.new_agent = Some("codex".into()));
+        press(&mut ui, relay);
+        let (_, ws, login, open, _) = read(&mut ui);
+        assert!(ws.as_deref() == Some("ws_relay") && login.as_deref() == Some("prof_work") && !open, "{look:?}: {login:?}");
+        // No login to start as: the row is picked and the sheet stays to ask.
+        reopen(&mut ui);
+        ui.update(|s, _| {
+            for a in &mut s.info.as_mut().unwrap().agents {
+                a.available = false;
+            }
+            s.new_agent = None;
+        });
+        ui.frame(0.016);
+        let other = if relay == 3 { 2 } else { 3 };
+        press(&mut ui, other);
+        let (_, ws, login, open, _) = read(&mut ui);
+        assert!(ws.as_deref() == Some(order[other - 1].as_str()) && login.is_none() && open, "{look:?}: {ws:?} {login:?} {open}");
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}
+
 /// A workspace's "+" starts at once as the workspace's default login; with no login to use,
 /// it opens the sheet instead.
 #[test]

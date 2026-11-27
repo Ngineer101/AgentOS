@@ -152,6 +152,11 @@ pub fn label(look: Look, cmd: Cmd) -> String {
     s.to_string()
 }
 
+/// How the New Session sheet writes the key that starts a session in its n-th workspace.
+pub fn pick_label(look: Look, n: usize) -> String {
+    if look.mac() { format!("⌘{n}") } else { format!("Ctrl+{n}") }
+}
+
 pub(crate) fn matches(look: Look, cmd: Cmd, ev: &KeyEvent, tx: &Tx) -> bool {
     let Some(spec) = chord(look, cmd) else { return false };
     let Ok(ch) = Chord::parse(&spec) else { return false };
@@ -171,6 +176,15 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if Chord::parse(start).is_ok_and(|c| c.matches_tx(ev, tx)) {
             s.start_from_sheet();
             return true;
+        }
+        // ⌘1…9 / Ctrl+1…9 start a session in the sheet's n-th workspace (on a Mac, Jump's keys: see `run`).
+        if !look.mac() {
+            for n in 1..=9u8 {
+                if Chord::parse(&format!("ctrl+{n}")).is_ok_and(|c| c.matches_tx(ev, tx)) {
+                    s.start_in_workspace_at(n);
+                    return true;
+                }
+            }
         }
     }
     // ⌘↩ / Ctrl+Enter saves the automation being edited.
@@ -284,6 +298,8 @@ pub fn run(s: &mut App, cmd: Cmd, tx: &mut Tx) {
             let id = order[j].clone();
             s.open_session(&id);
         }
+        // In the New Session sheet the numbers are its workspaces'.
+        Cmd::Jump(n) if s.new_open => s.start_in_workspace_at(n),
         Cmd::Jump(n) => {
             if let Some(id) = s.numbered().get(n as usize - 1).cloned() {
                 s.close_overlays();
