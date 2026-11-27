@@ -97,10 +97,7 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
         .child(header)
         .child(body);
     pane = if mac { pane.fill(t.content).border_sides([0.0, 0.0, 0.0, 0.5], Color::BLACK.alpha(0.6)) } else { pane.fill(t.sidebar_top).border_sides([0.0, 0.0, 0.0, 1.0], Color::BLACK.alpha(0.35)) };
-    if shown != PanelTab::Side {
-        pane = pane.child(grip(s.panel_width(t)));
-    }
-    pane
+    pane.child(grip(s.panel_width(t)))
 }
 
 fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
@@ -133,8 +130,8 @@ fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
     if on { r.fill(Color::WHITE.alpha(0.10)) } else { r.hover(Color::WHITE.alpha(0.05)) }
 }
 
-/// The panel's leading edge: drag it to make the terminal wider or narrower (kept between
-/// launches), double-press it for the look's own width.
+/// The panel's leading edge: drag it to make the tab on screen wider or narrower (kept
+/// between launches), double-press it for the look's own width.
 fn grip(w: f32) -> El {
     const GRIP: f32 = 6.0;
     el().key("panel-grip")
@@ -148,13 +145,13 @@ fn grip(w: f32) -> El {
         .fill(Color::TRANSPARENT)
         .raise()
         .on_drag(move |s: &mut App, d: &mut rune::Drag, _: &mut Tx| match d.phase {
-            rune::Phase::Down if d.clicks == 2 => s.panel_w = None,
+            rune::Phase::Down if d.clicks == 2 => s.resize_panel(None, true),
             rune::Phase::Down => d.data = w,
             // The edge is the leading one: dragging left widens.
-            rune::Phase::Move if d.clicks < 2 => s.resize_panel(d.data - d.dx, false),
-            rune::Phase::Up if d.cancelled() && d.clicks < 2 => s.resize_panel(d.data, true),
-            rune::Phase::Up if d.clicks < 2 => s.resize_panel(d.data - d.dx, true),
+            rune::Phase::Move if d.clicks < 2 => s.resize_panel(Some(d.data - d.dx), false),
+            rune::Phase::Up if d.cancelled() && d.clicks < 2 => s.resize_panel(Some(d.data), true),
+            rune::Phase::Up if d.clicks < 2 => s.resize_panel(Some(d.data - d.dx), true),
             _ => {}
         })
-        .on_step(move |s: &mut App, delta: i32, _: &mut Tx| s.resize_panel(w - delta as f32 * 16.0, true))
+        .on_step(move |s: &mut App, delta: i32, _: &mut Tx| s.resize_panel(Some(w - delta as f32 * 16.0), true))
 }

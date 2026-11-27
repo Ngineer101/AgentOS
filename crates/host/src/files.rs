@@ -10,10 +10,7 @@
 use crate::ctx::Ctx;
 use crate::worktree;
 use agenthost_proto::*;
-use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e.to_string())
@@ -23,9 +20,11 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
 pub enum Source {
     /// A folder on disk; `git` when it is in a repository.
     Dir { root: PathBuf, git: bool },
-    /// A branch of the repository at `repo`: the session's worktree was
-    /// removed when it was archived, and its commits are what is left.
-    Branch { repo: PathBuf, branch: String },
+    /// Commits of the repository at `repo`, without a folder: the session's
+    /// branch (`refs/heads/…`) once its worktree was removed when it was
+    /// archived, or what a new session starts from while its worktree is
+    /// still being checked out.
+    Rev { repo: PathBuf, rev: String },
 }
 
 /// `git -C dir args`, its output as it came.
@@ -57,11 +56,34 @@ async fn source(ctx: &Ctx, s: &Session, w: &Workspace) -> Source {
         if root.join(".git").exists() {
             return Source::Dir { root, git: true };
         }
-        return Source::Branch { repo: PathBuf::from(&w.path), branch: wt.branch.clone() };
+        let repo = PathBuf::from(&w.path);
+        if not_made_yet(&repo, s, wt).await {
+            return Source::Rev { rev: start_point(&repo).await.0, repo };
+        }
+        return Source::Rev { repo, rev: format!("refs/heads/{}", wt.branch) };
     }
     let root = PathBuf::from(&w.path);
     let git = git_line(&root, &["rev-parse", "--is-inside-work-tree"]).await.is_ok_and(|v| v == "true");
     Source::Dir { root, git }
+}
+
+/// Whether a session without its folder is a new one whose worktree the
+/// host has named but not made yet (see [`worktree::add`]): it has yet to
+/// start, and its branch isn't there either. (A session coming back from
+/// the archive is starting too, but has its branch.)
+async fn not_made_yet(repo: &Path, s: &Session, wt: &SessionWorktree) -> bool {
+    matches!(s.state, SessionState::Created | SessionState::Starting)
+        && git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}^{{commit}}", wt.branch)]).await.is_err()
+}
+
+/// What a session that is still starting will have in its folder: the
+/// remote's main branch as it was fetched last (the rev, and its name as
+/// `session.changes` gives it), else what the workspace has checked out.
+async fn start_point(repo: &Path) -> (String, Option<String>) {
+    match worktree::remote_main(repo, worktree::Fresh::AsIs).await {
+        Some(m) => (m.reference.clone(), Some(m.reference.trim_start_matches("refs/remotes/").to_string())),
+        None => ("HEAD".into(), None),
+    }
 }
 
 pub async fn changes(ctx: &Ctx, session_id: &str) -> Result<SessionChanges, RpcError> {
@@ -71,46 +93,14 @@ pub async fn changes(ctx: &Ctx, session_id: &str) -> Result<SessionChanges, RpcE
     };
     let dir = PathBuf::from(&wt.path);
     let live = dir.join(".git").exists();
-    changes_of(Path::new(&w.path), live.then_some(dir.as_path()), &wt.branch).await.map_err(RpcError::invalid_state)
-}
-
-/// How long a fetch of the remote's main branch may take before the changes
-/// are measured from what was fetched last.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
-/// A repository's remote is asked at most this often.
-const FETCH_EVERY: Duration = Duration::from_secs(60);
-
-/// The remote's main branch as this repository tracks it
-/// (`refs/remotes/origin/main`), brought up to date first when the remote
-/// answers in time. `None` for a repository without an `origin`.
-async fn remote_main(repo: &Path) -> Option<String> {
-    let mut found = git_line(repo, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).await.ok().filter(|r| r.starts_with("refs/remotes/origin/"));
-    for name in ["main", "master"] {
-        if found.is_none() {
-            let r = format!("refs/remotes/origin/{name}");
-            if git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).await.is_ok() {
-                found = Some(r);
-            }
-        }
+    let repo = Path::new(&w.path);
+    if !live && not_made_yet(repo, &s, wt).await {
+        // Nothing yet: its worktree is still being checked out.
+        let (rev, against) = start_point(repo).await;
+        let base = git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")]).await.map_err(|_| RpcError::invalid_state("the workspace has no commit to compare with"))?;
+        return Ok(SessionChanges { branch: wt.branch.clone(), base, against, patch: String::new(), truncated: false });
     }
-    let r = found?;
-    let name = r.trim_start_matches("refs/remotes/origin/").to_string();
-    static FETCHED: Mutex<Option<HashMap<PathBuf, Instant>>> = Mutex::new(None);
-    let due = {
-        let mut g = FETCHED.lock().unwrap_or_else(|e| e.into_inner());
-        let map = g.get_or_insert_with(HashMap::new);
-        let due = map.get(repo).is_none_or(|t| t.elapsed() >= FETCH_EVERY);
-        if due {
-            map.insert(repo.to_path_buf(), Instant::now());
-        }
-        due
-    };
-    if due {
-        // Offline, or a remote that wants a password: what was fetched last stands.
-        let refspec = format!("+refs/heads/{name}:{r}");
-        let _ = tokio::time::timeout(FETCH_TIMEOUT, worktree::git_command(repo, &["fetch", "--quiet", "--no-tags", "origin", &refspec]).output()).await;
-    }
-    git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).await.ok().map(|_| r)
+    changes_of(repo, live.then_some(dir.as_path()), &wt.branch).await.map_err(RpcError::invalid_state)
 }
 
 /// What `branch` changed since it left the remote's main branch (fetched
@@ -119,7 +109,7 @@ async fn remote_main(repo: &Path) -> Option<String> {
 /// branch `repo` has checked out. With its `worktree`, uncommitted work and
 /// untracked files count too.
 pub async fn changes_of(repo: &Path, worktree: Option<&Path>, branch: &str) -> Result<SessionChanges, String> {
-    let against = remote_main(repo).await;
+    let against = worktree::remote_main(repo, worktree::Fresh::Recent).await.map(|m| m.reference);
     let theirs = git_line(repo, &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", against.as_deref().unwrap_or("HEAD"))]).await.map_err(|_| "the workspace has no commit to compare with".to_string())?;
     let against = against.map(|r| r.trim_start_matches("refs/remotes/").to_string());
     let (dir, head) = match worktree {
@@ -217,7 +207,7 @@ pub async fn list(ctx: &Ctx, session_id: &str) -> Result<SessionFiles, RpcError>
 pub async fn list_of(src: Source) -> Result<SessionFiles, String> {
     let out = match src {
         Source::Dir { root, git: true } => git(&root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).await?,
-        Source::Branch { repo, branch } => git(&repo, &["ls-tree", "-r", "-z", "--name-only", &format!("refs/heads/{branch}")]).await.map_err(|_| "this session's folder and branch are gone".to_string())?,
+        Source::Rev { repo, rev } => git(&repo, &["ls-tree", "-r", "-z", "--name-only", &rev]).await.map_err(|_| "this session's folder and branch are gone".to_string())?,
         Source::Dir { root, git: false } => {
             return tokio::task::spawn_blocking(move || walk(&root)).await.map_err(|e| e.to_string());
         }
@@ -288,8 +278,8 @@ pub async fn read_of(src: Source, path: &str) -> Result<SessionFile, RpcError> {
             f.take(FILE_READ_MAX_BYTES as u64 + 1).read_to_end(&mut data).await.map_err(internal)?;
             (meta.len().max(data.len() as u64), data)
         }
-        Source::Branch { repo, branch } => {
-            let data = git(&repo, &["cat-file", "blob", &format!("refs/heads/{branch}:{path}")]).await.map_err(|_| RpcError::not_found("no such file"))?;
+        Source::Rev { repo, rev } => {
+            let data = git(&repo, &["cat-file", "blob", &format!("{rev}:{path}")]).await.map_err(|_| RpcError::not_found("no such file"))?;
             (data.len() as u64, data)
         }
     };

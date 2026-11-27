@@ -79,7 +79,7 @@ async fn files_list_what_git_would_and_plain_folders_whole() {
     let f = list_of(Source::Dir { root: wt.clone(), git: true }).await.unwrap();
     assert_eq!(f.files, [".gitignore", "README.md", "new.txt", "src/a.rs"]);
 
-    let f = list_of(Source::Branch { repo: repo.clone(), branch: "s".into() }).await.unwrap();
+    let f = list_of(Source::Rev { repo: repo.clone(), rev: "refs/heads/s".into() }).await.unwrap();
     assert_eq!(f.files, [".gitignore", "README.md", "src/a.rs"]);
 
     let plain = t.path().join("plain");
@@ -121,7 +121,7 @@ async fn reads_stay_inside_the_folder() {
     assert!(f.truncated && f.size as usize == long.len() + 1);
     assert_eq!(f.text.unwrap().len(), FILE_READ_MAX_BYTES - 1);
 
-    let f = read_of(Source::Branch { repo, branch: "s".into() }, "README.md").await.unwrap();
+    let f = read_of(Source::Rev { repo, rev: "refs/heads/s".into() }, "README.md").await.unwrap();
     assert_eq!(f.text.as_deref(), Some("# Hi\n"));
 }
 

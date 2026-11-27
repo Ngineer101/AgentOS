@@ -480,7 +480,9 @@ impl SessionPullRequest {
     }
 }
 
-/// Where a session's worktree is and which branch it is on.
+/// Where a session's worktree is and which branch it is on. Named when the
+/// session is created; the folder and the branch are there once it has
+/// started (a session that is `created` or `starting` may not have them yet).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionWorktree {
     pub path: String,

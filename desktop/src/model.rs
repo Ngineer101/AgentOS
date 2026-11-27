@@ -669,6 +669,8 @@ pub struct App {
     pub panel_tab: PanelTab,
     /// The panel's width with the terminal in it, once its edge has been dragged.
     pub panel_w: Option<f32>,
+    /// The panel's width with side questions in it, once its edge has been dragged.
+    pub side_w: Option<f32>,
     /// The host's terminals (the panel's Terminal tab).
     pub terms: crate::terminal::Terms,
     /// The workspace's browser (the panel's Browser tab).
@@ -868,6 +870,7 @@ pub fn init() -> App {
         panel_open: false,
         panel_tab: PanelTab::Terminal,
         panel_w: None,
+        side_w: None,
         terms: Default::default(),
         web: Default::default(),
         browse: Default::default(),
