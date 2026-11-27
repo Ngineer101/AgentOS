@@ -55,6 +55,9 @@ pub struct Theme {
     pub text2: Color,
     pub text3: Color,
     pub sep: Color,
+    /// The line down the right panel's leading edge. Opaque and lighter than `content`: the
+    /// panes on both sides of it can be that colour, and the line is where you drag to resize.
+    pub pane_edge: Color,
     pub accent: Color,
     /// Accent as text (links, "Add Folder…").
     pub accent_text: Color,
@@ -128,6 +131,7 @@ impl Theme {
                 text2: white(0.55),
                 text3: white(0.28),
                 sep: white(0.10),
+                pane_edge: c("#343434"),
                 accent: c("#0a84ff"),
                 accent_text: c("#0a84ff"),
                 ok: c("#32d74b"),
@@ -178,6 +182,7 @@ impl Theme {
                 text2: white(0.55),
                 text3: white(0.40),
                 sep: black(0.30),
+                pane_edge: c("#36363a"),
                 accent: c("#3584e4"),
                 accent_text: c("#78aeed"),
                 ok: c("#57e389"),

@@ -4087,3 +4087,41 @@ fn extra_hosts_wrap_and_keep_add_host_in_reach() {
     }
     std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
 }
+
+/// The right panel's leading edge is a line you can see: lighter than the panes on both sides
+/// of it (a tab's body can be the colour of the main pane) and drawn over the tab's body, with
+/// the grip that resizes the panel on it.
+#[test]
+fn the_right_panels_edge_is_a_line_you_can_see() {
+    use crate::look::{Look, Theme};
+    let _turn = HOST_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AGENTHOST_DESKTOP_OFFLINE", "1");
+    for look in [Look::Mac, Look::Gnome] {
+        for scene in ["terminal", "browser"] {
+            let mut ui = crate::app().headless_runtime((1280.0, 800.0), rune::Env::default());
+            let f = crate::demo::SCENES.iter().find(|(n, _)| *n == scene).unwrap().1;
+            ui.update(move |s, _| {
+                f(s);
+                s.look = look;
+            });
+            ui.frame(0.016);
+            ui.frame(0.016);
+            let els = ui.elements();
+            let of = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{look:?} {scene}: {key} is not on screen"));
+            let (panel, grip, main, edge) = (of("panel"), of("panel-grip"), of("main"), of("panel-edge"));
+            // Opaque, so it looks the same whatever is under it, and lighter than the content.
+            let line = edge.border_color.unwrap_or_else(|| panic!("{look:?} {scene}: the edge draws nothing"));
+            let content = Theme::new(look).content;
+            assert!(main.fill == content, "{look:?} {scene}: the main pane is not the content colour");
+            assert!(line.a == 1.0 && line.luminance() > content.luminance() * 2.0, "{look:?} {scene}: the edge ({}) is lost against the content ({})", line.hex(), content.hex());
+            // It runs down the panel's leading edge, over the tab's body (which has a fill of
+            // its own, and comes first), and the grip is centred on it.
+            assert!(edge.rect[0] == panel.rect[0] && edge.rect[1] == panel.rect[1] && edge.rect[3] == panel.rect[3], "{look:?} {scene}: edge {:?}, panel {:?}", edge.rect, panel.rect);
+            let at = |key: &str| els.iter().position(|e| e.key.as_deref() == Some(key)).unwrap();
+            let body = if scene == "terminal" { "term-body" } else { "browser-body" };
+            assert!(of(body).rect[0] == panel.rect[0] && at("panel-edge") > at(body), "{look:?} {scene}: the body is drawn over the edge");
+            assert!((grip.rect[0] + grip.rect[2] / 2.0 - edge.rect[0]).abs() <= 0.5 && grip.rect[3] == panel.rect[3], "{look:?} {scene}: grip {:?}, edge {:?}", grip.rect, edge.rect);
+        }
+    }
+    std::env::remove_var("AGENTHOST_DESKTOP_OFFLINE");
+}

@@ -3,7 +3,8 @@
 //! panel is a [`PanelTab`], its entry in [`tabs`] and its body in [`pane`].
 //!
 //! macOS draws it as an inspector (a hairline-separated trailing pane under its own toolbar
-//! band); GNOME as the end pane of an AdwOverlaySplitView.
+//! band); GNOME as the end pane of an AdwOverlaySplitView. In both a line you can see runs
+//! down its leading edge: that is where you drag to resize it.
 
 use crate::look::MEDIUM;
 use crate::icons as ic;
@@ -96,8 +97,11 @@ pub fn pane(s: &App, shown: PanelTab, t: &Theme, k: &Kit) -> El {
         .label(shown.title())
         .child(header)
         .child(body);
-    pane = if mac { pane.fill(t.content).border_sides([0.0, 0.0, 0.0, 0.5], Color::BLACK.alpha(0.6)) } else { pane.fill(t.sidebar_top).border_sides([0.0, 0.0, 0.0, 1.0], Color::BLACK.alpha(0.35)) };
-    pane.child(grip(s.panel_width(t)))
+    pane = pane.fill(if mac { t.content } else { t.sidebar_top });
+    // The line down the leading edge, where the grip is. An element of its own, after the
+    // body: a border on the pane is drawn under its children, and a tab's body has a fill.
+    let edge = el().key("panel-edge").pin(Some(0.0), Some(0.0), None, Some(0.0)).w(1.0).border_sides([0.0, 0.0, 0.0, if mac { 0.5 } else { 1.0 }], t.pane_edge);
+    pane.child(edge).child(grip(s.panel_width(t)))
 }
 
 fn tab_button(t: &Theme, tab: PanelTab, on: bool, count: Option<usize>) -> El {
