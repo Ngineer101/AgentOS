@@ -108,6 +108,7 @@ impl Host {
             audit,
             uploads,
             voice,
+            stopping: Default::default(),
         });
         let sessions = SessionManager::new(ctx.clone());
         let screen = crate::screen::Screen::new(ctx.clone());

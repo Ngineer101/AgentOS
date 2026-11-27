@@ -1084,6 +1084,8 @@ impl Actor {
     async fn run(mut self, resume: bool) {
         let exit = match self.start(resume).await {
             Ok(()) => self.main_loop().await,
+            // The agent was stopped along with the host: resume next start.
+            Err(_) if self.ctx.is_stopping() => Exit::Shutdown,
             Err(e) => match e.downcast::<StartFailure>() {
                 Ok(f) => Exit::Failed(f.reason, f.detail),
                 Err(e) => {
@@ -1708,6 +1710,12 @@ impl Actor {
                         Ok(Ok(s)) => s.to_string(),
                         _ => "still running".into(),
                     };
+                    if self.ctx.is_stopping() {
+                        // Stopped with the host (a service manager signals the
+                        // whole group at once). Leave the state as is: the
+                        // next start resumes it and closes an open turn.
+                        return Exit::Shutdown;
+                    }
                     if self.turn.is_some() {
                         self.flush_all();
                         self.append(EventType::TurnEnd, json!({"stop_reason": "error", "host_reason": "the agent exited", "prompt_seq": self.turn_prompt_seq}));

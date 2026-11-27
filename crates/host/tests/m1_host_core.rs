@@ -372,6 +372,39 @@ async fn agent_crash_fails_the_session() {
 }
 
 #[tokio::test]
+async fn agent_exiting_while_the_host_stops_resumes_after() {
+    // A service manager may signal the agents with the host; that is the host
+    // stopping, so the session resumes on the next start instead of failing.
+    let th = TestHost::start().await;
+    let (c, mut n) = th.client().await;
+    let sid = new_session(&th, &c).await;
+    c.subscribe(&sid, 0).await.unwrap();
+    c.prompt(&sid, "first").await.unwrap();
+    collect_until(&mut n, T, turn_end).await;
+    th.host.ctx.set_stopping();
+    c.prompt(&sid, "crash").await.unwrap();
+    for _ in 0..100 {
+        if th.host.sessions.live_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(th.host.sessions.live_count(), 0, "the actor did not stop");
+    let s = c.get_session(&sid).await.unwrap();
+    assert!(!s.state.is_terminal(), "{:?}: {:?}", s.state, s.state_reason);
+    drop(c);
+
+    let (dir, cfg) = th.stop().await;
+    let th = TestHost::start_in(dir, cfg).await;
+    let (c, _n) = th.client().await;
+    wait_state(&c, &sid, SessionState::Idle, T).await;
+    let evs = th.host.ctx.store.events_after(&sid, 0, 1000).unwrap();
+    assert!(evs
+        .iter()
+        .any(|e| e.kind == EventType::TurnEnd && e.payload["stop_reason"] == "interrupted"));
+}
+
+#[tokio::test]
 async fn two_sessions_run_at_once() {
     let th = TestHost::start().await;
     let (c, mut n) = th.client().await;

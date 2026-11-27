@@ -127,6 +127,7 @@ async fn run(cfg: HostConfig) -> Result<()> {
         _ = tokio::signal::ctrl_c() => {}
         _ = sigterm() => {}
     }
+    host.ctx.set_stopping();
     tracing::info!("shutting down");
     host.terminals.close_all();
     // Browsers save their cookies (your sign-ins) as they quit.
