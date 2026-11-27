@@ -1,0 +1,21 @@
+desktop/src/session.rs
+  s_842d94447b63cf::t_77f3ccd87dfda7 215-218
+desktop/src/tests.rs
+  s_842d94447b63cf::t_1342536d39a8bc 3509-3630
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b149dd7bf3bf0d6a3aad7929bb9bae16a8569f6",
+  "prompts": {},
+  "sessions": {
+    "s_842d94447b63cf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_842d94447b63cf",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
