@@ -1,0 +1,41 @@
+# macOS minutes are the expensive ones, so the host suite runs here only on
+# merges to main, on PRs labelled `macos` (and their later pushes), or by hand.
+name: macos
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.config/nextest.toml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/rust-host.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.config/nextest.toml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/rust-host.yml'
+  workflow_dispatch:
+
+# Adding some other label gets a group of its own, so it can't cancel a real run.
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'macos') && github.run_id || 'run' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-macos:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'macos') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'macos'))
+    uses: ./.github/workflows/rust-host.yml
+    with:
+      os: macos-15

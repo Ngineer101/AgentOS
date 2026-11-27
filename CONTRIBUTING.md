@@ -38,9 +38,9 @@ change really belongs here, open an issue first to discuss it. A small fix
 for an obvious bug (a typo, a broken link, a clear one-line error) is fine to
 send directly.
 
-If you do send one: keep it focused, run `cargo test --workspace` (and
-`npm test` in `relay/` or `cargo test` in `desktop/` if you touched those),
-and explain what it changes and how you checked it. Contributions are
+If you do send one: keep it focused, run `scripts/ci.sh` (the same tests CI
+runs, for the parts your branch touches), and explain what it changes and how
+you checked it. Contributions are
 licensed as described in the [README](README.md#licence).
 
 ## Security issues

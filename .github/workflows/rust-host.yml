@@ -1,0 +1,50 @@
+# The host, CLI and sandbox tests on one OS. Called by ci.yml (Linux, every
+# PR) and macos.yml (merges to main, PRs labelled `macos`, or by hand).
+name: rust-host
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller debug info: faster links and a smaller cache; backtraces keep line numbers.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  rust:
+    name: rust (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Linux sandbox prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y bubblewrap socat ripgrep
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Only main saves the cache; PRs restore main's, so they don't crowd it out.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Test failures don't spoil the build cache, so keep it either way.
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Build
+        run: cargo build --all-targets
+      - name: Install pinned sandbox runtime and adapters
+        run: ./target/debug/agenthostd --data-dir "$RUNNER_TEMP/ah" install-tools
+      - name: Test (including the sandbox escape suite)
+        env:
+          AGENTHOST_TEST_TOOLS: ${{ runner.temp }}/ah/tools
+        run: cargo nextest run --workspace --profile ci

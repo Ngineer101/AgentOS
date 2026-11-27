@@ -13,7 +13,7 @@ use agenthost_proto::jsonrpc::codes;
 use agenthost_proto::methods as m;
 use agenthost_proto::*;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -31,15 +31,36 @@ fn fake_agent() -> PathBuf {
         .join("../..")
         .canonicalize()
         .unwrap();
-    BUILD.call_once(|| {
+    BUILD.call_once(|| build_fake_agent(&root));
+    root.join("target/debug/agenthost-fake-agent")
+}
+
+/// Build the fake agent, once per test run.
+///
+/// Under cargo-nextest every test is its own process, and `cargo build`
+/// re-links the binary even when nothing changed, so for a moment it isn't
+/// there for another test that is starting it. So under nextest the first
+/// test to take the lock builds it, once per run (`NEXTEST_RUN_ID`); the
+/// host's tests share the same lock.
+fn build_fake_agent(root: &Path) {
+    let build = || {
         let st = std::process::Command::new(env!("CARGO"))
             .args(["build", "-q", "-p", "agenthost-fake-agent"])
-            .current_dir(&root)
+            .current_dir(root)
             .status()
             .expect("cargo build fake agent");
         assert!(st.success());
-    });
-    root.join("target/debug/agenthost-fake-agent")
+    };
+    let Ok(run) = std::env::var("NEXTEST_RUN_ID") else { return build() };
+    let dir = root.join("target/nextest-fake-agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = std::fs::File::create(dir.join("lock")).unwrap();
+    lock.lock().unwrap();
+    let done = dir.join(run);
+    if !done.exists() {
+        build();
+        std::fs::write(&done, b"").unwrap();
+    }
 }
 
 struct TestHost {
@@ -335,7 +356,7 @@ async fn pair_connect_sessions_resume_and_revoke() {
     let (events, _) = events_until(&mut notes, is_turn_end).await;
     assert!(
         events.iter().any(|e| e["type"] == "agent.message"
-            && e["payload"]["text"].as_str().unwrap_or("").contains("/attachments/photo.jpg (image/jpeg")),
+            && e["payload"]["text"].as_str().unwrap_or("").contains(".att/photo.jpg (image/jpeg")),
         "{events:#?}"
     );
     let last_seq = events.last().unwrap()["seq"].as_i64().unwrap();

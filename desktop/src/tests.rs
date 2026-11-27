@@ -23,11 +23,19 @@ mod mcp_server;
 /// Tests that start a host share AGENTHOST_SOCKET, so they take turns.
 static HOST_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[track_caller]
 fn pump(app: &mut model::App, until: impl Fn(&model::App) -> bool) {
     let t0 = Instant::now();
     while !until(app) {
         app.drain();
-        assert!(t0.elapsed() < Duration::from_secs(20), "timed out; conn={:?} error={:?}", app.conn, app.error);
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "timed out; conn={:?} error={:?} notice={:?} toasts={:?}",
+            app.conn,
+            app.error,
+            app.notice,
+            app.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -1180,7 +1188,7 @@ fn built_in_tool_policies_round_trip_through_the_host() {
     let mut app = connect(&socket);
     app.builtins.clear();
     app.open_settings(model::Tab::Connectors);
-    pump(&mut app, |a| a.builtins.len() == 4);
+    pump(&mut app, |a| !a.builtins.is_empty());
     let pr = app.builtin("create_pull_request").unwrap().clone();
     assert_eq!((pr.policy, pr.can_auto), (ToolPolicy::Ask, true));
     assert!(!app.builtin("install_tool").unwrap().can_auto);

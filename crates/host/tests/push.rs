@@ -186,8 +186,9 @@ async fn a_phone_sets_up_notifications_and_gets_sealed_ones_when_a_session_needs
     // Nothing set up yet.
     let st: PushStatus = phone.call(m::PUSH_STATUS, json!({})).await.unwrap();
     assert!(!st.configured && st.this_device.is_none());
+    // A phone tests only itself, and this one isn't registered yet.
     let e = phone.request(m::PUSH_TEST, json!({})).await.unwrap_err();
-    assert_eq!(e.code, codes::UNAVAILABLE);
+    assert_eq!(e.code, codes::NOT_FOUND);
 
     // The phone hands over the APNs key while pairing. Garbage is refused.
     let e = phone
@@ -308,7 +309,10 @@ async fn a_phone_sets_up_notifications_and_gets_sealed_ones_when_a_session_needs
         .unwrap();
     let r: PushTestResult = phone.call(m::PUSH_TEST, json!({})).await.unwrap();
     assert_eq!(r.sent, 0);
-    assert_eq!(r.errors, vec!["Test phone: Unregistered".to_string()]);
+    // APNs' reason comes with what it means and what to do.
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert!(r.errors[0].starts_with("Test phone: The app was removed from the iPhone"), "{:?}", r.errors);
+    assert!(r.errors[0].contains("(Unregistered)"), "{:?}", r.errors);
     let st: PushStatus = phone.call(m::PUSH_STATUS, json!({})).await.unwrap();
     assert!(st.this_device.is_none());
 

@@ -651,7 +651,7 @@ async fn attachments_reach_the_agent() {
         .find_map(|l| l.strip_prefix("- "))
         .and_then(|l| l.split(" (").next())
         .unwrap();
-    assert!(path.ends_with("/attachments/big log.txt"), "{path}");
+    assert!(path.ends_with(".att/big log.txt"), "{path}");
     assert_eq!(std::fs::read(path).unwrap(), body);
     // The host's copy is handed over; a retry of the same prompt is a no-op.
     assert!(th.host.ctx.uploads.get(&a.attachment_id).is_err());
@@ -679,7 +679,7 @@ async fn attachments_reach_the_agent() {
     assert!(reply.payload["text"]
         .as_str()
         .unwrap()
-        .contains("/attachments/a.png (image/png, 4 bytes)"));
+        .contains(".att/a.png (image/png, 4 bytes)"));
 }
 
 #[tokio::test]
