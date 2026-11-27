@@ -1,0 +1,23 @@
+desktop/src/look.rs
+  s_f488e2b85c95a4::t_aa69e276c47d6e 58-60,134,185
+desktop/src/panel.rs
+  s_f488e2b85c95a4::t_c748b4630cf0fa 6-7,100-104
+desktop/src/tests.rs
+  s_f488e2b85c95a4::t_2d9e86ffcfd2bc 4090-4127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b9c1b88aa7e3004bb2de2ed639ec22564980a3c",
+  "prompts": {},
+  "sessions": {
+    "s_f488e2b85c95a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f488e2b85c95a4",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
