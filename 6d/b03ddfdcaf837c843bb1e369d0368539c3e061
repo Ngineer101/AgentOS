@@ -1,0 +1,35 @@
+crates/host/src/browser/mod.rs
+  s_6165675842117b::t_d7375810d83ea2 328-359,462-470,497-503,509,1140-1172
+crates/host/tests/browser_core.rs
+  s_6165675842117b::t_0e551c873c6d84 212,214
+crates/proto/src/browser.rs
+  s_6165675842117b::t_e2c89bbb360366 53-55
+desktop/src/bridge.rs
+  s_6165675842117b::t_ccb6ae51e9a895 106-107
+desktop/src/browser.rs
+  s_6165675842117b::t_0044a38724a4ec 130-153,280-343,347-385,395-398,794-801,807-819,842-879
+desktop/src/model.rs
+  s_6165675842117b::t_945fe7366bf094 378-379,2406-2409,3086-3090,3127
+desktop/src/tests.rs
+  s_6165675842117b::t_9489742ace2ec4 3261,4163-4305
+desktop/src/toast.rs
+  s_6165675842117b::t_b9ae37862df9e4 31
+docs/status.md
+  s_6165675842117b::t_1663fbfe769a35 276-283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6db03ddfdcaf837c843bb1e369d0368539c3e061",
+  "prompts": {},
+  "sessions": {
+    "s_6165675842117b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6165675842117b",
+        "model": "unknown"
+      },
+      "human_author": "ngineer101 <ngineer101@users.noreply.github.com>"
+    }
+  }
+}
